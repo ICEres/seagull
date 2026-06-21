@@ -1,0 +1,260 @@
+locals {
+  common_tags = merge(
+    var.tags,
+    {
+      App = "message-hub"
+    },
+  )
+}
+
+resource "aws_dynamodb_table" "agents" {
+  name                        = "${var.name_prefix}-agents"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "agent_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "handle"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "handle-index"
+    hash_key        = "handle"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "messages" {
+  name                        = "${var.name_prefix}-messages"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "message_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "message_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "thread_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "sender_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "thread-created-at-index"
+    hash_key        = "thread_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "sender-created-at-index"
+    hash_key        = "sender_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "threads" {
+  name                        = "${var.name_prefix}-threads"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "thread_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "thread_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "deliveries" {
+  name                        = "${var.name_prefix}-deliveries"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "delivery_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "delivery_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "recipient_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "sender_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "message_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "recipient-created-at-index"
+    hash_key        = "recipient_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "sender-created-at-index"
+    hash_key        = "sender_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "message-recipient-index"
+    hash_key        = "message_id"
+    range_key       = "recipient_agent_id"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "routing_rules" {
+  name                        = "${var.name_prefix}-routing-rules"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "rule_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "rule_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "idempotency_keys" {
+  name                        = "${var.name_prefix}-idempotency-keys"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "sender_agent_id"
+  range_key                   = "idempotency_key"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "sender_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "idempotency_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "thread_summaries" {
+  name                        = "${var.name_prefix}-thread-summaries"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "thread_id"
+  range_key                   = "created_at"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "thread_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}

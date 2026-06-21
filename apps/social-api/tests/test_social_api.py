@@ -1,0 +1,566 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from itertools import count
+from unittest import TestCase
+
+from social_api.api import ApiError, AuthPrincipal, LocalSocialApi
+from social_api.domain import (
+    InvalidSocialRequestError,
+    PermissionDeniedError,
+    SocialApiService,
+)
+from social_api.storage import InMemorySocialRepository
+
+
+class DeterministicIds:
+    def __init__(self) -> None:
+        self._counts: dict[str, count] = {}
+
+    def __call__(self, prefix: str) -> str:
+        if prefix not in self._counts:
+            self._counts[prefix] = count(1)
+        return f"{prefix}_{next(self._counts[prefix])}"
+
+
+class DeterministicClock:
+    def __init__(self) -> None:
+        self._base = datetime(2026, 6, 13, tzinfo=timezone.utc)
+        self._ticks = count()
+
+    def __call__(self) -> datetime:
+        return self._base + timedelta(seconds=next(self._ticks))
+
+
+class ManualClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 6, 13, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, delta: timedelta) -> None:
+        self.now += delta
+
+
+class SocialApiServiceTest(TestCase):
+    def setUp(self) -> None:
+        self.repository = InMemorySocialRepository()
+        self.service = SocialApiService(
+            self.repository,
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+        )
+        self.alice = self.service.identify_human(
+            provider="local",
+            subject="alice",
+            email="alice@example.com",
+            display_name="Alice",
+        )
+        self.bob = self.service.identify_human(
+            provider="local",
+            subject="bob",
+            email="bob@example.com",
+            display_name="Bob",
+        )
+
+    def test_human_creates_profile_agent_posts_feed_and_mention_routes(self) -> None:
+        researcher = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@Researcher:Seagull.Local",
+            display_name="Researcher",
+            capabilities=("research", "planning"),
+        )
+        reviewer = self.service.create_agent_profile(
+            owner_user_id=self.bob.user_id,
+            handle="@reviewer:seagull.local",
+            display_name="Reviewer",
+            capabilities=("review",),
+        )
+
+        post = self.service.create_post(
+            owner_user_id=self.alice.user_id,
+            author_handle="@researcher:seagull.local",
+            content="Can @reviewer:seagull.local review this social API plan?",
+        )
+
+        self.assertEqual("post_1", post.post_id)
+        self.assertEqual(researcher.agent_id, post.author_agent_id)
+        self.assertEqual((reviewer.agent_id,), post.mention_agent_ids)
+
+        alice_feed = self.service.get_home_feed(self.alice.user_id)
+        self.assertEqual((post,), alice_feed)
+
+        notifications = self.service.list_notifications(
+            owner_user_id=self.bob.user_id,
+            agent_handle="@reviewer:seagull.local",
+        )
+        self.assertEqual(1, len(notifications))
+        self.assertEqual("mention", notifications[0].notification_type)
+        self.assertEqual(post.post_id, notifications[0].post_id)
+
+    def test_follow_graph_adds_followed_agent_posts_to_home_feed(self) -> None:
+        researcher = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+        reviewer = self.service.create_agent_profile(
+            owner_user_id=self.bob.user_id,
+            handle="@reviewer:seagull.local",
+        )
+        self.service.follow_agent(
+            owner_user_id=self.alice.user_id,
+            follower_handle=researcher.handle,
+            followed_handle=reviewer.handle,
+        )
+
+        followed_post = self.service.create_post(
+            owner_user_id=self.bob.user_id,
+            author_handle=reviewer.handle,
+            content="Public review notes.",
+        )
+
+        self.assertEqual((followed_post,), self.service.get_home_feed(self.alice.user_id))
+
+    def test_room_membership_allows_room_post(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+        room = self.service.create_room(
+            owner_user_id=self.alice.user_id,
+            slug="research",
+            name="Research",
+        )
+        membership = self.service.join_room(
+            owner_user_id=self.alice.user_id,
+            room_slug="research",
+            agent_handle=profile.handle,
+        )
+        post = self.service.create_post(
+            owner_user_id=self.alice.user_id,
+            author_handle=profile.handle,
+            content="Room update.",
+            room_slug="research",
+            visibility="room",
+        )
+
+        self.assertEqual(room.room_id, membership.room_id)
+        self.assertEqual(room.room_id, post.room_id)
+
+    def test_room_post_requires_membership(self) -> None:
+        self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+        self.service.create_room(
+            owner_user_id=self.alice.user_id,
+            slug="research",
+            name="Research",
+        )
+
+        with self.assertRaises(PermissionDeniedError):
+            self.service.create_post(
+                owner_user_id=self.alice.user_id,
+                author_handle="@researcher:seagull.local",
+                content="Room update.",
+                room_slug="research",
+                visibility="room",
+            )
+
+    def test_moderation_records_are_listed_newest_first(self) -> None:
+        first = self.service.create_moderation_record(
+            owner_user_id=self.alice.user_id,
+            target_type="agent",
+            target_id="agent_1",
+            action="report",
+            reason="spam",
+        )
+        second = self.service.create_moderation_record(
+            owner_user_id=self.alice.user_id,
+            target_type="post",
+            target_id="post_1",
+            action="hide",
+            reason="unsafe delegation",
+        )
+
+        self.assertEqual((second, first), self.service.list_moderation_records())
+
+    def test_rejects_self_follow(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+
+        with self.assertRaises(InvalidSocialRequestError):
+            self.service.follow_agent(
+                owner_user_id=self.alice.user_id,
+                follower_handle=profile.handle,
+                followed_handle=profile.handle,
+            )
+
+    def test_cloud_node_pair_token_registers_agent_to_owner_and_node(self) -> None:
+        node = self.service.create_node(owner_user_id=self.alice.user_id)
+        token = self.service.create_pair_token(owner_user_id=self.alice.user_id, node_id=node.node_id)
+
+        profile = self.service.register_agent_with_pair_token(
+            pair_token=token.pair_token,
+            handle="@map-reader:gulls.ai",
+            display_name="Map Reader",
+            capabilities=("maps", "browser"),
+            delivery_mode="pull_webhook",
+        )
+
+        updated_node = self.service.get_node(owner_user_id=self.alice.user_id, node_id=node.node_id)
+        self.assertEqual(self.alice.user_id, profile.owner_user_id)
+        self.assertEqual(node.node_id, profile.node_id)
+        self.assertEqual("pull_webhook", profile.delivery_mode)
+        self.assertEqual(1, updated_node.agent_count)
+        self.assertIsNotNone(updated_node.last_seen_at)
+
+    def test_node_ownership_is_enforced(self) -> None:
+        node = self.service.create_node(owner_user_id=self.alice.user_id)
+
+        with self.assertRaises(PermissionDeniedError):
+            self.service.get_node(owner_user_id=self.bob.user_id, node_id=node.node_id)
+
+    def test_expired_pair_token_is_rejected(self) -> None:
+        clock = ManualClock()
+        service = SocialApiService(
+            InMemorySocialRepository(),
+            id_factory=DeterministicIds(),
+            clock=clock,
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+        node = service.create_node(owner_user_id=alice.user_id)
+        token = service.create_pair_token(owner_user_id=alice.user_id, node_id=node.node_id, ttl_seconds=1)
+        clock.advance(timedelta(seconds=2))
+
+        with self.assertRaises(InvalidSocialRequestError):
+            service.register_agent_with_pair_token(
+                pair_token=token.pair_token,
+                handle="@expired:gulls.ai",
+            )
+
+    def test_profile_listing_filters_by_node_status_and_query(self) -> None:
+        node = self.service.create_node(owner_user_id=self.alice.user_id)
+        token = self.service.create_pair_token(owner_user_id=self.alice.user_id, node_id=node.node_id)
+        mapped = self.service.register_agent_with_pair_token(
+            pair_token=token.pair_token,
+            handle="@map-reader:gulls.ai",
+            display_name="Map Reader",
+            capabilities=("maps",),
+        )
+        self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@writer:gulls.ai",
+            display_name="Writer",
+            capabilities=("drafting",),
+        )
+
+        filtered = self.service.list_owned_profiles(
+            self.alice.user_id,
+            limit=10,
+            q="map",
+            status="active",
+            node_id=node.node_id,
+        )
+
+        self.assertEqual((mapped,), filtered)
+
+    def test_text_refs_post_preserves_legacy_content(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+
+        post = self.service.create_post(
+            owner_user_id=self.alice.user_id,
+            author_handle=profile.handle,
+            text="Meet here tomorrow?",
+            refs=[
+                {
+                    "type": "url",
+                    "url": "https://maps.google.com/example",
+                    "find": "identify_place_or_route",
+                    "remember_as": "possible meeting place for this thread",
+                }
+            ],
+        )
+
+        self.assertEqual("Meet here tomorrow?", post.content)
+        self.assertEqual("Meet here tomorrow?", post.text)
+        self.assertEqual("url", post.refs[0].ref_type)
+        self.assertEqual("https://maps.google.com/example", post.refs[0].url)
+
+
+class LocalSocialApiTest(TestCase):
+    def test_local_api_phase3_loop(self) -> None:
+        api = LocalSocialApi.in_memory()
+
+        self.assertEqual({"ok": True, "app": "social-api", "storage": "memory"}, api.health())
+
+        alice = api.identify_human(
+            {
+                "provider": "local",
+                "subject": "alice",
+                "email": "alice@example.com",
+                "display_name": "Alice",
+            }
+        )["identity"]
+        bob = api.identify_human(
+            {
+                "provider": "local",
+                "subject": "bob",
+                "email": "bob@example.com",
+                "display_name": "Bob",
+            }
+        )["identity"]
+
+        researcher = api.create_agent_profile(
+            {
+                "owner_user_id": alice["user_id"],
+                "handle": "@researcher:seagull.local",
+                "display_name": "Researcher",
+                "capabilities": ["research"],
+            }
+        )["profile"]
+        reviewer = api.create_agent_profile(
+            {
+                "owner_user_id": bob["user_id"],
+                "handle": "@reviewer:seagull.local",
+                "display_name": "Reviewer",
+            }
+        )["profile"]
+
+        post = api.create_post(
+            {
+                "owner_user_id": alice["user_id"],
+                "author_handle": researcher["handle"],
+                "content": "Please review this, @reviewer:seagull.local.",
+            }
+        )["post"]
+
+        self.assertEqual([reviewer["agent_id"]], post["mention_agent_ids"])
+        self.assertEqual(post["post_id"], api.read_home_feed(alice["user_id"])["items"][0]["post_id"])
+
+        notifications = api.read_notifications(
+            reviewer["handle"],
+            owner_user_id=bob["user_id"],
+        )
+        self.assertEqual(post["post_id"], notifications["items"][0]["post_id"])
+
+    def test_local_api_maps_duplicate_handle_to_conflict(self) -> None:
+        api = LocalSocialApi.in_memory()
+        identity = api.identify_human({"provider": "local", "subject": "alice"})["identity"]
+        body = {
+            "owner_user_id": identity["user_id"],
+            "handle": "@researcher:seagull.local",
+        }
+        api.create_agent_profile(body)
+
+        with self.assertRaises(ApiError) as error:
+            api.create_agent_profile(body)
+
+        self.assertEqual(409, error.exception.status_code)
+
+    def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(
+            provider="cognito",
+            subject="alice-sub",
+            email="alice@example.com",
+            display_name="Alice",
+        )
+
+        identity = api.me(principal)["identity"]
+        profile = api.create_agent_profile(
+            {
+                "handle": "@researcher:seagull.local",
+                "display_name": "Researcher",
+            },
+            principal,
+        )["profile"]
+
+        self.assertEqual("cognito", identity["provider"])
+        self.assertEqual(identity["user_id"], profile["owner_user_id"])
+        self.assertEqual([profile["agent_id"]], [item["agent_id"] for item in api.list_owned_profiles(principal=principal)["items"]])
+
+    def test_authenticated_node_pair_token_and_agent_registration_flow(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+
+        node = api.create_node({}, principal)["node"]
+        token = api.create_pair_token(node["node_id"], {}, principal)["pair_token"]
+        profile = api.register_agent(
+            {
+                "pair_token": token["pair_token"],
+                "handle": "@map-reader:gulls.ai",
+                "display_name": "Map Reader",
+                "capabilities": ["maps", "browser"],
+                "delivery_mode": "pull_webhook",
+            }
+        )["profile"]
+        nodes = api.list_nodes(principal=principal)["items"]
+        filtered_profiles = api.list_owned_profiles(
+            principal=principal,
+            node_id=node["node_id"],
+            q="map",
+            status="active",
+            limit=50,
+        )["items"]
+
+        self.assertEqual(node["node_id"], profile["node_id"])
+        self.assertEqual("pull_webhook", profile["delivery_mode"])
+        self.assertEqual(1, nodes[0]["agent_count"])
+        self.assertEqual([profile["agent_id"]], [item["agent_id"] for item in filtered_profiles])
+
+    def test_authenticated_user_cannot_read_another_users_node(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        alice = AuthPrincipal(provider="cognito", subject="alice-sub")
+        bob = AuthPrincipal(provider="cognito", subject="bob-sub")
+        node = api.create_node({}, alice)["node"]
+
+        with self.assertRaises(ApiError) as error:
+            api.get_node(node["node_id"], bob)
+
+        self.assertEqual(403, error.exception.status_code)
+
+    def test_agent_registration_rejects_invalid_pair_token(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+
+        with self.assertRaises(ApiError) as error:
+            api.register_agent(
+                {
+                    "pair_token": "pair_missing",
+                    "handle": "@missing:gulls.ai",
+                }
+            )
+
+        self.assertEqual(400, error.exception.status_code)
+        self.assertEqual("bad_request", error.exception.error)
+
+    def test_local_api_accepts_text_refs_posts_and_legacy_content_posts(self) -> None:
+        api = LocalSocialApi.in_memory()
+        identity = api.identify_human({"provider": "local", "subject": "alice"})["identity"]
+        profile = api.create_agent_profile(
+            {
+                "owner_user_id": identity["user_id"],
+                "handle": "@researcher:seagull.local",
+            }
+        )["profile"]
+
+        ref_post = api.create_post(
+            {
+                "owner_user_id": identity["user_id"],
+                "author_handle": profile["handle"],
+                "text": "Meet here tomorrow?",
+                "refs": [
+                    {
+                        "type": "url",
+                        "url": "https://maps.google.com/example",
+                        "find": "identify_place_or_route",
+                        "remember_as": "possible meeting place for this thread",
+                    }
+                ],
+            }
+        )["post"]
+        legacy_post = api.create_post(
+            {
+                "owner_user_id": identity["user_id"],
+                "author_handle": profile["handle"],
+                "content": "Legacy content still works.",
+            }
+        )["post"]
+
+        self.assertEqual(ref_post["content"], ref_post["text"])
+        self.assertEqual("url", ref_post["refs"][0]["type"])
+        self.assertEqual([], legacy_post["refs"])
+        self.assertEqual("Legacy content still works.", legacy_post["text"])
+
+    def test_dashboard_summary_is_scoped_to_authenticated_identity(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        alice = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+        bob = AuthPrincipal(provider="cognito", subject="bob-sub", email="bob@example.com")
+        alice_profile = api.create_agent_profile(
+            {
+                "handle": "@researcher:seagull.local",
+                "display_name": "Researcher",
+                "capabilities": ["research"],
+            },
+            alice,
+        )["profile"]
+        bob_profile = api.create_agent_profile(
+            {
+                "handle": "@reviewer:seagull.local",
+                "display_name": "Reviewer",
+            },
+            bob,
+        )["profile"]
+
+        mention = api.create_post(
+            {
+                "author_handle": bob_profile["handle"],
+                "content": f"Can {alice_profile['handle']} review this?",
+            },
+            bob,
+        )["post"]
+        api.create_moderation_record(
+            {
+                "target_type": "post",
+                "target_id": mention["post_id"],
+                "action": "review",
+                "reason": "Needs human review",
+            },
+            alice,
+        )
+
+        alice_dashboard = api.dashboard(alice)
+        bob_dashboard = api.dashboard(bob)
+
+        self.assertEqual(["@researcher:seagull.local"], [profile["handle"] for profile in alice_dashboard["profiles"]["items"]])
+        self.assertEqual(["@reviewer:seagull.local"], [profile["handle"] for profile in bob_dashboard["profiles"]["items"]])
+        self.assertEqual(mention["post_id"], alice_dashboard["feed"]["items"][0]["post_id"])
+        self.assertEqual(1, alice_dashboard["notifications"]["unread_count"])
+        self.assertEqual(0, bob_dashboard["notifications"]["unread_count"])
+        self.assertEqual(1, alice_dashboard["moderation"]["count"])
+        self.assertEqual({"ok": True, "app": "social-api", "storage": "memory"}, alice_dashboard["health"])
+
+    def test_authenticated_owner_mismatch_is_forbidden(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+
+        with self.assertRaises(ApiError) as error:
+            api.create_agent_profile(
+                {
+                    "owner_user_id": "user_other",
+                    "handle": "@researcher:seagull.local",
+                },
+                principal,
+            )
+
+        self.assertEqual(403, error.exception.status_code)
+
+    def test_auth_required_rejects_missing_principal(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        identity = api.identify_human({"provider": "local", "subject": "alice"})["identity"]
+
+        with self.assertRaises(ApiError) as error:
+            api.create_agent_profile(
+                {
+                    "owner_user_id": identity["user_id"],
+                    "handle": "@researcher:seagull.local",
+                }
+            )
+
+        self.assertEqual(401, error.exception.status_code)
+        self.assertEqual("unauthorized", error.exception.error)
+
+    def test_dashboard_rejects_missing_principal_when_auth_required(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+
+        with self.assertRaises(ApiError) as error:
+            api.dashboard()
+
+        self.assertEqual(401, error.exception.status_code)
+        self.assertEqual("unauthorized", error.exception.error)

@@ -1,0 +1,2 @@
+"""Seagull message hub package."""
+

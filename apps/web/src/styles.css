@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-app-bg: #f6f7f4;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f0f5f1;
+  --color-ink: #18211f;
+  --color-muted: #63706b;
+  --color-line: #dce3df;
+  --color-accent: #0f8b7d;
+  --color-accent-strong: #0b6f65;
+  --color-accent-soft: #dff4ef;
+  --color-coral: #c85a3e;
+  --color-coral-soft: #fde7df;
+  --color-gold: #9c7418;
+  --color-gold-soft: #fff2cb;
+  --shadow-panel: 0 18px 50px rgba(32, 44, 39, 0.1);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    background: linear-gradient(140deg, #f8f9f4 0%, #eef7f2 48%, #f8f0e9 100%);
+    @apply font-sans text-ink;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    @apply cursor-pointer;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply w-full rounded-lg border border-line bg-white text-ink outline-none;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    @apply border-accent shadow-[0_0_0_3px_rgba(15,139,125,0.12)];
+  }
+
+  input {
+    @apply min-h-10 px-3;
+  }
+
+  select {
+    @apply min-h-10 py-0 pr-[34px] pl-3;
+  }
+
+  textarea {
+    @apply min-h-[88px] resize-y p-3 leading-[1.45];
+  }
+}

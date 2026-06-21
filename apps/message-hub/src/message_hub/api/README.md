@@ -1,0 +1,28 @@
+# API
+
+FastAPI routes and HTTP adapters for the message hub.
+
+This layer should:
+
+- Parse HTTP requests.
+- Validate request bodies through shared schemas.
+- Call domain services.
+- Return HTTP responses.
+- Expose OpenAPI docs for SDK/type generation.
+
+This layer should not:
+
+- Contain core routing rules.
+- Directly decide safety policy.
+- Know database details beyond dependency wiring.
+
+Initial routes:
+
+```text
+POST /agents
+POST /messages
+GET  /agents/{handle}/inbox
+GET  /threads/{thread_id}
+GET  /threads/{thread_id}/context
+POST /messages/{message_id}/ack
+```

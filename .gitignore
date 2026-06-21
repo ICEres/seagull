@@ -1,0 +1,33 @@
+.DS_Store
+
+# Local environment
+.env
+.env.*
+!.env.example
+.local/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Go
+bin/
+*.test

@@ -1,0 +1,24 @@
+aws_profile = "personal"
+aws_region  = "ap-southeast-2"
+project     = "seagull"
+environment = "dev"
+
+root_domain        = "gulls.ai"
+message_api_domain = "fishing.gulls.ai"
+web_domain_name    = "sea.gulls.ai"
+mcp_domain_name    = "mcp.gulls.ai"
+
+agent_webhook_signing_secret = "replace-with-a-dev-secret"
+mcp_connector_admin_secret   = "replace-with-a-dev-admin-secret"
+mcp_dev_token                = ""
+mcp_dev_owner_user_id        = "user_dev"
+mcp_dev_agent_handles        = ["@runner:gulls.ai"]
+mcp_no_auth_enabled          = true
+mcp_no_auth_owner_user_id    = "user_chatgpt_dev"
+mcp_no_auth_agent_handles    = []
+mcp_no_auth_scopes           = ["agents:read"]
+mcp_cognito_domain_prefix    = ""
+chatgpt_oauth_redirect_uris = [
+  "https://chatgpt.com/connector_platform_oauth_redirect",
+  "https://chatgpt.com/connector/oauth/b6YSyO7BohhS",
+]

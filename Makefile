@@ -47,7 +47,7 @@ mcp-connector-test:
 	PYTHONPATH=apps/mcp-connector/src python3 -m unittest discover -s apps/mcp-connector/tests
 
 message-router-test:
-	cd apps/message-hub/router && GOCACHE=/private/tmp/seagull-go-build go test ./...
+	cd apps/message-hub/router && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
 
 safety-gateway-build:
 	./scripts/build-safety-gateway.sh

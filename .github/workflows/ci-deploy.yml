@@ -28,9 +28,143 @@ env:
   TF_VAR_mcp_dev_token: ${{ secrets.MCP_DEV_TOKEN }}
 
 jobs:
-  deploy-dev:
-    name: Test and deploy dev
+  python-tests:
+    name: Python tests
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run Python tests
+        run: |
+          make phase0-test
+          make safety-gateway-test
+          make social-api-test
+          make message-hub-test
+          make mcp-connector-test
+          make local-agent-test
+
+  web-test-build:
+    name: Web test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@11.0.0-dev.1005 --activate
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test web
+        run: make web-test
+
+      - name: Build web
+        run: make web-build
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  router-test-build:
+    name: Router test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/message-hub/router/go.mod
+          cache-dependency-path: apps/message-hub/router/go.sum
+
+      - name: Test router
+        run: make message-router-test
+
+      - name: Build router
+        run: make message-router-build
+
+      - name: Upload router artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: message-router-bootstrap
+          path: infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
+          if-no-files-found: error
+          retention-days: 1
+
+  lambda-builds:
+    name: Lambda package builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Lambda packages
+        run: |
+          make safety-gateway-build
+          make social-api-build
+          make mcp-connector-build
+
+      - name: Upload Lambda package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages
+          path: |
+            infra/terraform/envs/dev/.terraform/build/safety-gateway/package
+            infra/terraform/envs/dev/.terraform/build/social-api/package
+            infra/terraform/envs/dev/.terraform/build/mcp-connector/package
+          if-no-files-found: error
+          retention-days: 1
+
+  terraform-fmt:
+    name: Terraform format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.6"
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra/terraform
+
+  deploy-dev:
+    name: Deploy dev
+    runs-on: ubuntu-latest
+    needs:
+      - python-tests
+      - web-test-build
+      - router-test-build
+      - lambda-builds
+      - terraform-fmt
 
     steps:
       - name: Check deploy configuration
@@ -59,6 +193,27 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Download Lambda package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-packages
+          path: infra/terraform/envs/dev/.terraform/build
+
+      - name: Download router artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: message-router-bootstrap
+          path: infra/terraform/envs/dev/.terraform/build/message-router
+
+      - name: Restore router executable bit
+        run: chmod +x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
+
+      - name: Download web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -70,52 +225,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: apps/message-hub/router/go.mod
-          cache-dependency-path: apps/message-hub/router/go.sum
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Set up pnpm
-        shell: bash
-        run: |
-          set -euo pipefail
-          corepack enable
-          corepack prepare pnpm@11.0.0-dev.1005 --activate
-
-      - name: Install web dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.15.6"
-
-      - name: Run tests
-        run: |
-          make phase0-test
-          make safety-gateway-test
-          make social-api-test
-          make message-hub-test
-          make mcp-connector-test
-          make message-router-test
-          make phase4-test
-
-      - name: Build deploy artifacts
-        run: |
-          make safety-gateway-build
-          make social-api-build
-          make mcp-connector-build
-          make message-router-build
-          make web-build
-
-      - name: Check Terraform formatting
-        run: terraform fmt -check -recursive infra/terraform
 
       - name: Initialize Terraform
         working-directory: infra/terraform/envs/dev

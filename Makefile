@@ -62,7 +62,11 @@ message-router-build:
 	./scripts/build-message-router.sh
 
 aws-dev-init:
-	terraform -chdir=infra/terraform/envs/dev init
+	@if [ -f infra/terraform/envs/dev/backend.hcl ]; then \
+		terraform -chdir=infra/terraform/envs/dev init -backend-config=backend.hcl; \
+	else \
+		terraform -chdir=infra/terraform/envs/dev init -backend=false; \
+	fi
 
 aws-dev-plan: safety-gateway-build social-api-build mcp-connector-build message-router-build web-build
 	terraform -chdir=infra/terraform/envs/dev plan

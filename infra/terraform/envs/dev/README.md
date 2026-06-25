@@ -36,12 +36,44 @@ The first deployable stack is intentionally small:
 Deploy:
 
 ```text
-terraform init
-terraform plan
-terraform apply
+make aws-dev-init
+make aws-dev-plan
+make aws-dev-apply
 ```
 
 The default profile is `personal` and the default region is `ap-southeast-2`.
+If `backend.hcl` exists beside this README, `make aws-dev-init` uses it for the
+S3 remote state backend. Otherwise local init uses `-backend=false` and keeps
+state on the local machine.
+
+Use [`backend.hcl.example`](backend.hcl.example) as the shape for local backend
+configuration. Before the first CI deploy, migrate any existing local state into
+the same S3 backend:
+
+```text
+cp infra/terraform/envs/dev/backend.hcl.example infra/terraform/envs/dev/backend.hcl
+$EDITOR infra/terraform/envs/dev/backend.hcl
+terraform -chdir=infra/terraform/envs/dev init -migrate-state -backend-config=backend.hcl
+```
+
+Pushes to `main` run the GitHub Actions deploy workflow. Configure these
+repository variables before enabling that path:
+
+```text
+AWS_ROLE_TO_ASSUME
+TF_BACKEND_BUCKET
+TF_BACKEND_DYNAMODB_TABLE
+TF_BACKEND_KEY            # optional, defaults to seagull/dev/terraform.tfstate
+TF_BACKEND_REGION         # optional, defaults to ap-southeast-2
+```
+
+Configure these repository secrets:
+
+```text
+AGENT_WEBHOOK_SIGNING_SECRET
+MCP_CONNECTOR_ADMIN_SECRET
+MCP_DEV_TOKEN             # optional
+```
 
 From the repository root:
 

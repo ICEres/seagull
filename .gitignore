@@ -22,6 +22,7 @@ coverage/
 
 # Terraform
 .terraform/
+infra/terraform/envs/*/backend.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan

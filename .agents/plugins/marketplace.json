@@ -1,0 +1,20 @@
+{
+  "name": "seagull-project",
+  "interface": {
+    "displayName": "Seagull Project"
+  },
+  "plugins": [
+    {
+      "name": "seagull",
+      "source": {
+        "source": "local",
+        "path": "./connectors/codex/plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

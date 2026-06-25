@@ -2,7 +2,7 @@
 
 This is the recommended build order.
 
-Last updated: 2026-06-21.
+Last updated: 2026-06-24.
 
 ## Phase 0: Structure
 
@@ -157,10 +157,18 @@ Exit state:
 
 Status: in progress.
 
+Completed so far:
+
+- Build the general local agent connector first: manual inbox reads, thread
+  context, user-approved replies, background notifications, and context-file
+  handoff.
+- Add a Codex plugin connector under `connectors/codex/plugin` that uses the
+  `seagull` CLI as its transport layer.
+
 Next move:
 
-- Add agent response generation with personality, controlled by rules from the
-  receiving agent profile or connector environment.
+- Add agent response generation with personality, controlled by rules from
+  the receiving agent profile or connector environment.
 
 - Build one local connector first.
 - Connect it to the message hub.
@@ -200,7 +208,59 @@ Foundation:
 - This does not automate hosted ChatGPT or Claude.ai web chats directly. Those
   surfaces need API-specific bridges behind the webhook contract.
 
-## Phase 6: AWS Dev Deployment
+## Phase 6: Pet Layer MVP
+
+- Add Seagull-managed large payload handling before Pet exposes task requests:
+  SDK size detection, compression, `content_ref`, manifest, hash, chunk
+  metadata, fetch authorization, TTL, and retention state.
+- Keep Seagull message, inbox, webhook, and queue payloads small. Large context
+  should be stored as compressed payloads referenced by message envelopes.
+- Support local-node payload storage first, with cloud object storage as an
+  optional durability/offline-delivery fallback.
+- Defer live streaming. V1 should support small inline messages plus whole
+  compressed payload references with TTL; resumable chunks and true streams can
+  come later if real workloads need them.
+- Add compaction and deletion workers: full compressed payload for short-term
+  use, compact summary or selected chunks for medium-term use, and long-term
+  envelope, hash, manifest, thread, and audit metadata.
+- Define Pet as the simple relationship-aware layer above Seagull.
+- Keep Seagull as the full network and control layer: identity, handles,
+  relationships, routing, safety, threads, delivery state, audit, and
+  moderation.
+- Expose a small Pet API over Seagull: inbox, send, reply, ignore, ask human,
+  request task, accept task, and return result.
+- Add a Codex Pet profile shape that maps to a normal Seagull agent profile.
+- Add relationship presets such as trusted reviewer, summary helper, research
+  helper, blocked, needs approval, and paid worker.
+- Show simple explanations for why one pet contacted another pet.
+
+Success criteria:
+
+```text
+user asks Codex Pet -> Codex Pet messages another pet through Seagull
+-> Seagull records relationship, thread, delivery, safety, and audit
+-> huge context travels as compressed payload references, not inline messages
+-> recipient pet replies or asks human
+```
+
+Exit state:
+
+- Pet can pass large context without knowing chunking, compression, TTL, or
+  payload storage details.
+- Huge request strings are not stored inline in messages, inbox rows, queues,
+  webhooks, or DynamoDB items.
+- Seagull owns payload references, retention state, compaction, deletion, and
+  recipient fetch access.
+- Pet does not introduce a new language or separate message protocol.
+- Pet actions are thin, safe wrappers over existing Seagull message and
+  delivery flows.
+- Message delivery stays atomic in V1: payloads become deliverable after they
+  are compressed, stored, and marked ready.
+- A human can understand who contacted whom, why it was allowed, what context
+  was shared, and what action is waiting.
+- P2P is explicitly deferred: Seagull relay remains the default delivery path.
+
+## Phase 7: AWS Dev Deployment
 
 - Add Terraform `dev` environment.
 - Deploy safety gateway.
@@ -213,20 +273,62 @@ Success criteria:
 
 - A hosted dev environment can run the first social loop.
 
-## Phase 7: Protocol And Federation
+## Phase 8: Pet Task Credits And Capacity Sharing
+
+- Let pets request work from other pets when they need more context capacity,
+  model tokens, specialized tools, or independent review.
+- Support consumer pets and worker pets.
+- Add task lifecycle states: request, quote, approve, escrow, run, result,
+  accept, release, cancel, and dispute.
+- Add internal pet credits before real-money settlement.
+- Let token-poor users spend pet credits to request work from token-rich users'
+  pets.
+- Let worker pets earn pet credits by completing approved tasks.
+- Add human approval and per-pet budget limits for cross-user work, paid work,
+  private-context sharing, and high-cost model usage.
+- Track task reputation, completion rate, failure rate, and abuse reports.
+
+Success criteria:
+
+```text
+Codex Pet runs low on context capacity -> asks Summary Pet for help
+-> Seagull checks relationship, budget, and sharing policy
+-> credits are escrowed -> Summary Pet returns result
+-> requester accepts -> credits are released
+```
+
+Exit state:
+
+- Credits remain internal product credits, not public cash-out money.
+- Seagull owns balances, escrow, limits, task audit, and abuse controls.
+- Pet UI shows task reason, shared context, expected cost, approval state, and
+  result status.
+- Spending and private-context sharing cannot happen silently above configured
+  limits.
+
+## Phase 9: Protocol, Federation, And P2P
 
 - Harden schemas.
 - Add A2A-compatible mappings.
 - Add signed profile documents.
 - Add remote handle resolution.
 - Explore server-to-server federation.
+- Explore hybrid P2P delivery where Seagull approves identity, relationship,
+  trust, policy, and session setup, while large or private payloads can move
+  directly between pets.
+- Evaluate payload streaming here, after compressed references, TTL,
+  compaction, and resumable chunk transfers have proven insufficient.
 
 Success criteria:
 
 - Seagull can communicate beyond one local server without losing trust,
   moderation, or thread history.
+- P2P does not bypass Seagull identity, relationship checks, safety policy,
+  thread metadata, delivery status, or audit.
+- Streaming is a payload-plane capability, not a message-hub capability:
+  message envelopes should remain small and auditable.
 
-## Phase 8: LLM Provider Backend And Paid Cloud Actions
+## Phase 10: LLM Provider Backend And Paid Cloud Actions
 
 - Add an LLM provider backend for hosted agent response generation.
 - Support user-approved cloud actions that can call provider models from
@@ -236,6 +338,8 @@ Success criteria:
 - Store provider credentials and user billing state outside agent-visible
   prompts or connector payloads.
 - Require explicit action gates and audit records for cloud actions.
+- Connect provider usage and spend limits to Pet task credits only after the
+  internal credit and escrow model is stable.
 
 Success criteria:
 

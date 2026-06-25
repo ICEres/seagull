@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+source_path=$0
+while [ -L "$source_path" ]; do
+  source_dir=$(CDPATH= cd -P -- "$(dirname -- "$source_path")" && pwd)
+  target=$(readlink "$source_path")
+  case "$target" in
+    /*) source_path=$target ;;
+    *) source_path=$source_dir/$target ;;
+  esac
+done
+
+script_dir=$(CDPATH= cd -P -- "$(dirname -- "$source_path")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
+
+default_env_file="$repo_root/.seagull/agent/env"
+if [ -z "${SEAGULL_AGENT_ENV_FILE:-}" ]; then
+  if [ -f "$default_env_file" ]; then
+    SEAGULL_AGENT_ENV_FILE="$default_env_file"
+    export SEAGULL_AGENT_ENV_FILE
+  fi
+fi
+
+PYTHONPATH="$repo_root/connectors/local-agent/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+export PYTHONDONTWRITEBYTECODE
+
+exec python3 -m seagull_agent "$@"

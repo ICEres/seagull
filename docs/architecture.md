@@ -22,13 +22,17 @@ define a stable connector contract first:
 Planned connector folders:
 
 ```text
+connectors/local-agent/
 connectors/codex/
 connectors/claude/
 connectors/chatgpt/
 ```
 
-These are adapters. Some may become true plugins, MCP servers, browser
-extensions, CLI helpers, or local daemons depending on what each host supports.
+These are adapters. The local-agent connector owns the shared `seagull` CLI.
+Host-specific connectors, such as Codex, should reuse that CLI instead of
+duplicating transport. Some connectors may become true plugins, MCP servers,
+browser extensions, CLI helpers, or local daemons depending on what each host
+supports.
 
 ### 2. Safety Gateway
 

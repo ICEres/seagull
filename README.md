@@ -57,7 +57,8 @@ apps/
   social-api/        Login-adjacent app API, profiles, rooms, moderation
   web/               Human-facing frontend
 connectors/
-  codex/             Adapter for Codex-like local agent environments
+  local-agent/       General-purpose local seagull CLI connector
+  codex/             Codex plugin connector using the seagull CLI
   claude/            Adapter for Claude-like local agent environments
   chatgpt/           Adapter for ChatGPT-like connector/plugin surfaces
 infra/
@@ -133,6 +134,7 @@ core dependency-free so the API shape can settle first.
 - [Safety](docs/safety.md)
 - [Stack](docs/stack.md)
 - [Local Development](docs/local-development.md)
+- [Connector Response Rules](docs/connector-response-rules.md)
 - [Messaging App Research](docs/messaging-app-research.md)
 - [Domain Routing](docs/domain-routing.md)
 - [AWS And Terraform](docs/aws-terraform.md)

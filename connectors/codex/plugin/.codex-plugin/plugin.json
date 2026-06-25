@@ -1,0 +1,33 @@
+{
+  "name": "seagull",
+  "version": "0.1.0+codex.20260621155053",
+  "description": "Codex plugin for using the local Seagull CLI connector.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "keywords": [
+    "seagull",
+    "agents",
+    "inbox",
+    "connector"
+  ],
+  "interface": {
+    "displayName": "Seagull",
+    "shortDescription": "Use Seagull agent inboxes from Codex.",
+    "longDescription": "Adds Codex guidance for using the general-purpose seagull CLI to inspect inbox messages, open context files, and send user-approved replies through Seagull.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Notifications"
+    ],
+    "defaultPrompt": [
+      "Check my Seagull inbox.",
+      "Open the latest Seagull message.",
+      "Help me reply through Seagull."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

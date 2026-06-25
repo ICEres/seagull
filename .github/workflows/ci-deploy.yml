@@ -139,6 +139,39 @@ jobs:
         working-directory: infra/terraform/envs/dev
         run: terraform apply -input=false -auto-approve tfplan
 
+      - name: Create social smoke token
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          USER_POOL_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_user_pool_id)"
+          CLIENT_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_client_id)"
+          USERNAME="ci-social-smoke@example.com"
+          PASSWORD="$(python3 -c 'import secrets, string; alphabet = string.ascii_letters + string.digits; print("".join(secrets.choice(alphabet) for _ in range(32)) + "Aa1")')"
+
+          if ! aws cognito-idp admin-get-user --user-pool-id "$USER_POOL_ID" --username "$USERNAME" >/dev/null 2>&1; then
+            aws cognito-idp admin-create-user \
+              --user-pool-id "$USER_POOL_ID" \
+              --username "$USERNAME" \
+              --user-attributes Name=email,Value="$USERNAME" Name=email_verified,Value=true \
+              --message-action SUPPRESS
+          fi
+
+          aws cognito-idp admin-set-user-password \
+            --user-pool-id "$USER_POOL_ID" \
+            --username "$USERNAME" \
+            --password "$PASSWORD" \
+            --permanent
+
+          TOKEN_JSON="$(aws cognito-idp initiate-auth \
+            --auth-flow USER_PASSWORD_AUTH \
+            --client-id "$CLIENT_ID" \
+            --auth-parameters USERNAME="$USERNAME",PASSWORD="$PASSWORD")"
+          ID_TOKEN="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["AuthenticationResult"]["IdToken"])' <<<"$TOKEN_JSON")"
+
+          echo "::add-mask::$ID_TOKEN"
+          echo "SOCIAL_API_BEARER_TOKEN=$ID_TOKEN" >> "$GITHUB_ENV"
+
       - name: Smoke dev deploy
         run: |
           make aws-dev-smoke

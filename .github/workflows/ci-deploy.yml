@@ -80,7 +80,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
 
       - name: Set up pnpm
         shell: bash

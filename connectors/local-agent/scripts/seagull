@@ -22,6 +22,16 @@ if [ -z "${SEAGULL_AGENT_ENV_FILE:-}" ]; then
   fi
 fi
 
+go_binary="$repo_root/connectors/local-agent/bin/seagull"
+if [ -x "$go_binary" ]; then
+  exec "$go_binary" "$@"
+fi
+
+if command -v go >/dev/null 2>&1; then
+  cd "$repo_root/connectors/local-agent"
+  exec go run ./cmd/seagull "$@"
+fi
+
 PYTHONPATH="$repo_root/connectors/local-agent/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"

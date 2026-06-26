@@ -14,6 +14,7 @@ from seagull_agent.context import (
     item_summary,
     write_delivery_context,
 )
+from seagull_agent.response_rules import DraftResult, generate_draft_reply
 from seagull_agent.watcher import poll_once, watch_loop
 
 
@@ -78,6 +79,10 @@ def build_parser() -> argparse.ArgumentParser:
     reply = subparsers.add_parser("reply", help="Reply to a delivery through the agent decision flow.")
     reply.add_argument("delivery_id")
     reply.add_argument("content", nargs="+")
+
+    draft_reply = subparsers.add_parser("draft-reply", help="Generate a reply draft without sending it.")
+    draft_reply.add_argument("delivery_id")
+    draft_reply.add_argument("--limit", type=bounded_limit, default=100)
 
     ack = subparsers.add_parser("ack", help="Acknowledge an inbox delivery.")
     ack.add_argument("delivery_id")
@@ -147,6 +152,23 @@ def run_command(
             note="manual local agent connector reply",
         )
         print_json_or_text(args.json, result, format_decision(result, "Replied"), out)
+        return 0
+
+    if args.command == "draft-reply":
+        item = require_inbox_delivery(client, config, args.delivery_id, limit=args.limit)
+        thread_id = item_thread_id(item)
+        thread_context = client.get_thread_context(thread_id) if thread_id is not None else None
+        result = generate_draft_reply(
+            config.response_rules,
+            delivery_item=item,
+            thread_context=thread_context,
+        )
+        payload = result.to_dict() | {
+            "delivery_id": args.delivery_id,
+            "draft_sent": False,
+            "delivery_decision_submitted": False,
+        }
+        print_json_or_text(args.json, payload, format_draft_result(result), out)
         return 0
 
     if args.command == "ack":
@@ -255,6 +277,29 @@ def format_decision(result: dict[str, Any], verb: str) -> str:
     return f"{verb} {delivery_id}; status={status}."
 
 
+def format_draft_result(result: DraftResult) -> str:
+    rules = result.applied_rules
+    lines = [
+        f"Outcome: {result.outcome}",
+        f"Reason: {result.reason}",
+        (
+            "Rules: "
+            f"source={rules.get('source')}; "
+            f"schema_version={rules.get('schema_version')}; "
+            f"reply_posture={rules.get('reply_posture')}; "
+            f"max_reply_chars={rules.get('max_reply_chars')}"
+        ),
+    ]
+    if result.trigger_labels:
+        lines.append(f"Triggers: {', '.join(result.trigger_labels)}")
+    if result.draft is None:
+        lines.extend(["", "No draft generated. No reply sent."])
+    else:
+        lines.extend(["", "Draft (not sent):", result.draft])
+    lines.append("No delivery decision was submitted.")
+    return "\n".join(lines)
+
+
 def print_json_or_text(as_json: bool, result: dict[str, Any], text: str, out: TextIO) -> None:
     if as_json:
         print(json.dumps(result, indent=2), file=out)
@@ -267,6 +312,13 @@ def inbox_items(inbox: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
+
+
+def item_thread_id(item: dict[str, Any]) -> str | None:
+    delivery = item.get("delivery") or {}
+    message = item.get("message") or {}
+    value = delivery.get("thread_id") or message.get("thread_id")
+    return value if isinstance(value, str) and value else None
 
 
 def bounded_limit(value: str) -> int:

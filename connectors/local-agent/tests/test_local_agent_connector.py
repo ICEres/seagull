@@ -27,6 +27,7 @@ class FakeClient:
         self.decisions: list[dict[str, object]] = []
         self.acks: list[dict[str, object]] = []
         self.sent_messages: list[dict[str, object]] = []
+        self.thread_context_requests: list[str] = []
         self.inbox = {
             "items": [
                 {
@@ -59,6 +60,7 @@ class FakeClient:
         return {"thread_id": thread_id, "messages": []}
 
     def get_thread_context(self, thread_id: str) -> dict[str, object]:
+        self.thread_context_requests.append(thread_id)
         return {"thread": {"thread_id": thread_id}, "recent_messages": []}
 
     def send_message(
@@ -250,6 +252,95 @@ class LocalAgentConnectorTest(TestCase):
         )
         self.assertNotIn("secret-token", stdout.getvalue())
         self.assertNotIn("secret-token", stderr.getvalue())
+
+    def test_draft_reply_generates_draft_without_delivery_decision(self) -> None:
+        with TemporaryDirectory() as tmp:
+            fake = FakeClient()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            env = self.env(tmp) | {"SEAGULL_RESPONSE_RULES_JSON": self.response_rules_json()}
+
+            code = main(
+                ["draft-reply", "delivery_1"],
+                client=fake,
+                environ=env,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(0, code)
+        self.assertEqual([], fake.decisions)
+        self.assertEqual([], fake.acks)
+        self.assertEqual([], fake.sent_messages)
+        self.assertEqual(["thread_1"], fake.thread_context_requests)
+        self.assertIn("Outcome: draft_reply", output)
+        self.assertIn("Draft (not sent):", output)
+        self.assertIn("Please review the deploy notes.", output)
+        self.assertIn("No delivery decision was submitted.", output)
+        self.assertNotIn("secret-token", output)
+        self.assertNotIn("secret-token", stderr.getvalue())
+
+    def test_draft_reply_json_includes_safe_metadata(self) -> None:
+        with TemporaryDirectory() as tmp:
+            fake = FakeClient()
+            stdout = io.StringIO()
+            env = self.env(tmp) | {"SEAGULL_RESPONSE_RULES_JSON": self.response_rules_json()}
+
+            code = main(
+                ["--json", "draft-reply", "delivery_1"],
+                client=fake,
+                environ=env,
+                stdout=stdout,
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(0, code)
+        self.assertEqual(OUTCOME_DRAFT_REPLY, payload["outcome"])
+        self.assertEqual("delivery_1", payload["delivery_id"])
+        self.assertFalse(payload["draft_sent"])
+        self.assertFalse(payload["delivery_decision_submitted"])
+        self.assertEqual("connector_config", payload["applied_rules"]["source"])
+        self.assertIn("Please review the deploy notes.", payload["draft"])
+        self.assertEqual([], fake.decisions)
+        self.assertNotIn("secret-token", stdout.getvalue())
+
+    def test_draft_reply_ask_human_outcome_does_not_send(self) -> None:
+        with TemporaryDirectory() as tmp:
+            fake = FakeClient()
+            stdout = io.StringIO()
+
+            code = main(
+                ["draft-reply", "delivery_1"],
+                client=fake,
+                environ=self.env(tmp),
+                stdout=stdout,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([], fake.decisions)
+        self.assertEqual(OUTCOME_ASK_HUMAN, stdout.getvalue().splitlines()[0].removeprefix("Outcome: "))
+        self.assertIn("No draft generated. No reply sent.", stdout.getvalue())
+
+    def test_draft_reply_no_reply_outcome_does_not_send(self) -> None:
+        with TemporaryDirectory() as tmp:
+            fake = FakeClient()
+            stdout = io.StringIO()
+            env = self.env(tmp) | {
+                "SEAGULL_RESPONSE_RULES_JSON": self.response_rules_json(reply_posture="no_reply")
+            }
+
+            code = main(
+                ["draft-reply", "delivery_1"],
+                client=fake,
+                environ=env,
+                stdout=stdout,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([], fake.decisions)
+        self.assertIn("Outcome: no_reply", stdout.getvalue())
+        self.assertIn("No draft generated. No reply sent.", stdout.getvalue())
 
     def test_ack_resolves_delivery_to_message_id(self) -> None:
         with TemporaryDirectory() as tmp:

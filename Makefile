@@ -1,4 +1,4 @@
-.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test safety-gateway-test phase2-test social-api-test phase3-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test message-router-test safety-gateway-build social-api-build mcp-connector-build message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
+.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test safety-gateway-test phase2-test social-api-test phase3-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build mcp-connector-build local-agent-build message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
 
 setup:
 	./scripts/setup-local.sh
@@ -49,6 +49,9 @@ mcp-connector-test:
 local-agent-test:
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=connectors/local-agent/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s connectors/local-agent/tests
 
+local-agent-go-test:
+	cd connectors/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
+
 message-router-test:
 	cd apps/message-hub/router && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
 
@@ -60,6 +63,10 @@ social-api-build:
 
 mcp-connector-build:
 	./scripts/build-mcp-connector.sh
+
+local-agent-build:
+	mkdir -p connectors/local-agent/bin
+	cd connectors/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/seagull ./cmd/seagull
 
 message-router-build:
 	./scripts/build-message-router.sh

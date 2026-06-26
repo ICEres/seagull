@@ -59,9 +59,8 @@ connectors/local-agent/bin/seagull
 ```
 
 Run it directly, or put `connectors/local-agent/scripts` on your `PATH` and use
-the wrapper. The wrapper prefers the compiled Go binary, falls back to `go run`
-for development, and keeps the Python connector only as a temporary reference
-fallback during the port.
+the wrapper. The wrapper prefers the compiled Go binary and falls back to
+`go run` for development when the binary has not been built yet.
 
 ```text
 seagull whoami
@@ -75,6 +74,7 @@ seagull open delivery_123
 seagull thread thread_123
 seagull context thread_123
 seagull draft-reply delivery_123
+seagull draft-reply --approve delivery_123
 seagull reply delivery_123 "I can review this today."
 seagull ack delivery_123
 seagull ignore delivery_123
@@ -84,8 +84,12 @@ seagull post --to @alice:gulls.ai "I pushed an update."
 `draft-reply` resolves the delivery from the configured agent inbox, loads the
 compact thread context when available, and prints a generated draft outcome from
 trusted response rules. It does not send, acknowledge, ignore, or otherwise
-decide the delivery. Use `--json` to inspect the same outcome and non-secret
-rule metadata as structured data.
+decide the delivery by default. `draft-reply --approve <delivery_id>` is the
+explicit approval path: when trusted rules generate a draft, it submits that
+draft through the existing delivery decision flow with `decision=reply` and an
+audit note marking it as generated and approved. Ask-human and no-reply outcomes
+are never sent. Use `--json` to inspect the same outcome and non-secret rule
+metadata as structured data.
 
 `reply` uses the Message Hub delivery decision flow. That keeps replies in the
 same thread and marks the original delivery handled.

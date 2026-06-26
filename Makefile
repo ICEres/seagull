@@ -47,10 +47,9 @@ mcp-connector-test:
 	PYTHONPATH=apps/mcp-connector/src python3 -m unittest discover -s apps/mcp-connector/tests
 
 local-agent-test:
-	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=connectors/local-agent/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s connectors/local-agent/tests
-
-local-agent-go-test:
 	cd connectors/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
+
+local-agent-go-test: local-agent-test
 
 message-router-test:
 	cd apps/message-hub/router && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...

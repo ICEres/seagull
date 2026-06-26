@@ -208,9 +208,10 @@ Foundation:
 - This does not automate hosted ChatGPT or Claude.ai web chats directly. Those
   surfaces need API-specific bridges behind the webhook contract.
 
-## Phase 6: Pet Layer MVP
+## Phase 6: Personal Agent Asset MVP
 
-- Add Seagull-managed large payload handling before Pet exposes task requests:
+- Add Seagull-managed large payload handling before agent assets expose task
+  requests:
   SDK size detection, compression, `content_ref`, manifest, hash, chunk
   metadata, fetch authorization, TTL, and retention state.
 - Keep Seagull message, inbox, webhook, and queue payloads small. Large context
@@ -223,37 +224,54 @@ Foundation:
 - Add compaction and deletion workers: full compressed payload for short-term
   use, compact summary or selected chunks for medium-term use, and long-term
   envelope, hash, manifest, thread, and audit metadata.
-- Define Pet as the simple relationship-aware layer above Seagull.
+- Define a personal agent asset as a normal Seagull agent plus the user's
+  private prompt, skills, tools, memory, credentials, settings, and
+  personalization.
+- Expose the asset through a request surface, not by sharing the asset itself:
+  other agents can ask for answers, reviews, summaries, decisions, or task
+  results, but they cannot receive or copy the private prompt, skills, memory,
+  tool credentials, or personalization.
+- Record ownership and allowed-use terms for every asset action: who owns the
+  agent, what kinds of requests it may answer, what context it may inspect,
+  what may be remembered, and which budget and privacy limits apply.
 - Keep Seagull as the full network and control layer: identity, handles,
   relationships, routing, safety, threads, delivery state, audit, and
   moderation.
-- Expose a small Pet API over Seagull: inbox, send, reply, ignore, ask human,
-  request task, accept task, and return result.
-- Add a Codex Pet profile shape that maps to a normal Seagull agent profile.
+- Expose a small personal-agent API over Seagull: inbox, send, reply, ignore,
+  ask owner, request task, accept task, and return result.
+- Add a Codex personal-agent profile shape that maps to a normal Seagull agent
+  profile.
+- Let a user's Codex agent receive requests from other agents, then answer,
+  refuse, ask its owner, or create a task request according to its rules.
 - Add relationship presets such as trusted reviewer, summary helper, research
   helper, blocked, needs approval, and paid worker.
-- Show simple explanations for why one pet contacted another pet.
+- Show simple explanations for why one agent contacted another agent and which
+  user-owned asset answered.
 
 Success criteria:
 
 ```text
-user asks Codex Pet -> Codex Pet messages another pet through Seagull
+user asks their Codex agent -> Codex agent messages another agent through Seagull
 -> Seagull records relationship, thread, delivery, safety, and audit
 -> huge context travels as compressed payload references, not inline messages
--> recipient pet replies or asks human
+-> recipient agent answers from its private user-owned asset or asks its owner
 ```
 
 Exit state:
 
-- Pet can pass large context without knowing chunking, compression, TTL, or
-  payload storage details.
+- Personal agents can pass large context without knowing chunking,
+  compression, TTL, or payload storage details.
 - Huge request strings are not stored inline in messages, inbox rows, queues,
   webhooks, or DynamoDB items.
 - Seagull owns payload references, retention state, compaction, deletion, and
   recipient fetch access.
-- Pet does not introduce a new language or separate message protocol.
-- Pet actions are thin, safe wrappers over existing Seagull message and
-  delivery flows.
+- Personal agent assets do not introduce a new language or separate message
+  protocol.
+- Personal-agent actions are thin, safe wrappers over existing Seagull message
+  and delivery flows.
+- Replies and task requests remain attributable to the owning user and agent,
+  while private prompts, skills, tool credentials, memory, and personalization
+  are not exposed.
 - Message delivery stays atomic in V1: payloads become deliverable after they
   are compressed, stored, and marked ready.
 - A human can understand who contacted whom, why it was allowed, what context
@@ -273,27 +291,32 @@ Success criteria:
 
 - A hosted dev environment can run the first social loop.
 
-## Phase 8: Pet Task Credits And Capacity Sharing
+## Phase 8: Agent Task Credits And Capacity Sharing
 
-- Let pets request work from other pets when they need more context capacity,
-  model tokens, specialized tools, or independent review.
-- Support consumer pets and worker pets.
+- Let user-owned agents request work from other user-owned agents when they
+  need more context capacity, model tokens, specialized tools, or independent
+  review.
+- Support consumer agents and worker agents.
+- Support user-owned task delegation: an agent can answer requests or perform
+  work using its private asset bundle, while Seagull keeps the owner,
+  requester, worker, shared context, allowed use, budget, and result linked in
+  the task record.
 - Add task lifecycle states: request, quote, approve, escrow, run, result,
   accept, release, cancel, and dispute.
-- Add internal pet credits before real-money settlement.
-- Let token-poor users spend pet credits to request work from token-rich users'
-  pets.
-- Let worker pets earn pet credits by completing approved tasks.
-- Add human approval and per-pet budget limits for cross-user work, paid work,
+- Add internal task credits before real-money settlement.
+- Let token-poor users spend task credits to request work from token-rich users'
+  agents.
+- Let worker agents earn task credits by completing approved tasks.
+- Add human approval and per-agent budget limits for cross-user work, paid work,
   private-context sharing, and high-cost model usage.
 - Track task reputation, completion rate, failure rate, and abuse reports.
 
 Success criteria:
 
 ```text
-Codex Pet runs low on context capacity -> asks Summary Pet for help
+User's Codex agent runs low on context capacity -> asks Summary agent for help
 -> Seagull checks relationship, budget, and sharing policy
--> credits are escrowed -> Summary Pet returns result
+-> credits are escrowed -> Summary agent returns result
 -> requester accepts -> credits are released
 ```
 
@@ -301,8 +324,8 @@ Exit state:
 
 - Credits remain internal product credits, not public cash-out money.
 - Seagull owns balances, escrow, limits, task audit, and abuse controls.
-- Pet UI shows task reason, shared context, expected cost, approval state, and
-  result status.
+- Agent UI shows task reason, shared context, expected cost, approval state,
+  and result status.
 - Spending and private-context sharing cannot happen silently above configured
   limits.
 
@@ -315,7 +338,7 @@ Exit state:
 - Explore server-to-server federation.
 - Explore hybrid P2P delivery where Seagull approves identity, relationship,
   trust, policy, and session setup, while large or private payloads can move
-  directly between pets.
+  directly between agents.
 - Evaluate payload streaming here, after compressed references, TTL,
   compaction, and resumable chunk transfers have proven insufficient.
 
@@ -338,7 +361,7 @@ Success criteria:
 - Store provider credentials and user billing state outside agent-visible
   prompts or connector payloads.
 - Require explicit action gates and audit records for cloud actions.
-- Connect provider usage and spend limits to Pet task credits only after the
+- Connect provider usage and spend limits to task credits only after the
   internal credit and escrow model is stable.
 
 Success criteria:

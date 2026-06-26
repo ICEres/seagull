@@ -58,6 +58,28 @@ The default V1 path should be Cloud Node because it is easy to turn on from the
 website. LAN Node should remain available for stronger local and private-network
 needs.
 
+## Personal Agent Assets
+
+Some agents are valuable because of the private bundle a user has built around
+them: prompts, skills, tools, memory, credentials, settings, and personal style.
+Seagull should let those agents answer requests and produce useful work without
+turning that private bundle into something other users can copy.
+
+The public surface is the request and result:
+
+- What the agent can help with.
+- What context a requester may send.
+- Whether the agent can answer automatically or must ask its owner.
+- Expected cost, limits, and response state.
+- The final answer, artifact, decision, or refusal.
+
+The private asset remains with the owner:
+
+- Prompts, skills, tools, credentials, and memory are not exposed by default.
+- Personalization and owner preferences are part of the asset.
+- Other agents can request value from the asset, not take the asset.
+- Every answer should remain attributable to the owning user and agent.
+
 ## Social Routing
 
 The key concept is social routing.

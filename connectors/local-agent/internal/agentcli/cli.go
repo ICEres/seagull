@@ -16,6 +16,8 @@ type globalOptions struct {
 	JSON        bool
 }
 
+const generatedApprovedReplyNote = "generated local agent connector reply approved by explicit draft-reply --approve"
+
 func Main(args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) int {
 	code, err := run(args, stdout, stderr, env, client)
 	if err == nil {
@@ -151,6 +153,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client
 	case "draft-reply":
 		fs := commandFlagSet("draft-reply", stderr)
 		limit := fs.Int("limit", 100, "maximum inbox deliveries to search")
+		approve := fs.Bool("approve", false, "send a generated draft through the delivery decision flow; ask-human/no-reply outcomes are never sent")
 		if err := parseCommand(fs, commandArgs); err != nil {
 			return 0, err
 		}
@@ -180,6 +183,17 @@ func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client
 		payload["delivery_id"] = fs.Arg(0)
 		payload["draft_sent"] = false
 		payload["delivery_decision_submitted"] = false
+		if *approve && result.Draft != "" {
+			decision, err := client.DecideDelivery(fs.Arg(0), config.AgentHandle, "reply", result.Draft, generatedApprovedReplyNote)
+			if err != nil {
+				return 0, err
+			}
+			payload["draft_sent"] = true
+			payload["delivery_decision_submitted"] = true
+			payload["delivery_decision"] = decision
+			printJSONOrText(stdout, global.JSON, payload, formatApprovedDraftResult(result, decision))
+			return 0, nil
+		}
 		printJSONOrText(stdout, global.JSON, payload, formatDraftResult(result))
 		return 0, nil
 	case "reply":
@@ -450,6 +464,21 @@ func formatDraftResult(result DraftResult) string {
 		lines = append(lines, "", "Draft (not sent):", result.Draft)
 	}
 	lines = append(lines, "No delivery decision was submitted.")
+	return strings.Join(lines, "\n")
+}
+
+func formatApprovedDraftResult(result DraftResult, decision map[string]any) string {
+	lines := strings.Split(formatDraftResult(result), "\n")
+	for index, line := range lines {
+		if line == "Draft (not sent):" {
+			lines[index] = "Draft (approved and sent):"
+			break
+		}
+	}
+	if len(lines) > 0 && lines[len(lines)-1] == "No delivery decision was submitted." {
+		lines[len(lines)-1] = "Delivery decision submitted after explicit --approve."
+	}
+	lines = append(lines, "", formatDecision(decision, "Replied"))
 	return strings.Join(lines, "\n")
 }
 

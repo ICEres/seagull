@@ -201,6 +201,51 @@ func TestDraftReplyJSONIncludesSafeMetadata(t *testing.T) {
 	}
 }
 
+func TestDraftReplyApproveSubmitsGeneratedDraftDecision(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	code := Main([]string{"draft-reply", "--approve", "delivery_1"}, &stdout, &stderr, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if len(fake.decisions) != 1 {
+		t.Fatalf("decisions = %#v", fake.decisions)
+	}
+	want := map[string]any{
+		"delivery_id":  "delivery_1",
+		"agent_handle": "@worker:gulls.ai",
+		"decision":     "reply",
+		"content":      "I can help with this. I received: Please review the deploy notes.",
+		"note":         generatedApprovedReplyNote,
+	}
+	for key, wantValue := range want {
+		if fake.decisions[0][key] != wantValue {
+			t.Fatalf("decision[%s] = %#v, want %#v", key, fake.decisions[0][key], wantValue)
+		}
+	}
+	if len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("unexpected side effects: acks=%v sent=%v", fake.acks, fake.sentMessages)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Draft (approved and sent):",
+		"Delivery decision submitted after explicit --approve.",
+		"Replied delivery_1; status=replied; reply=message_reply.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "secret-token") || strings.Contains(stderr.String(), "secret-token") {
+		t.Fatalf("token leaked in output")
+	}
+}
+
 func TestDraftReplyAskHumanAndNoReplyDoNotSend(t *testing.T) {
 	tmp := t.TempDir()
 	for _, tc := range []struct {
@@ -225,6 +270,50 @@ func TestDraftReplyAskHumanAndNoReplyDoNotSend(t *testing.T) {
 				t.Fatalf("unexpected output:\n%s", stdout.String())
 			}
 		})
+	}
+}
+
+func TestDraftReplyApproveDoesNotSendAskHumanOrNoReply(t *testing.T) {
+	tmp := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "default", env: testEnv(tmp), want: "Outcome: ask_human"},
+		{name: "no_reply", env: append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(map[string]any{"reply_posture": OutcomeNoReply})), want: "Outcome: no_reply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeClient()
+			var stdout bytes.Buffer
+			code := Main([]string{"draft-reply", "--approve", "delivery_1"}, &stdout, &bytes.Buffer{}, tc.env, fake)
+			if code != 0 {
+				t.Fatalf("code = %d", code)
+			}
+			if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+				t.Fatalf("unexpected side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+			}
+			if !strings.Contains(stdout.String(), tc.want) ||
+				!strings.Contains(stdout.String(), "No draft generated. No reply sent.") ||
+				!strings.Contains(stdout.String(), "No delivery decision was submitted.") {
+				t.Fatalf("unexpected output:\n%s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestDraftReplyHelpDocumentsApprovalBoundary(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Main([]string{"draft-reply", "-h"}, &stdout, &stderr, testEnv(t.TempDir()), newFakeClient())
+
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	help := stderr.String()
+	if !strings.Contains(help, "-approve") || !strings.Contains(help, "ask-human/no-reply outcomes are never sent") {
+		t.Fatalf("approval boundary missing from help:\n%s", help)
 	}
 }
 

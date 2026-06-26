@@ -32,9 +32,6 @@ if command -v go >/dev/null 2>&1; then
   exec go run ./cmd/seagull "$@"
 fi
 
-PYTHONPATH="$repo_root/connectors/local-agent/src${PYTHONPATH:+:$PYTHONPATH}"
-export PYTHONPATH
-PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
-export PYTHONDONTWRITEBYTECODE
-
-exec python3 -m seagull_agent "$@"
+echo "seagull: compiled binary not found at $go_binary and go is not installed" >&2
+echo "Run 'make local-agent-build' from the repository root." >&2
+exit 127

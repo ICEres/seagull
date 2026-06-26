@@ -13,6 +13,7 @@ import (
 const (
 	SchemaVersion = "seagull.response_rules.v1"
 
+	RuleSourceProfile         = "profile"
 	RuleSourceConnectorConfig = "connector_config"
 	RuleSourceBuiltInDefaults = "built_in_defaults"
 
@@ -92,6 +93,31 @@ func ResolveConnectorResponseRules(rulesFile string, rulesJSON string) ResponseR
 		return invalidResolution(err.Error())
 	}
 	return ResponseRuleResolution{Rules: rules, Source: RuleSourceConnectorConfig}
+}
+
+func ResolveProfileResponseRules(profileResult map[string]any, fallback ResponseRuleResolution) ResponseRuleResolution {
+	profile := objectValue(profileResult, "agent")
+	if profile == nil {
+		profile = profileResult
+	}
+	if profile == nil {
+		return fallback
+	}
+
+	rawValue, ok := profile["response_rules"]
+	if !ok || rawValue == nil {
+		return fallback
+	}
+	raw, ok := rawValue.(map[string]any)
+	if !ok {
+		return invalidResolutionForSource(RuleSourceProfile, "profile response_rules must be a JSON object")
+	}
+
+	rules, err := ValidateResponseRules(raw)
+	if err != nil {
+		return invalidResolutionForSource(RuleSourceProfile, err.Error())
+	}
+	return ResponseRuleResolution{Rules: rules, Source: RuleSourceProfile}
 }
 
 func decodeJSONObject(data []byte) (map[string]any, error) {
@@ -328,9 +354,13 @@ func trimToLimit(value string, limit int) string {
 }
 
 func invalidResolution(message string) ResponseRuleResolution {
+	return invalidResolutionForSource(RuleSourceConnectorConfig, message)
+}
+
+func invalidResolutionForSource(source string, message string) ResponseRuleResolution {
 	return ResponseRuleResolution{
 		Rules:           DefaultResponseRules(),
-		Source:          RuleSourceConnectorConfig,
+		Source:          source,
 		ValidationError: message,
 	}
 }

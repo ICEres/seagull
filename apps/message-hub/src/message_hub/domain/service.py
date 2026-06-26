@@ -82,6 +82,7 @@ class MessageHubService:
         *,
         display_name: str | None = None,
         capabilities: Sequence[str] = (),
+        response_rules: dict[str, Any] | None = None,
         trigger_mode: str = "manual",
         webhook_url: str | None = None,
     ) -> Agent:
@@ -102,6 +103,7 @@ class MessageHubService:
             handle=normalized_handle,
             display_name=display_name,
             capabilities=tuple(capabilities),
+            response_rules=response_rules,
             trigger_mode=normalized_trigger_mode,
             webhook_url=normalized_webhook_url,
             created_at=now,

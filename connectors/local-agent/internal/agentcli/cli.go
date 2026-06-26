@@ -178,7 +178,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client
 				return 0, err
 			}
 		}
-		result := GenerateDraftReply(config.ResponseRule, item, threadContext)
+		agentProfile, err := client.GetAgent(config.AgentHandle)
+		if err != nil {
+			return 0, err
+		}
+		result := GenerateDraftReply(ResolveProfileResponseRules(agentProfile, config.ResponseRule), item, threadContext)
 		payload := result.ToMap()
 		payload["delivery_id"] = fs.Arg(0)
 		payload["draft_sent"] = false

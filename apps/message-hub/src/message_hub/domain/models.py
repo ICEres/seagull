@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 def utc_now() -> datetime:
@@ -77,6 +78,7 @@ class Agent:
     handle: str
     display_name: str | None = None
     capabilities: tuple[str, ...] = ()
+    response_rules: dict[str, Any] | None = None
     status: str = "active"
     trigger_mode: str = "manual"
     webhook_url: str | None = None

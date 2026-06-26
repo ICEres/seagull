@@ -16,11 +16,13 @@ type fakeClient struct {
 	acks                  []map[string]any
 	sentMessages          []map[string]any
 	threadContextRequests []string
+	agent                 map[string]any
 	inbox                 map[string]any
 }
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
+		agent: map[string]any{"agent": map[string]any{"handle": "@worker:gulls.ai", "status": "active", "trigger_mode": "manual"}},
 		inbox: map[string]any{
 			"items": []any{
 				map[string]any{
@@ -46,7 +48,7 @@ func newFakeClient() *fakeClient {
 }
 
 func (f *fakeClient) GetAgent(handle string) (map[string]any, error) {
-	return map[string]any{"agent": map[string]any{"handle": handle, "status": "active", "trigger_mode": "manual"}}, nil
+	return f.agent, nil
 }
 
 func (f *fakeClient) GetInbox(handle string, limit int) (map[string]any, error) {
@@ -143,6 +145,12 @@ func responseRulesJSON(overrides map[string]any) string {
 	return string(payload)
 }
 
+func responseRulesMap(overrides map[string]any) map[string]any {
+	var rules map[string]any
+	_ = json.Unmarshal([]byte(responseRulesJSON(overrides)), &rules)
+	return rules
+}
+
 func TestDraftReplyGeneratesDraftWithoutDeliveryDecision(t *testing.T) {
 	tmp := t.TempDir()
 	fake := newFakeClient()
@@ -172,6 +180,44 @@ func TestDraftReplyGeneratesDraftWithoutDeliveryDecision(t *testing.T) {
 	}
 }
 
+func TestDraftReplyUsesProfileRulesBeforeConnectorConfig(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	fake.agent = map[string]any{
+		"agent": map[string]any{
+			"handle":          "@worker:gulls.ai",
+			"status":          "active",
+			"trigger_mode":    "manual",
+			"webhook_url":     "https://worker.example.test/hook",
+			"connector_token": "profile-secret",
+			"response_rules":  responseRulesMap(nil),
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(map[string]any{"reply_posture": OutcomeNoReply}))
+
+	code := Main([]string{"draft-reply", "delivery_1"}, &stdout, &stderr, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("profile-backed draft caused side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Outcome: draft_reply", "source=profile", "Draft (not sent):", "No delivery decision was submitted."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, leaked := range []string{"secret-token", "profile-secret", "worker.example.test"} {
+		if strings.Contains(output, leaked) || strings.Contains(stderr.String(), leaked) {
+			t.Fatalf("private profile/config value leaked: %s", leaked)
+		}
+	}
+}
+
 func TestDraftReplyJSONIncludesSafeMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	fake := newFakeClient()
@@ -193,11 +239,43 @@ func TestDraftReplyJSONIncludesSafeMetadata(t *testing.T) {
 	if payload["draft_sent"] != false || payload["delivery_decision_submitted"] != false {
 		t.Fatalf("draft payload did not preserve no-send metadata: %#v", payload)
 	}
+	appliedRules, ok := payload["applied_rules"].(map[string]any)
+	if !ok || appliedRules["source"] != RuleSourceConnectorConfig {
+		t.Fatalf("expected connector fallback metadata, got %#v", payload["applied_rules"])
+	}
 	if len(fake.decisions) != 0 {
 		t.Fatalf("decisions = %#v", fake.decisions)
 	}
 	if strings.Contains(stdout.String(), "secret-token") {
 		t.Fatalf("token leaked in json")
+	}
+}
+
+func TestDraftReplyInvalidProfileRulesFailClosed(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	fake.agent = map[string]any{
+		"agent": map[string]any{
+			"handle":         "@worker:gulls.ai",
+			"response_rules": map[string]any{"schema_version": SchemaVersion},
+		},
+	}
+	var stdout bytes.Buffer
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	code := Main([]string{"draft-reply", "--approve", "delivery_1"}, &stdout, &bytes.Buffer{}, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("invalid profile rules caused side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Outcome: ask_human", "source=profile", "response rules are invalid", "No delivery decision was submitted."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
 	}
 }
 

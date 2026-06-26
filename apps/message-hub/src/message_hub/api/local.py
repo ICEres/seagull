@@ -53,6 +53,7 @@ class LocalMessageHubApi:
                 required_string(body, "handle"),
                 display_name=optional_string(body, "display_name"),
                 capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                response_rules=response_rules_object(body.get("response_rules")),
                 trigger_mode=optional_string(body, "trigger_mode") or "manual",
                 webhook_url=optional_string(body, "webhook_url"),
             )
@@ -204,6 +205,7 @@ def agent_to_dict(agent: Agent) -> dict[str, Any]:
         "handle": agent.handle,
         "display_name": agent.display_name,
         "capabilities": list(agent.capabilities),
+        "response_rules": agent.response_rules,
         "status": agent.status,
         "trigger_mode": agent.trigger_mode,
         "webhook_enabled": agent.trigger_mode == "webhook" and agent.webhook_url is not None,
@@ -374,6 +376,26 @@ def string_list(value: Any, field_name: str) -> tuple[str, ...]:
     if not all(isinstance(item, str) for item in value):
         raise ApiError(400, "bad_request", f"{field_name} must contain only strings")
     return tuple(value)
+
+
+def response_rules_object(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ApiError(400, "bad_request", "response_rules must be an object")
+    allowed = {
+        "schema_version",
+        "persona",
+        "style",
+        "reply_posture",
+        "max_reply_chars",
+        "ask_human_triggers",
+        "prohibited_behavior",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ApiError(400, "bad_request", f"unknown response_rules field(s): {', '.join(unknown)}")
+    return dict(value)
 
 
 def refs_list(value: Any, field_name: str) -> tuple[MessageRef, ...]:

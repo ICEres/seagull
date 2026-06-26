@@ -153,6 +153,9 @@ def register_agent(event: dict[str, Any]) -> dict[str, Any]:
     capabilities = string_list(body.get("capabilities", []), "capabilities")
     if capabilities:
         agent["capabilities"] = set(capabilities)
+    response_rules = response_rules_object(body.get("response_rules"))
+    if response_rules is not None:
+        agent["response_rules"] = response_rules
     trigger_mode, webhook_url = trigger_config(body)
     agent["trigger_mode"] = trigger_mode
     if webhook_url is not None:
@@ -839,6 +842,7 @@ def public_agent(agent: dict[str, Any]) -> dict[str, Any]:
             "handle": agent.get("handle"),
             "display_name": agent.get("display_name"),
             "capabilities": agent.get("capabilities", []),
+            "response_rules": agent.get("response_rules"),
             "status": agent.get("status"),
             "trigger_mode": trigger_mode,
             "webhook_enabled": trigger_mode == "webhook" and bool(agent.get("webhook_url")),
@@ -1001,6 +1005,26 @@ def string_list(value: Any, name: str) -> list[str]:
             raise BadRequest(f"{name} must be a list of non-empty strings")
         values.append(item.strip())
     return values
+
+
+def response_rules_object(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise BadRequest("response_rules must be an object")
+    allowed = {
+        "schema_version",
+        "persona",
+        "style",
+        "reply_posture",
+        "max_reply_chars",
+        "ask_human_triggers",
+        "prohibited_behavior",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise BadRequest(f"unknown response_rules field(s): {', '.join(unknown)}")
+    return dict(value)
 
 
 def refs_list(value: Any, name: str) -> list[dict[str, Any]]:

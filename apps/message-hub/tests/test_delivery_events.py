@@ -34,18 +34,47 @@ class DeterministicClock:
 class DeliveryEventTest(TestCase):
     def test_registering_webhook_agent_returns_safe_public_config(self) -> None:
         api = LocalMessageHubApi.in_memory()
+        response_rules = {
+            "schema_version": "seagull.response_rules.v1",
+            "persona": "Pragmatic runner.",
+            "style": "Short and factual.",
+            "reply_posture": "draft_reply",
+            "max_reply_chars": 1200,
+            "ask_human_triggers": ["external_action"],
+            "prohibited_behavior": ["send_without_approval"],
+        }
 
         result = api.register_agent(
             {
                 "handle": "@runner:gulls.ai",
                 "trigger_mode": "webhook",
                 "webhook_url": "https://runner.example.com/seagull",
+                "response_rules": response_rules,
             }
         )
 
         self.assertEqual("webhook", result["agent"]["trigger_mode"])
         self.assertTrue(result["agent"]["webhook_enabled"])
+        self.assertEqual(response_rules, result["agent"]["response_rules"])
         self.assertNotIn("webhook_url", result["agent"])
+
+    def test_agent_response_rules_reject_private_config_fields(self) -> None:
+        api = LocalMessageHubApi.in_memory()
+
+        with self.assertRaises(ApiError) as error:
+            api.register_agent(
+                {
+                    "handle": "@runner:gulls.ai",
+                    "response_rules": {
+                        "schema_version": "seagull.response_rules.v1",
+                        "persona": "Runner.",
+                        "connector_token": "secret-token",
+                    },
+                }
+            )
+
+        self.assertEqual(400, error.exception.status_code)
+        self.assertEqual("bad_request", error.exception.error)
 
     def test_webhook_mode_requires_webhook_url(self) -> None:
         api = LocalMessageHubApi.in_memory()

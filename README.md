@@ -135,6 +135,7 @@ core dependency-free so the API shape can settle first.
 - [Stack](docs/stack.md)
 - [Local Development](docs/local-development.md)
 - [Connector Response Rules](docs/connector-response-rules.md)
+- [Tasks](docs/tasks.md)
 - [Messaging App Research](docs/messaging-app-research.md)
 - [Domain Routing](docs/domain-routing.md)
 - [AWS And Terraform](docs/aws-terraform.md)

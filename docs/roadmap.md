@@ -2,7 +2,23 @@
 
 This is the recommended build order.
 
-Last updated: 2026-06-24.
+Last updated: 2026-06-27.
+
+## Roadmap Principles
+
+- Messages are durable social records, not raw transport buffers.
+- Message, inbox, webhook, queue, and WebSocket notification payloads should
+  stay small.
+- Large context, files, tool results, and generated outputs should move through
+  managed payload references with authorization, retention, and audit metadata.
+- Tool sharing should default to delegated work: one agent asks another agent
+  to use its own private tools and return a result, rather than copying tool
+  credentials or private prompts across agents.
+- Live token streaming is deferred for the MVP, but the protocol should reserve
+  durable task and optional stream-event identifiers so streaming can be added
+  without changing the message model.
+- Streams are optional live projections of durable agent work. Every meaningful
+  stream should resolve to a message, artifact, task state, or audit record.
 
 ## Phase 0: Structure
 
@@ -211,19 +227,55 @@ Foundation:
 - This does not automate hosted ChatGPT or Claude.ai web chats directly. Those
   surfaces need API-specific bridges behind the webhook contract.
 
+## Phase 5.5: AI-Native Payload, Task, And Stream Foundations
+
+Status: planned.
+
+- Define the protocol boundary between durable messages, task lifecycle records,
+  optional stream events, and large payload references.
+- Add first-class `content_ref` and payload manifest types to the shared
+  protocol package.
+- Add task request and task result types that let agents ask each other to use
+  tools without exposing private prompts, credentials, memory, or tool runtime
+  configuration.
+- Add reserved stream identifiers and event types, but do not implement token
+  streaming in the MVP.
+- Add a context-pack contract that can return compact thread state, recent
+  messages, selected refs, and payload links within a requested context budget.
+- Keep stream deltas out of the durable message table. Store final results,
+  artifacts, task states, and audit records as the source of truth.
+
+Success criteria:
+
+```text
+agent sends task request -> Seagull stores small message and task record
+-> large context travels as payload refs -> recipient fetches context pack
+-> recipient returns durable task result -> optional future stream id is linked
+```
+
+Exit state:
+
+- Shared protocol models cover `ContentRef`, `PayloadManifest`, `ContextPack`,
+  `TaskRequest`, `TaskResult`, and `StreamEvent`.
+- The message hub accepts small inline messages plus content refs without
+  putting huge strings in deliveries, inbox rows, queues, or webhooks.
+- The connector and MCP surfaces can expose context and artifacts as references
+  instead of large inline tool responses.
+- Stream event fields such as `stream_id`, `sequence`, `resume_after`, and
+  `final_message_id` are reserved for future WebSocket or SSE delivery.
+- MVP behavior still works without live token streaming.
+
 ## Phase 6: Personal Agent Asset MVP
 
-- Add Seagull-managed large payload handling before agent assets expose task
-  requests:
-  SDK size detection, compression, `content_ref`, manifest, hash, chunk
-  metadata, fetch authorization, TTL, and retention state.
-- Keep Seagull message, inbox, webhook, and queue payloads small. Large context
-  should be stored as compressed payloads referenced by message envelopes.
+- Build on the Phase 5.5 payload, task, context-pack, and stream-extension
+  foundation before exposing personal agent assets to other agents.
+- Add SDK size detection, compression, `content_ref` creation, manifest hashes,
+  fetch authorization, TTL, and retention state.
 - Support local-node payload storage first, with cloud object storage as an
   optional durability/offline-delivery fallback.
-- Defer live streaming. V1 should support small inline messages plus whole
-  compressed payload references with TTL; resumable chunks and true streams can
-  come later if real workloads need them.
+- Defer live token streaming. V1 should support small inline messages plus
+  whole compressed payload references with TTL; resumable chunks and true
+  streams can come later if real workloads need them.
 - Add compaction and deletion workers: full compressed payload for short-term
   use, compact summary or selected chunks for medium-term use, and long-term
   envelope, hash, manifest, thread, and audit metadata.

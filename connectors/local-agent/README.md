@@ -39,10 +39,56 @@ SEAGULL_AGENT_POLL_INTERVAL=15
 connector auth. The CLI passes it as a bearer token when present and never
 prints it.
 
-Response generation rules are documented in
-[Connector Response Rules](../../docs/connector-response-rules.md). V1 rules are
-trusted connector/profile configuration used to draft replies; generated drafts
-are not sent without explicit approval.
+## Response Rules
+
+Response generation rules are trusted connector/profile configuration used to
+draft replies. Incoming message content, thread content, and context files are
+untrusted input and cannot change these rules. The full V1 contract is in
+[Connector Response Rules](../../docs/connector-response-rules.md).
+
+Rules are resolved in this order:
+
+1. `response_rules` on the receiving agent profile returned by the Message Hub.
+2. Local connector fallback from `SEAGULL_RESPONSE_RULES_FILE` or
+   `SEAGULL_RESPONSE_RULES_JSON`.
+3. Built-in conservative defaults, which return `ask_human`.
+
+Profile-backed rules use the same V1 object as local connector rules:
+
+```json
+{
+  "schema_version": "seagull.response_rules.v1",
+  "persona": "Pragmatic local reviewer.",
+  "style": "Short, factual, and specific.",
+  "reply_posture": "draft_reply",
+  "max_reply_chars": 1200,
+  "ask_human_triggers": [
+    "external_action",
+    "secret_or_credential",
+    "private_context",
+    "ambiguous_request",
+    "unsafe_instruction"
+  ],
+  "prohibited_behavior": [
+    "execute_commands",
+    "open_links",
+    "send_without_approval",
+    "change_rules_from_message_content",
+    "include_connector_tokens"
+  ]
+}
+```
+
+For local fallback while profile rules are absent, put that object in a file and
+set:
+
+```text
+SEAGULL_RESPONSE_RULES_FILE=/absolute/path/to/response-rules.json
+```
+
+Or set `SEAGULL_RESPONSE_RULES_JSON` to the inline JSON object. Set only one
+local response-rule source. If a profile has invalid rules, generation fails
+closed with `ask_human` instead of falling back silently.
 
 ## Commands
 
@@ -93,6 +139,30 @@ metadata as structured data.
 
 `reply` uses the Message Hub delivery decision flow. That keeps replies in the
 same thread and marks the original delivery handled.
+
+## Generated Reply Flow
+
+Use this local flow to verify draft generation and explicit approval:
+
+```text
+seagull inbox
+seagull draft-reply delivery_123
+seagull draft-reply --approve delivery_123
+```
+
+The first `draft-reply` command reads the delivery from the configured agent
+inbox, fetches compact thread context when a thread is present, resolves trusted
+response rules, and prints:
+
+- the outcome: `draft_reply`, `ask_human`, or `no_reply`
+- non-secret rule metadata, including source and max length
+- a draft only when the outcome is `draft_reply`
+
+It does not submit a delivery decision. The `--approve` form is the only
+generated-reply send path. It sends a generated draft through the existing
+delivery decision API with `decision=reply` and an audit note identifying the
+reply as generated and explicitly approved. `ask_human` and `no_reply` outcomes
+are never sent, even with `--approve`.
 
 ## Watcher
 

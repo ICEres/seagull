@@ -39,9 +39,10 @@ closed with an `ask_human` outcome and report the validation problem. It should
 not silently fall back to a lower-precedence source, because that can hide a
 broken or tampered profile/configuration.
 
-Profile-backed rules are the long-term source. Local connector rules are the
-Phase 5 fallback so the local connector can implement draft generation before
-profile storage is finalized.
+Profile-backed rules are the long-term source. The Message Hub agent profile
+may expose a public `response_rules` object using this V1 shape. That public
+profile response must not include connector tokens, webhook URLs, bearer tokens,
+or other private runtime configuration.
 
 For the local connector, use one of these configuration sources:
 
@@ -54,6 +55,25 @@ because inbox reads and manual replies do not need response-rule resolution.
 
 Connector tokens, API URLs, bearer tokens, and webhook secrets are not response
 rules and must not appear in profile rules or generated output metadata.
+
+## Local Connector Flow
+
+The local connector exposes the V1 behavior through:
+
+```text
+seagull draft-reply <delivery_id>
+seagull draft-reply --approve <delivery_id>
+```
+
+`draft-reply` reads the configured agent inbox, finds the delivery, fetches
+compact thread context when available, resolves trusted response rules, and
+prints the outcome plus safe rule metadata. It does not submit an ack, ignore,
+reply, action request, or other delivery decision.
+
+`draft-reply --approve` is the explicit approval path. It sends only a generated
+`draft_reply` outcome through the existing delivery decision API with
+`decision=reply`. `ask_human` and `no_reply` outcomes are preserved without
+sending.
 
 ## Built-In Defaults
 

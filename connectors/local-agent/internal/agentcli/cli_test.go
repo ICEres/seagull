@@ -279,6 +279,69 @@ func TestDraftReplyInvalidProfileRulesFailClosed(t *testing.T) {
 	}
 }
 
+func TestGeneratedReplyFlowDraftThenExplicitApproval(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	fake.agent = map[string]any{
+		"agent": map[string]any{
+			"handle":         "@worker:gulls.ai",
+			"response_rules": responseRulesMap(nil),
+		},
+	}
+	env := testEnv(tmp)
+
+	var draftOut bytes.Buffer
+	var draftErr bytes.Buffer
+	draftCode := Main([]string{"draft-reply", "delivery_1"}, &draftOut, &draftErr, env, fake)
+
+	if draftCode != 0 {
+		t.Fatalf("draft code = %d, stderr = %s", draftCode, draftErr.String())
+	}
+	if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("draft-only step caused side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+	}
+	for _, want := range []string{"Outcome: draft_reply", "Rules: source=profile", "Draft (not sent):", "No delivery decision was submitted."} {
+		if !strings.Contains(draftOut.String(), want) {
+			t.Fatalf("draft output missing %q:\n%s", want, draftOut.String())
+		}
+	}
+
+	var approveOut bytes.Buffer
+	var approveErr bytes.Buffer
+	approveCode := Main([]string{"draft-reply", "--approve", "delivery_1"}, &approveOut, &approveErr, env, fake)
+
+	if approveCode != 0 {
+		t.Fatalf("approve code = %d, stderr = %s", approveCode, approveErr.String())
+	}
+	if len(fake.decisions) != 1 {
+		t.Fatalf("decisions = %#v", fake.decisions)
+	}
+	decision := fake.decisions[0]
+	if decision["decision"] != "reply" || decision["note"] != generatedApprovedReplyNote {
+		t.Fatalf("unexpected decision metadata: %#v", decision)
+	}
+	if decision["content"] != "I can help with this. I received: Please review the deploy notes." {
+		t.Fatalf("decision content = %#v", decision["content"])
+	}
+	if len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("approval path used wrong side effect: acks=%v sent=%v", fake.acks, fake.sentMessages)
+	}
+	if got := strings.Join(fake.threadContextRequests, ","); got != "thread_1,thread_1" {
+		t.Fatalf("thread context requests = %q", got)
+	}
+	for _, want := range []string{"Draft (approved and sent):", "Delivery decision submitted after explicit --approve.", "Replied delivery_1; status=replied; reply=message_reply."} {
+		if !strings.Contains(approveOut.String(), want) {
+			t.Fatalf("approve output missing %q:\n%s", want, approveOut.String())
+		}
+	}
+	for _, leaked := range []string{"secret-token", "SEAGULL_CONNECTOR_TOKEN"} {
+		if strings.Contains(draftOut.String(), leaked) || strings.Contains(draftErr.String(), leaked) ||
+			strings.Contains(approveOut.String(), leaked) || strings.Contains(approveErr.String(), leaked) {
+			t.Fatalf("secret leaked in generated reply flow: %s", leaked)
+		}
+	}
+}
+
 func TestDraftReplyApproveSubmitsGeneratedDraftDecision(t *testing.T) {
 	tmp := t.TempDir()
 	fake := newFakeClient()

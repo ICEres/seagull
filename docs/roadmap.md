@@ -164,11 +164,14 @@ Completed so far:
   handoff.
 - Add a Codex plugin connector under `connectors/codex/plugin` that uses the
   `seagull` CLI as its transport layer.
+- Add the rule-controlled generated-reply slice for the local connector:
+  profile or connector-config response rules, draft-only generation, explicit
+  approved send, and tests for no-send/secret-safety boundaries.
 
 Next move:
 
-- Add agent response generation with personality, controlled by rules from
-  the receiving agent profile or connector environment.
+- Continue the hosted MCP connector and self-hosted connector contract work
+  below.
 
 - Build one local connector first.
 - Connect it to the message hub.

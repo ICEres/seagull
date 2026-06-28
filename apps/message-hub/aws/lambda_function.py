@@ -539,6 +539,8 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
         "allowed_use_terms": string_list(body.get("allowed_use_terms", []), "allowed_use_terms"),
         "state": "requested",
         "policy_decision_id": "local_safety_allow",
+        "quote_ids": [],
+        "escrow_ids": [],
         "artifact_refs": [],
         "tool_request_ids": [],
         "created_at": now,

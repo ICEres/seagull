@@ -28,6 +28,8 @@ from message_hub.domain import (
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
+    TaskEscrowRecord,
+    TaskQuoteRecord,
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
@@ -354,6 +356,110 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return {"thread_id": thread_id, "tasks": [task_to_dict(task) for task in tasks]}
+
+    def create_task_quote(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            reject_private_task_fields(body)
+            quote = self._service.create_task_quote(
+                task_id,
+                worker_handle=required_string(body, "worker_handle"),
+                expected_credit_cost=required_int(body, "expected_credit_cost"),
+                task_reason=required_string(body, "task_reason"),
+                shared_context_refs=string_list(
+                    body.get("shared_context_refs", ()),
+                    "shared_context_refs",
+                ),
+                requires_approval=optional_bool(body, "requires_approval", default=True),
+                approval_reason=optional_string(body, "approval_reason"),
+                limits_ref=optional_string(body, "limits_ref"),
+                abuse_policy_ref=optional_string(body, "abuse_policy_ref"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": quote.task_id,
+            "thread_id": quote.thread_id,
+            "quote_id": quote.quote_id,
+            "quote": task_quote_to_dict(quote),
+        }
+
+    def approve_task_quote(self, quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            quote = self._service.approve_task_quote(
+                quote_id,
+                approver_handle=required_string(body, "approver_handle"),
+                approval_id=optional_string(body, "approval_id"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+                note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": quote.task_id,
+            "thread_id": quote.thread_id,
+            "quote_id": quote.quote_id,
+            "quote": task_quote_to_dict(quote),
+        }
+
+    def create_task_escrow(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            escrow = self._service.create_task_escrow(
+                task_id,
+                requester_handle=required_string(body, "requester_handle"),
+                quote_id=required_string(body, "quote_id"),
+                approval_id=optional_string(body, "approval_id"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+                limits_ref=optional_string(body, "limits_ref"),
+                abuse_policy_ref=optional_string(body, "abuse_policy_ref"),
+                audit_refs=string_list(body.get("audit_refs", ()), "audit_refs"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": escrow.task_id,
+            "thread_id": escrow.thread_id,
+            "escrow_id": escrow.escrow_id,
+            "state": escrow.state.value,
+            "escrow": task_escrow_to_dict(escrow),
+        }
+
+    def release_task_escrow(self, escrow_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            escrow = self._service.release_task_escrow(
+                escrow_id,
+                releaser_handle=required_string(body, "releaser_handle"),
+                note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": escrow.task_id,
+            "thread_id": escrow.thread_id,
+            "escrow_id": escrow.escrow_id,
+            "state": escrow.state.value,
+            "escrow": task_escrow_to_dict(escrow),
+        }
 
     def accept_task(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -892,6 +998,8 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "allowed_tool_names": list(task.allowed_tool_names),
         "allowed_use_terms": list(task.allowed_use_terms),
         "tool_grant_ids": list(task.tool_grant_ids),
+        "quote_ids": list(task.quote_ids),
+        "escrow_ids": list(task.escrow_ids),
         "state": task.state.value,
         "policy_decision_id": task.policy_decision_id,
         "accepted_by_agent_id": task.accepted_by_agent_id,
@@ -901,6 +1009,50 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "tool_request_ids": list(task.tool_request_ids),
         "created_at": datetime_to_string(task.created_at),
         "updated_at": datetime_to_string(task.updated_at),
+    }
+
+
+def task_quote_to_dict(quote: TaskQuoteRecord) -> dict[str, Any]:
+    return {
+        "quote_id": quote.quote_id,
+        "task_id": quote.task_id,
+        "thread_id": quote.thread_id,
+        "requester_agent_id": quote.requester_agent_id,
+        "worker_agent_id": quote.worker_agent_id,
+        "task_reason": quote.task_reason,
+        "expected_credit_cost": quote.expected_credit_cost,
+        "shared_context_refs": list(quote.shared_context_refs),
+        "requires_approval": quote.requires_approval,
+        "approval_reason": quote.approval_reason,
+        "approved_by_agent_id": quote.approved_by_agent_id,
+        "approval_id": quote.approval_id,
+        "policy_decision_id": quote.policy_decision_id,
+        "limits_ref": quote.limits_ref,
+        "abuse_policy_ref": quote.abuse_policy_ref,
+        "audit_refs": list(quote.audit_refs),
+        "created_at": datetime_to_string(quote.created_at),
+        "updated_at": datetime_to_string(quote.updated_at),
+    }
+
+
+def task_escrow_to_dict(escrow: TaskEscrowRecord) -> dict[str, Any]:
+    return {
+        "escrow_id": escrow.escrow_id,
+        "task_id": escrow.task_id,
+        "quote_id": escrow.quote_id,
+        "thread_id": escrow.thread_id,
+        "requester_agent_id": escrow.requester_agent_id,
+        "worker_agent_id": escrow.worker_agent_id,
+        "credit_amount": escrow.credit_amount,
+        "state": escrow.state.value,
+        "approval_id": escrow.approval_id,
+        "policy_decision_id": escrow.policy_decision_id,
+        "limits_ref": escrow.limits_ref,
+        "abuse_policy_ref": escrow.abuse_policy_ref,
+        "audit_refs": list(escrow.audit_refs),
+        "created_at": datetime_to_string(escrow.created_at),
+        "updated_at": datetime_to_string(escrow.updated_at),
+        "released_at": datetime_to_string(escrow.released_at),
     }
 
 
@@ -1028,6 +1180,22 @@ def optional_int(body: dict[str, Any], field_name: str) -> int | None:
         return None
     if not isinstance(value, int) or isinstance(value, bool):
         raise ApiError(400, "bad_request", f"{field_name} must be an integer")
+    return value
+
+
+def required_int(body: dict[str, Any], field_name: str) -> int:
+    value = optional_int(body, field_name)
+    if value is None:
+        raise ApiError(400, "bad_request", f"{field_name} is required")
+    return value
+
+
+def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
+    value = body.get(field_name)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ApiError(400, "bad_request", f"{field_name} must be a boolean")
     return value
 
 

@@ -383,6 +383,8 @@ class TaskRecord:
     allowed_tool_names: tuple[str, ...] = ()
     allowed_use_terms: tuple[str, ...] = ()
     tool_grant_ids: tuple[str, ...] = ()
+    quote_ids: tuple[str, ...] = ()
+    escrow_ids: tuple[str, ...] = ()
     state: TaskState = TaskState.REQUESTED
     policy_decision_id: str | None = None
     accepted_by_agent_id: str | None = None
@@ -392,6 +394,48 @@ class TaskRecord:
     tool_request_ids: tuple[str, ...] = ()
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskQuoteRecord:
+    quote_id: str
+    task_id: str
+    thread_id: str
+    requester_agent_id: str
+    worker_agent_id: str
+    task_reason: str
+    expected_credit_cost: int
+    shared_context_refs: tuple[str, ...] = ()
+    requires_approval: bool = True
+    approval_reason: str | None = None
+    approved_by_agent_id: str | None = None
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEscrowRecord:
+    escrow_id: str
+    task_id: str
+    quote_id: str
+    thread_id: str
+    requester_agent_id: str
+    worker_agent_id: str
+    credit_amount: int
+    state: TaskState = TaskState.ESCROWED
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    released_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

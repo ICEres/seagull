@@ -76,6 +76,10 @@ may reference a `tool_grant_id`, but they still must not expose private MCP
 server URLs, credentials, memory, or raw tool handles.
 Task stream IDs are optional links to future live projections; task results are
 durable records without requiring stream events.
+TaskQuote records expose the worker's expected credit cost, shared context refs,
+task reason, approval requirement, limits ref, abuse policy ref, and audit refs.
+TaskEscrow records point back to an approved or preapproved quote and carry the
+held credit amount plus approval, policy, limit, abuse-control, and audit refs.
 Task request lifecycle states are defined in `TaskState` and
 `TASK_LIFECYCLE_TRANSITIONS`: request (`requested`), quote (`quoted`), human
 approval (`needs_approval`/`approved`), escrow (`escrowed`), worker acceptance

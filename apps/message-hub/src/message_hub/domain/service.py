@@ -30,6 +30,8 @@ from message_hub.domain.models import (
     SendMessageResult,
     StoredPayload,
     TASK_INACTIVE_STATES,
+    TaskEscrowRecord,
+    TaskQuoteRecord,
     TaskRecord,
     TaskResultRecord,
     TaskState,
@@ -88,6 +90,7 @@ DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
 MAX_ENVELOPE_INLINE_CHARS = 4000
 DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
 CONTACT_EXPLANATION_SUMMARY_CHARS = 280
+MAX_TASK_CREDIT_QUOTE = 1_000_000
 PAYLOAD_RETENTION_READY = "ready"
 PAYLOAD_RETENTION_EXPIRED = "expired"
 PAYLOAD_RETENTION_COMPACTED = "compacted"
@@ -803,6 +806,252 @@ class MessageHubService:
         normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
         return self._repository.list_tasks_by_thread(thread_id, limit=normalized_limit)
 
+    def create_task_quote(
+        self,
+        task_id: str,
+        *,
+        worker_handle: str,
+        expected_credit_cost: int,
+        task_reason: str,
+        shared_context_refs: Sequence[str] = (),
+        requires_approval: bool = True,
+        approval_reason: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        policy_decision_id: str | None = None,
+    ) -> TaskQuoteRecord:
+        task = self._require_task(task_id)
+        worker = self._require_agent_by_handle(worker_handle)
+        if worker.agent_id != task.recipient_agent_id:
+            raise ForbiddenDeliveryError("only the task recipient can quote this task")
+        if not isinstance(requires_approval, bool):
+            raise InvalidMessageError("requires_approval must be a boolean")
+
+        quote_id = self._new_id("task_quote")
+        normalized_cost = require_bounded_int(
+            expected_credit_cost,
+            "expected_credit_cost",
+            minimum=0,
+            maximum=MAX_TASK_CREDIT_QUOTE,
+        )
+        normalized_reason = normalize_required(task_reason, "task_reason")
+        require_small_inline(normalized_reason, "task_reason")
+        normalized_approval_reason = normalized_optional_string(approval_reason)
+        if normalized_approval_reason is not None:
+            require_small_inline(normalized_approval_reason, "approval_reason")
+        normalized_shared_context_refs = tuple(
+            normalize_required(ref, "shared_context_ref")
+            for ref in shared_context_refs
+        ) or task_shared_context_refs(task)
+        normalized_limits_ref = (
+            normalized_optional_string(limits_ref)
+            or f"seagull://tasks/{task.task_id}/limits"
+        )
+        normalized_abuse_policy_ref = (
+            normalized_optional_string(abuse_policy_ref)
+            or "seagull://policies/task-credits/abuse-controls"
+        )
+        audit_ref = f"seagull://tasks/{task.task_id}/quotes/{quote_id}/audit"
+
+        now = self._clock()
+        quote = TaskQuoteRecord(
+            quote_id=quote_id,
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            requester_agent_id=task.requester_agent_id,
+            worker_agent_id=worker.agent_id,
+            task_reason=normalized_reason,
+            expected_credit_cost=normalized_cost,
+            shared_context_refs=normalized_shared_context_refs,
+            requires_approval=requires_approval,
+            approval_reason=normalized_approval_reason,
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            limits_ref=normalized_limits_ref,
+            abuse_policy_ref=normalized_abuse_policy_ref,
+            audit_refs=(audit_ref,),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_task_quote(quote)
+        updated_task = replace(
+            task,
+            quote_ids=(*task.quote_ids, quote.quote_id),
+            state=TaskState.QUOTED,
+            updated_at=now,
+        )
+        self._repository.update_task(updated_task)
+        self._send_task_notification(
+            task=updated_task,
+            sender=worker,
+            recipient_agent_id=task.requester_agent_id,
+            intent="task_quote",
+            label="task quote",
+            note=f"{normalized_cost} credits: {normalized_reason}",
+            ref=MessageRef(
+                type="task_quote",
+                url=f"seagull://tasks/{task.task_id}/quotes/{quote.quote_id}",
+                remember_as="task quote",
+            ),
+        )
+        return quote
+
+    def approve_task_quote(
+        self,
+        quote_id: str,
+        *,
+        approver_handle: str,
+        approval_id: str | None = None,
+        policy_decision_id: str | None = None,
+        note: str | None = None,
+    ) -> TaskQuoteRecord:
+        quote = self._require_task_quote(quote_id)
+        task = self._require_task(quote.task_id)
+        approver = self._require_agent_by_handle(approver_handle)
+        if approver.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can approve this quote")
+
+        now = self._clock()
+        normalized_approval_id = normalized_optional_string(approval_id) or self._new_id("approval")
+        updated_quote = replace(
+            quote,
+            approved_by_agent_id=approver.agent_id,
+            approval_id=normalized_approval_id,
+            policy_decision_id=normalized_optional_string(policy_decision_id) or quote.policy_decision_id,
+            updated_at=now,
+        )
+        self._repository.update_task_quote(updated_quote)
+        updated_task = replace(task, state=TaskState.APPROVED, updated_at=now)
+        self._repository.update_task(updated_task)
+        self._send_task_notification(
+            task=updated_task,
+            sender=approver,
+            recipient_agent_id=quote.worker_agent_id,
+            intent="task_quote_approved",
+            label="task quote approved",
+            note=note,
+            ref=MessageRef(
+                type="task_quote",
+                url=f"seagull://tasks/{task.task_id}/quotes/{quote.quote_id}",
+                remember_as="approved task quote",
+            ),
+        )
+        return updated_quote
+
+    def create_task_escrow(
+        self,
+        task_id: str,
+        *,
+        requester_handle: str,
+        quote_id: str,
+        approval_id: str | None = None,
+        policy_decision_id: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskEscrowRecord:
+        task = self._require_task(task_id)
+        requester = self._require_agent_by_handle(requester_handle)
+        if requester.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can escrow credits")
+
+        quote = self._require_task_quote(quote_id)
+        if quote.task_id != task.task_id:
+            raise InvalidMessageError("quote is not scoped to this task")
+        if quote.requires_approval and quote.approved_by_agent_id is None:
+            raise InvalidMessageError("quote must be approved before escrow")
+        if quote.requires_approval and quote.approval_id is None and approval_id is None:
+            raise InvalidMessageError("approved quote requires an approval_id before escrow")
+        for existing in self._repository.list_task_escrows_by_task(task.task_id):
+            if existing.quote_id == quote.quote_id and existing.state in {TaskState.ESCROWED, TaskState.RELEASED}:
+                raise InvalidMessageError("escrow already exists for this quote")
+
+        escrow_id = self._new_id("task_escrow")
+        normalized_audit_refs = tuple(
+            normalize_required(ref, "audit_ref")
+            for ref in audit_refs
+        ) or (f"seagull://tasks/{task.task_id}/escrows/{escrow_id}/audit",)
+        now = self._clock()
+        escrow = TaskEscrowRecord(
+            escrow_id=escrow_id,
+            task_id=task.task_id,
+            quote_id=quote.quote_id,
+            thread_id=task.thread_id,
+            requester_agent_id=task.requester_agent_id,
+            worker_agent_id=quote.worker_agent_id,
+            credit_amount=quote.expected_credit_cost,
+            state=TaskState.ESCROWED,
+            approval_id=normalized_optional_string(approval_id) or quote.approval_id,
+            policy_decision_id=normalized_optional_string(policy_decision_id) or quote.policy_decision_id,
+            limits_ref=normalized_optional_string(limits_ref) or quote.limits_ref,
+            abuse_policy_ref=normalized_optional_string(abuse_policy_ref) or quote.abuse_policy_ref,
+            audit_refs=normalized_audit_refs,
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_task_escrow(escrow)
+        updated_task = replace(
+            task,
+            escrow_ids=(*task.escrow_ids, escrow.escrow_id),
+            state=TaskState.ESCROWED,
+            updated_at=now,
+        )
+        self._repository.update_task(updated_task)
+        self._send_task_notification(
+            task=updated_task,
+            sender=requester,
+            recipient_agent_id=quote.worker_agent_id,
+            intent="task_escrow",
+            label="task escrow",
+            ref=MessageRef(
+                type="task_escrow",
+                url=f"seagull://tasks/{task.task_id}/escrows/{escrow.escrow_id}",
+                remember_as="task escrow",
+            ),
+        )
+        return escrow
+
+    def release_task_escrow(
+        self,
+        escrow_id: str,
+        *,
+        releaser_handle: str,
+        note: str | None = None,
+    ) -> TaskEscrowRecord:
+        escrow = self._require_task_escrow(escrow_id)
+        task = self._require_task(escrow.task_id)
+        releaser = self._require_agent_by_handle(releaser_handle)
+        if releaser.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can release escrow")
+        if escrow.state != TaskState.ESCROWED:
+            raise InvalidMessageError("only escrowed credits can be released")
+        if task.state != TaskState.RESULT_ACCEPTED:
+            raise InvalidMessageError("task result must be accepted before releasing escrow")
+
+        now = self._clock()
+        released = replace(
+            escrow,
+            state=TaskState.RELEASED,
+            released_at=now,
+            updated_at=now,
+        )
+        self._repository.update_task_escrow(released)
+        updated_task = replace(task, state=TaskState.RELEASED, updated_at=now)
+        self._repository.update_task(updated_task)
+        self._send_task_notification(
+            task=updated_task,
+            sender=releaser,
+            recipient_agent_id=escrow.worker_agent_id,
+            intent="task_escrow_released",
+            label="task escrow released",
+            note=note,
+            ref=MessageRef(
+                type="task_escrow",
+                url=f"seagull://tasks/{task.task_id}/escrows/{escrow.escrow_id}",
+                remember_as="released task escrow",
+            ),
+        )
+        return released
+
     def create_tool_grant(
         self,
         task_id: str,
@@ -1446,6 +1695,20 @@ class MessageHubService:
             raise NotFoundError(f"task not found: {task_id}")
         return task
 
+    def _require_task_quote(self, quote_id: str) -> TaskQuoteRecord:
+        normalized_quote_id = normalize_required(quote_id, "quote_id")
+        quote = self._repository.get_task_quote(normalized_quote_id)
+        if quote is None:
+            raise NotFoundError(f"task quote not found: {normalized_quote_id}")
+        return quote
+
+    def _require_task_escrow(self, escrow_id: str) -> TaskEscrowRecord:
+        normalized_escrow_id = normalize_required(escrow_id, "escrow_id")
+        escrow = self._repository.get_task_escrow(normalized_escrow_id)
+        if escrow is None:
+            raise NotFoundError(f"task escrow not found: {normalized_escrow_id}")
+        return escrow
+
     def _require_tool_grant(self, grant_id: str) -> ToolGrant:
         normalized_grant_id = normalize_required(grant_id, "tool_grant_id")
         grant = self._repository.get_tool_grant(normalized_grant_id)
@@ -1922,6 +2185,16 @@ def normalize_task_state(state: str) -> TaskState:
 
 def task_ref(task_id: str, label: str) -> MessageRef:
     return MessageRef(type="task", url=f"seagull://tasks/{task_id}", remember_as=label)
+
+
+def task_shared_context_refs(task: TaskRecord) -> tuple[str, ...]:
+    values: list[str | None] = [
+        *task.context_refs,
+        task.context_pack_id,
+        task.context_pack_ref,
+        task.input_ref,
+    ]
+    return tuple(dict.fromkeys(value for value in values if value))
 
 
 def contact_reason(

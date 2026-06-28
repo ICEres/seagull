@@ -203,9 +203,14 @@ Do not send full conversation history to every agent by default.
 messages. Task notification messages should carry only `seagull://tasks/...`
 refs. Task records capture requester, recipient, objective, context refs,
 allowed tool names, allowed-use terms, lifecycle state, policy decision ID,
-accepted worker, optional `stream_id`, result refs, and artifact refs. Task
-results may carry the same optional `stream_id`, but durable result records and
-final task-result messages do not require live streaming. Task-scoped tool-request
+accepted worker, quote refs, escrow refs, optional `stream_id`, result refs,
+and artifact refs. Task quote records capture expected credit cost, shared
+context refs, task reason, approval requirement, limits ref, abuse policy ref,
+and audit refs. Task escrow records are created only from an approved quote when
+approval is required; they carry held credits, approval refs, limits refs, abuse
+policy refs, and audit refs. Task results may carry the same optional
+`stream_id`, but durable result records and final task-result messages do not
+require live streaming. Task-scoped tool-request
 records capture requested tool name, purpose, approval requirement, policy
 decision ID, accepted worker, and result/artifact refs without copying private
 MCP handles, credentials, prompts, memory, or runtime configuration.
@@ -268,6 +273,8 @@ idempotency_keys  duplicate-send protection
 thread_summaries  compact context for long conversations
 payloads          compressed local payload blobs plus reference metadata
 tasks             delegated task lifecycle records
+task_quotes       expected cost, shared context, reason, approval, and audit
+task_escrows      held internal credits linked to approved/preapproved quotes
 tool_requests     task-scoped delegated tool-use records
 task_results      durable task result records
 ```

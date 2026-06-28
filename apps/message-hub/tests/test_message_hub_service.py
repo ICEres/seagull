@@ -740,6 +740,126 @@ class MessageHubServiceTest(TestCase):
         self.assertIn(TaskState.DISPUTED, task_lifecycle_next_states(TaskState.RESULT_READY))
         self.assertIn(TaskState.CANCELED, TASK_LIFECYCLE_TRANSITIONS[TaskState.DISPUTED])
 
+    def test_task_quote_approval_and_escrow_flow_is_auditable(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Use reviewer capacity for private plan review.",
+            context_refs=("thread://thread_1",),
+            context_pack_ref="payload://context_pack_1",
+            input_ref="payload://task_1/input",
+            allowed_use_terms=("paid_worker", "human_approval_required"),
+        )
+
+        quote = self.service.create_task_quote(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=3,
+            task_reason="Private plan review requires independent capacity.",
+            shared_context_refs=("thread://thread_1", "payload://context_pack_1"),
+            requires_approval=True,
+            approval_reason="Paid private-context work requires owner approval.",
+            limits_ref="seagull://tasks/task_1/limits",
+            abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
+            policy_decision_id="policy_quote_1",
+        )
+        quoted_task = self.service.get_task(task.task_id)
+        quote_messages = self.repository.list_thread_messages(task.thread_id)
+
+        self.assertEqual("task_quote_1", quote.quote_id)
+        self.assertEqual(3, quote.expected_credit_cost)
+        self.assertEqual(("thread://thread_1", "payload://context_pack_1"), quote.shared_context_refs)
+        self.assertEqual("Private plan review requires independent capacity.", quote.task_reason)
+        self.assertEqual("Paid private-context work requires owner approval.", quote.approval_reason)
+        self.assertEqual(TaskState.QUOTED, quoted_task.state)
+        self.assertEqual(("task_quote_1",), quoted_task.quote_ids)
+        self.assertEqual("task_quote", quote_messages[-1].intent)
+        self.assertEqual("seagull://tasks/task_1/quotes/task_quote_1", quote_messages[-1].refs[0].url)
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_task_escrow(
+                task.task_id,
+                requester_handle="@researcher:gulls.ai",
+                quote_id=quote.quote_id,
+            )
+
+        approved = self.service.approve_task_quote(
+            quote.quote_id,
+            approver_handle="@researcher:gulls.ai",
+            approval_id="approval_1",
+            policy_decision_id="policy_approval_1",
+        )
+        self.assertEqual(self.sender.agent_id, approved.approved_by_agent_id)
+        self.assertEqual("approval_1", approved.approval_id)
+        self.assertEqual("policy_approval_1", approved.policy_decision_id)
+        self.assertEqual(TaskState.APPROVED, self.service.get_task(task.task_id).state)
+
+        escrow = self.service.create_task_escrow(
+            task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            quote_id=quote.quote_id,
+        )
+        escrowed_task = self.service.get_task(task.task_id)
+        self.assertEqual("task_escrow_1", escrow.escrow_id)
+        self.assertEqual(TaskState.ESCROWED, escrow.state)
+        self.assertEqual(quote.expected_credit_cost, escrow.credit_amount)
+        self.assertEqual("approval_1", escrow.approval_id)
+        self.assertEqual("seagull://tasks/task_1/limits", escrow.limits_ref)
+        self.assertEqual("seagull://policies/task-credits/abuse-controls", escrow.abuse_policy_ref)
+        self.assertEqual(("seagull://tasks/task_1/escrows/task_escrow_1/audit",), escrow.audit_refs)
+        self.assertEqual(TaskState.ESCROWED, escrowed_task.state)
+        self.assertEqual(("task_escrow_1",), escrowed_task.escrow_ids)
+
+        self.service.update_task_state(
+            task.task_id,
+            actor_handle="@reviewer:gulls.ai",
+            state="running",
+        )
+        self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="result_ready",
+            content="Ready for acceptance.",
+        )
+        self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="result_accepted",
+        )
+        released = self.service.release_task_escrow(
+            escrow.escrow_id,
+            releaser_handle="@researcher:gulls.ai",
+            note="Accepted.",
+        )
+
+        self.assertEqual(TaskState.RELEASED, released.state)
+        self.assertIsNotNone(released.released_at)
+        self.assertEqual(TaskState.RELEASED, self.service.get_task(task.task_id).state)
+
+    def test_task_escrow_without_required_approval_can_be_created_after_quote(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Use reviewer capacity for a preapproved small task.",
+            context_refs=("thread://thread_1",),
+        )
+        quote = self.service.create_task_quote(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=1,
+            task_reason="Small preapproved review.",
+            requires_approval=False,
+        )
+
+        escrow = self.service.create_task_escrow(
+            task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            quote_id=quote.quote_id,
+        )
+
+        self.assertIsNone(escrow.approval_id)
+        self.assertEqual(TaskState.ESCROWED, escrow.state)
+
     def test_preapproved_tool_request_requires_active_tool_grant(self) -> None:
         task = self.service.create_task(
             requester_handle="@researcher:gulls.ai",

@@ -309,6 +309,10 @@ The current protocol package should keep this boundary explicit:
   with canceled/disputed/refused/failed side paths. Cross-user work, paid work,
   private-context sharing, and high-cost usage should pass through human
   approval before escrow or execution.
+- Represent quotes and escrows as work/task extension records. Quotes expose
+  expected credit cost, shared context refs, and task reason. Escrows are created
+  only after approval when approval is required, and carry Seagull-owned limits,
+  abuse-control, and audit refs.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
 - Use optional `stream_id` links on task records/results only as live-projection

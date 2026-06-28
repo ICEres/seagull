@@ -332,6 +332,107 @@ class TaskRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskQuote:
+    quote_id: str
+    task_id: str
+    thread_id: str
+    requester: Handle
+    worker: Handle
+    task_reason: str
+    expected_credit_cost: int
+    shared_context_refs: tuple[str, ...] = ()
+    requires_approval: bool = True
+    approval_reason: str | None = None
+    approved_by: Handle | None = None
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "quote_id", required_string(self.quote_id, "quote_id"))
+        object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
+        object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
+        object.__setattr__(self, "task_reason", required_string(self.task_reason, "task_reason"))
+        require_non_negative_int(self.expected_credit_cost, "expected_credit_cost")
+        if not isinstance(self.requires_approval, bool):
+            raise ProtocolError("requires_approval must be a boolean")
+        for field_name in (
+            "approval_reason",
+            "approval_id",
+            "policy_decision_id",
+            "limits_ref",
+            "abuse_policy_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "shared_context_refs",
+            tuple(required_string(ref, "shared_context_ref") for ref in self.shared_context_refs),
+        )
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEscrow:
+    escrow_id: str
+    task_id: str
+    quote_id: str
+    thread_id: str
+    requester: Handle
+    worker: Handle
+    credit_amount: int
+    state: TaskState = TaskState.ESCROWED
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    released_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "escrow_id", required_string(self.escrow_id, "escrow_id"))
+        object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
+        object.__setattr__(self, "quote_id", required_string(self.quote_id, "quote_id"))
+        object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
+        require_non_negative_int(self.credit_amount, "credit_amount")
+        state = normalize_task_state(self.state)
+        if state not in {
+            TaskState.ESCROWED,
+            TaskState.RELEASED,
+            TaskState.CANCELED,
+            TaskState.DISPUTED,
+        }:
+            raise ProtocolError("escrow state must be escrowed, released, canceled, or disputed")
+        object.__setattr__(self, "state", state)
+        for field_name in (
+            "approval_id",
+            "policy_decision_id",
+            "limits_ref",
+            "abuse_policy_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TaskResult:
     task_id: str
     responder: Handle
@@ -371,6 +472,8 @@ __all__ = [
     "ContextBudget",
     "ContextPack",
     "TASK_LIFECYCLE_TRANSITIONS",
+    "TaskEscrow",
+    "TaskQuote",
     "TaskRequest",
     "TaskResult",
     "TaskState",

@@ -383,6 +383,68 @@ class LocalMessageLoopTest(TestCase):
         self.assertIsNone(readback["task"]["stream_id"])
         self.assertEqual(result["result"]["result_message_id"], readback["task"]["result_message_id"])
 
+    def test_local_api_manages_quote_approval_and_escrow_flow(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        task_response = self.api.create_task(
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "recipient_handle": "@reviewer:seagull.local",
+                "objective": "Review private context with paid capacity.",
+                "context_refs": ["thread://thread_1"],
+                "context_pack_ref": "payload://context_pack_1",
+            }
+        )
+
+        quote = self.api.create_task_quote(
+            task_response["task_id"],
+            {
+                "worker_handle": "@reviewer:seagull.local",
+                "expected_credit_cost": 3,
+                "task_reason": "Review private context with independent capacity.",
+                "shared_context_refs": ["thread://thread_1", "payload://context_pack_1"],
+                "requires_approval": True,
+                "approval_reason": "Paid private-context work needs owner approval.",
+            },
+        )
+        self.assertEqual("task_quote_1", quote["quote_id"])
+        self.assertEqual(3, quote["quote"]["expected_credit_cost"])
+        self.assertEqual(["thread://thread_1", "payload://context_pack_1"], quote["quote"]["shared_context_refs"])
+
+        with self.assertRaises(ApiError) as unapproved:
+            self.api.create_task_escrow(
+                task_response["task_id"],
+                {
+                    "requester_handle": "@researcher:seagull.local",
+                    "quote_id": quote["quote_id"],
+                },
+            )
+        self.assertEqual(400, unapproved.exception.status_code)
+
+        approved = self.api.approve_task_quote(
+            quote["quote_id"],
+            {
+                "approver_handle": "@researcher:seagull.local",
+                "approval_id": "approval_1",
+            },
+        )
+        escrow = self.api.create_task_escrow(
+            task_response["task_id"],
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "quote_id": quote["quote_id"],
+            },
+        )
+
+        self.assertEqual("approval_1", approved["quote"]["approval_id"])
+        self.assertEqual("task_escrow_1", escrow["escrow_id"])
+        self.assertEqual("escrowed", escrow["state"])
+        self.assertEqual(3, escrow["escrow"]["credit_amount"])
+        self.assertEqual("approval_1", escrow["escrow"]["approval_id"])
+        readback = self.api.read_task(task_response["task_id"])
+        self.assertEqual(["task_quote_1"], readback["task"]["quote_ids"])
+        self.assertEqual(["task_escrow_1"], readback["task"]["escrow_ids"])
+
     def test_local_api_enforces_scoped_tool_grants(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})
         self.api.register_agent({"handle": "@reviewer:seagull.local"})

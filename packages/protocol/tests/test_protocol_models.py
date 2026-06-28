@@ -29,6 +29,8 @@ from seagull_protocol import (
     StreamEvent,
     StreamEventType,
     TASK_LIFECYCLE_TRANSITIONS,
+    TaskEscrow,
+    TaskQuote,
     TaskRequest,
     TaskResult,
     TaskState,
@@ -428,6 +430,35 @@ class ProtocolModelsTest(TestCase):
             artifact_refs=("artifact_tool_summary_1",),
             tool_use_summary_ref="payload://task_1/tool_summary",
         )
+        quote = TaskQuote(
+            quote_id="quote_1",
+            task_id=request.task_id,
+            thread_id=request.thread_id,
+            requester=request.requester,
+            worker=request.recipient,
+            task_reason="Review private context using worker capacity.",
+            expected_credit_cost=3,
+            shared_context_refs=("thread://thread_1", "payload://task_1/input"),
+            requires_approval=True,
+            approval_reason="Paid private-context work requires owner approval.",
+            limits_ref="seagull://tasks/task_1/limits",
+            abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
+            audit_refs=("seagull://tasks/task_1/quotes/quote_1/audit",),
+        )
+        escrow = TaskEscrow(
+            escrow_id="escrow_1",
+            task_id=request.task_id,
+            quote_id=quote.quote_id,
+            thread_id=request.thread_id,
+            requester=request.requester,
+            worker=request.recipient,
+            credit_amount=quote.expected_credit_cost,
+            approval_id="approval_1",
+            policy_decision_id="policy_1",
+            limits_ref=quote.limits_ref,
+            abuse_policy_ref=quote.abuse_policy_ref,
+            audit_refs=("seagull://tasks/task_1/escrows/escrow_1/audit",),
+        )
 
         self.assertEqual(TaskState.REQUESTED, request.state)
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
@@ -444,6 +475,13 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(TaskState.NEEDS_APPROVAL, tool_request.state)
         self.assertEqual("policy_1", tool_request.policy_decision_id)
         self.assertEqual("payload://task_1/tool_request/result", tool_request.result_ref)
+        self.assertEqual(3, quote.expected_credit_cost)
+        self.assertEqual(("thread://thread_1", "payload://task_1/input"), quote.shared_context_refs)
+        self.assertEqual("Paid private-context work requires owner approval.", quote.approval_reason)
+        self.assertEqual(TaskState.ESCROWED, escrow.state)
+        self.assertEqual(quote.expected_credit_cost, escrow.credit_amount)
+        self.assertEqual(quote.limits_ref, escrow.limits_ref)
+        self.assertEqual(quote.abuse_policy_ref, escrow.abuse_policy_ref)
 
     def test_task_lifecycle_defines_credit_state_transitions(self) -> None:
         expected_states = {

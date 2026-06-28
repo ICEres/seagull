@@ -34,6 +34,8 @@ deliveries
 idempotency_keys
 thread_summaries
 tasks
+task_quotes
+task_escrows
 tool_requests
 task_results
 ```

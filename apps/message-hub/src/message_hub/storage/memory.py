@@ -10,6 +10,8 @@ from message_hub.domain.models import (
     Message,
     RoutingRule,
     StoredPayload,
+    TaskEscrowRecord,
+    TaskQuoteRecord,
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
@@ -43,6 +45,10 @@ class InMemoryMessageHubRepository:
         self._summaries_by_thread: dict[str, list[ThreadSummary]] = defaultdict(list)
         self._tasks_by_id: dict[str, TaskRecord] = {}
         self._task_ids_by_thread: dict[str, list[str]] = defaultdict(list)
+        self._task_quotes_by_id: dict[str, TaskQuoteRecord] = {}
+        self._task_quote_ids_by_task: dict[str, list[str]] = defaultdict(list)
+        self._task_escrows_by_id: dict[str, TaskEscrowRecord] = {}
+        self._task_escrow_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_grants_by_id: dict[str, ToolGrant] = {}
         self._tool_grant_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
@@ -276,6 +282,62 @@ class InMemoryMessageHubRepository:
         if limit is not None:
             tasks = tasks[-limit:]
         return tuple(tasks)
+
+    def put_task_quote(self, quote: TaskQuoteRecord) -> None:
+        with self._lock:
+            if quote.quote_id in self._task_quotes_by_id:
+                raise ValueError(f"task quote already exists: {quote.quote_id}")
+            self._task_quotes_by_id[quote.quote_id] = quote
+            self._task_quote_ids_by_task[quote.task_id].append(quote.quote_id)
+
+    def get_task_quote(self, quote_id: str) -> TaskQuoteRecord | None:
+        with self._lock:
+            return self._task_quotes_by_id.get(quote_id)
+
+    def update_task_quote(self, quote: TaskQuoteRecord) -> None:
+        with self._lock:
+            if quote.quote_id not in self._task_quotes_by_id:
+                raise ValueError(f"task quote does not exist: {quote.quote_id}")
+            self._task_quotes_by_id[quote.quote_id] = quote
+
+    def list_task_quotes_by_task(self, task_id: str) -> tuple[TaskQuoteRecord, ...]:
+        with self._lock:
+            quotes = [
+                self._task_quotes_by_id[quote_id]
+                for quote_id in self._task_quote_ids_by_task.get(task_id, [])
+                if quote_id in self._task_quotes_by_id
+            ]
+
+        quotes.sort(key=lambda quote: (quote.created_at, quote.quote_id))
+        return tuple(quotes)
+
+    def put_task_escrow(self, escrow: TaskEscrowRecord) -> None:
+        with self._lock:
+            if escrow.escrow_id in self._task_escrows_by_id:
+                raise ValueError(f"task escrow already exists: {escrow.escrow_id}")
+            self._task_escrows_by_id[escrow.escrow_id] = escrow
+            self._task_escrow_ids_by_task[escrow.task_id].append(escrow.escrow_id)
+
+    def get_task_escrow(self, escrow_id: str) -> TaskEscrowRecord | None:
+        with self._lock:
+            return self._task_escrows_by_id.get(escrow_id)
+
+    def update_task_escrow(self, escrow: TaskEscrowRecord) -> None:
+        with self._lock:
+            if escrow.escrow_id not in self._task_escrows_by_id:
+                raise ValueError(f"task escrow does not exist: {escrow.escrow_id}")
+            self._task_escrows_by_id[escrow.escrow_id] = escrow
+
+    def list_task_escrows_by_task(self, task_id: str) -> tuple[TaskEscrowRecord, ...]:
+        with self._lock:
+            escrows = [
+                self._task_escrows_by_id[escrow_id]
+                for escrow_id in self._task_escrow_ids_by_task.get(task_id, [])
+                if escrow_id in self._task_escrows_by_id
+            ]
+
+        escrows.sort(key=lambda escrow: (escrow.created_at, escrow.escrow_id))
+        return tuple(escrows)
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         with self._lock:

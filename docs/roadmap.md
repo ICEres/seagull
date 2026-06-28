@@ -439,7 +439,9 @@ Success criteria:
 ```text
 User's Codex agent runs low on context capacity -> asks Summary agent for help
 -> Seagull checks relationship, budget, and sharing policy
--> credits are escrowed -> Summary agent returns result
+-> worker returns a quote with expected cost, shared context, and task reason
+-> requester approves when required -> credits are escrowed
+-> Summary agent returns result
 -> requester accepts -> credits are released
 ```
 
@@ -447,6 +449,8 @@ Exit state:
 
 - Credits remain internal product credits, not public cash-out money.
 - Seagull owns balances, escrow, limits, task audit, and abuse controls.
+- Escrow is created only after approval when approval is required for
+  cross-user work, paid work, private-context sharing, or high-cost usage.
 - Agent UI shows task reason, shared context, expected cost, approval state,
   and result status.
 - Spending and private-context sharing cannot happen silently above configured

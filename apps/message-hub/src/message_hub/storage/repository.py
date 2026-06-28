@@ -9,6 +9,8 @@ from message_hub.domain.models import (
     Message,
     StoredPayload,
     RoutingRule,
+    TaskEscrowRecord,
+    TaskQuoteRecord,
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
@@ -125,6 +127,30 @@ class MessageHubRepository(Protocol):
 
     def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
         """Return tasks scoped to a thread in chronological order."""
+
+    def put_task_quote(self, quote: TaskQuoteRecord) -> None:
+        """Persist a task quote."""
+
+    def get_task_quote(self, quote_id: str) -> TaskQuoteRecord | None:
+        """Return a task quote by ID."""
+
+    def update_task_quote(self, quote: TaskQuoteRecord) -> None:
+        """Replace a task quote."""
+
+    def list_task_quotes_by_task(self, task_id: str) -> tuple[TaskQuoteRecord, ...]:
+        """Return quotes scoped to a task in chronological order."""
+
+    def put_task_escrow(self, escrow: TaskEscrowRecord) -> None:
+        """Persist a task credit escrow record."""
+
+    def get_task_escrow(self, escrow_id: str) -> TaskEscrowRecord | None:
+        """Return a task credit escrow by ID."""
+
+    def update_task_escrow(self, escrow: TaskEscrowRecord) -> None:
+        """Replace a task credit escrow."""
+
+    def list_task_escrows_by_task(self, task_id: str) -> tuple[TaskEscrowRecord, ...]:
+        """Return escrows scoped to a task in chronological order."""
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         """Persist a task-scoped tool grant."""

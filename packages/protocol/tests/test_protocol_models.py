@@ -5,6 +5,9 @@ from unittest import TestCase
 from seagull_protocol import (
     ActionRequest,
     AgentProfile,
+    ContentRef,
+    ContextBudget,
+    ContextPack,
     Delivery,
     DeliveryState,
     Handle,
@@ -13,7 +16,17 @@ from seagull_protocol import (
     Message,
     MessageRef,
     MessageIntent,
+    PayloadAccessScope,
+    PayloadChunk,
+    PayloadCompression,
+    PayloadManifest,
+    PayloadRetentionState,
     ProtocolError,
+    StreamEvent,
+    StreamEventType,
+    TaskRequest,
+    TaskResult,
+    TaskState,
     Visibility,
     WorkflowTraceEntry,
     normalize_handle,
@@ -94,3 +107,152 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual("https://maps.google.com/example", delivery.refs[0].url)
         self.assertEqual(HookType.RECEIVE_BEFORE, delivery.workflow_trace[0].hook)
         self.assertEqual("open_url", delivery.action_request.type)
+
+    def test_content_ref_aligns_with_message_hub_string_fields(self) -> None:
+        payload = ContentRef(
+            content_ref="payload://thread_1/context/full",
+            media_type="text/markdown",
+            byte_length=4096,
+            hash="sha256:abc123",
+            compression=PayloadCompression.GZIP,
+            retention_state=PayloadRetentionState.READY,
+            access_scope=PayloadAccessScope.THREAD,
+        )
+        message = Message(
+            message_id="message_1",
+            thread_id="thread_1",
+            sender=Handle("@researcher:seagull.local"),
+            recipients=(Handle("@reviewer:seagull.local"),),
+            intent=MessageIntent.MESSAGE,
+            visibility=Visibility.DIRECT,
+            content_ref=payload.content_ref,
+        )
+        delivery = Delivery(
+            delivery_id="delivery_1",
+            message_id=message.message_id,
+            thread_id=message.thread_id,
+            sender=message.sender,
+            recipient=message.recipients[0],
+            state=DeliveryState.DELIVERED,
+            current_content_ref=message.content_ref,
+        )
+
+        self.assertEqual("payload://thread_1/context/full", message.content_ref)
+        self.assertEqual(message.content_ref, delivery.current_content_ref)
+        self.assertEqual(PayloadCompression.GZIP, payload.compression)
+
+    def test_payload_manifest_can_reference_chunks(self) -> None:
+        payload = ContentRef(
+            content_ref="payload://task_1/input",
+            media_type="application/json",
+            byte_length=12,
+            hash="sha256:payload",
+            chunk_manifest_ref="manifest_1",
+        )
+        manifest = PayloadManifest(
+            manifest_id="manifest_1",
+            payload=payload,
+            chunks=(
+                PayloadChunk(
+                    content_ref="payload://task_1/input/chunk/0",
+                    sequence=0,
+                    byte_offset=0,
+                    byte_length=12,
+                    hash="sha256:chunk",
+                ),
+            ),
+        )
+
+        self.assertEqual(payload.content_ref, manifest.payload.content_ref)
+        self.assertEqual("payload://task_1/input/chunk/0", manifest.chunks[0].content_ref)
+
+    def test_context_pack_carries_budgeted_context_without_inline_payload(self) -> None:
+        payload = ContentRef(
+            content_ref="payload://thread_1/artifact_1",
+            media_type="application/pdf",
+            byte_length=32000,
+            hash="sha256:pdf",
+        )
+        recent = Message(
+            message_id="message_1",
+            thread_id="thread_1",
+            sender=Handle("@researcher:seagull.local"),
+            recipients=(Handle("@reviewer:seagull.local"),),
+            intent=MessageIntent.MESSAGE,
+            visibility=Visibility.DIRECT,
+            content="Short visible context.",
+        )
+        pack = ContextPack(
+            context_pack_id="context_pack_1",
+            thread_id="thread_1",
+            requester=Handle("@reviewer:seagull.local"),
+            summary_ref="payload://thread_1/summary/latest",
+            recent_messages=(recent,),
+            selected_refs=(MessageRef(type="payload", url=payload.content_ref),),
+            payload_refs=(payload,),
+            budget=ContextBudget(
+                max_inline_chars=2000,
+                max_recent_messages=10,
+                max_payload_refs=5,
+                token_budget_estimate=800,
+            ),
+        )
+
+        self.assertEqual("payload://thread_1/summary/latest", pack.summary_ref)
+        self.assertEqual((recent,), pack.recent_messages)
+        self.assertEqual((payload,), pack.payload_refs)
+        self.assertEqual(800, pack.budget.token_budget_estimate)
+
+    def test_task_records_are_provider_neutral(self) -> None:
+        request = TaskRequest(
+            task_id="task_1",
+            thread_id="thread_1",
+            requester=Handle("@researcher:seagull.local"),
+            recipient=Handle("@reviewer:seagull.local"),
+            objective="Review the attached plan.",
+            context_pack_id="context_pack_1",
+            allowed_tool_names=("open_artifact",),
+        )
+        result = TaskResult(
+            task_id=request.task_id,
+            responder=request.recipient,
+            state=TaskState.RESULT_READY,
+            result_message_id="message_2",
+            content_ref="payload://task_1/result",
+            artifact_refs=("artifact_1",),
+        )
+
+        self.assertEqual(TaskState.REQUESTED, request.state)
+        self.assertEqual(("open_artifact",), request.allowed_tool_names)
+        self.assertEqual("payload://task_1/result", result.content_ref)
+
+    def test_stream_event_reserves_future_resume_and_final_message_fields(self) -> None:
+        event = StreamEvent(
+            stream_id="stream_1",
+            sequence=3,
+            event_type=StreamEventType.COMPLETED,
+            task_id="task_1",
+            resume_after=2,
+            final_message_id="message_2",
+            content_ref="payload://task_1/final",
+        )
+
+        self.assertEqual(StreamEventType.COMPLETED, event.event_type)
+        self.assertEqual(2, event.resume_after)
+        self.assertEqual("message_2", event.final_message_id)
+
+    def test_payload_and_stream_validation_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ProtocolError):
+            ContentRef(
+                content_ref="payload://bad",
+                media_type="text/plain",
+                byte_length=-1,
+                hash="sha256:bad",
+            )
+
+        with self.assertRaises(ProtocolError):
+            StreamEvent(
+                stream_id="stream_1",
+                sequence=-1,
+                event_type=StreamEventType.DELTA,
+            )

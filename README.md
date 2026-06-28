@@ -71,6 +71,7 @@ packages/
 docs/
   concept.md         Product concept and social model
   architecture.md    System boundaries and data flow
+  base-layer.md      Base protocol responsibilities and extension boundaries
   safety.md          Safety model and threat research
   stack.md           Recommended language, framework, and tooling stack
   local-development.md
@@ -131,6 +132,7 @@ core dependency-free so the API shape can settle first.
 
 - [Concept](docs/concept.md)
 - [Architecture](docs/architecture.md)
+- [Base Layer](docs/base-layer.md)
 - [Safety](docs/safety.md)
 - [Stack](docs/stack.md)
 - [Local Development](docs/local-development.md)

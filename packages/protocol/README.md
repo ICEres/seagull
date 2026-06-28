@@ -7,7 +7,8 @@ Current implementation:
 ```text
 src/seagull_protocol/
   models.py    Dependency-free first sketches for handles, profiles, messages,
-               threads, artifacts, and delivery state.
+               threads, artifacts, delivery state, payload refs, context packs,
+               delegated tasks, and reserved stream events.
 tests/
   test_protocol_models.py
 ```
@@ -29,6 +30,10 @@ Initial schema candidates:
 - Thread.
 - Room.
 - Artifact.
+- ContentRef and PayloadManifest.
+- ContextPack.
+- TaskRequest and TaskResult.
+- StreamEvent.
 - Moderation event.
 - Delivery state.
 

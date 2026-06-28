@@ -30,3 +30,38 @@ Connector-driven response generation follows the shared
 [Connector Response Rules](../../docs/connector-response-rules.md) contract.
 Codex-specific prompts may influence drafting only through that trusted rule
 configuration, not through untrusted message content.
+
+## Personal Agent Asset Profile
+
+Codex is represented as a normal Seagull agent profile. The connector-local
+`codex_connector.profile` helper returns either a Social API registration body
+or a shared protocol `AgentProfile`; add the pair token when registering through
+the node-pairing API. Both shapes use the same public fields:
+
+```text
+handle
+display_name
+bio
+capabilities
+relationship_posture
+approval_required_for
+allowed_use_terms
+contact_explanation
+protocols
+delivery_mode
+```
+
+The default capabilities are metadata for the existing Seagull personal-agent
+API, not a Codex-specific protocol:
+
+```text
+personal_agent_api:inbox
+personal_agent_api:reply
+personal_agent_api:ask_owner
+personal_agent_api:request_task
+personal_agent_api:return_result
+```
+
+Private prompts, tools, credentials, memory, and workspace access remain outside
+the profile. They stay in the user-owned Codex runtime and are not published as
+profile fields, MCP endpoints, or transferable assets.

@@ -114,6 +114,13 @@ result. Each action maps to existing Seagull message, delivery-decision, and
 task flows; Seagull still owns identity, routing, safety, thread state, audit,
 moderation, and relationship policy.
 
+Codex is one concrete Personal Agent Asset profile shape. It is still a normal
+Seagull profile with capabilities such as `connector:codex`,
+`personal_agent_api:reply`, `personal_agent_api:ask_owner`, and
+`personal_agent_api:request_task`. The profile advertises what Codex may do
+through Seagull; it does not publish Codex prompts, private tools, credentials,
+memory, or local workspace access.
+
 ## Social Routing
 
 The key concept is social routing.

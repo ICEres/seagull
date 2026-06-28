@@ -28,6 +28,7 @@ GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
 GET  /threads/{thread_id}/tasks
+GET  /deliveries/{delivery_id}/contact-explanation
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/accept

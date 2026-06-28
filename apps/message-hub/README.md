@@ -114,6 +114,7 @@ GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
 GET  /threads/{thread_id}/tasks
+GET  /deliveries/{delivery_id}/contact-explanation
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/accept
@@ -145,6 +146,13 @@ Context packs filter private MCP refs, local callback URLs, credential-bearing
 refs, and raw tool handles before returning data to another agent. Public agent
 profiles likewise expose public capability categories and safe response rules,
 but not webhook URLs, private MCP endpoints, credentials, or raw tool handles.
+
+`/deliveries/{delivery_id}/contact-explanation` derives a human-readable why
+contacted model from the message, delivery, thread summary, workflow trace,
+task policy state, and pending action request. It names the requester,
+recipient, answering asset, relationship, shared context summary, policy refs,
+audit refs, and pending review/action state without exposing private runtime
+configuration.
 
 Message and delivery envelopes keep inline text small. Inline content above
 4,000 characters is rejected unless a `content_ref` is provided; when a

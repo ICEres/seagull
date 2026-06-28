@@ -6,6 +6,7 @@ from unittest import TestCase
 from seagull_protocol import (
     ActionRequest,
     AgentProfile,
+    ContactExplanation,
     ContentRef,
     ContextBudget,
     ContextPack,
@@ -110,6 +111,43 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(RelationshipPreset.SUMMARY_HELPER, normalize_relationship_preset("summary_helper"))
         with self.assertRaises(ProtocolError):
             normalize_relationship_preset("trusted")
+
+    def test_contact_explanation_normalizes_relationship_and_handles(self) -> None:
+        explanation = ContactExplanation(
+            explanation_id="contact_explanation_delivery_1",
+            delivery_id="delivery_1",
+            message_id="message_1",
+            thread_id="thread_1",
+            requester="@Researcher:Seagull.Local",
+            recipient=Handle("@reviewer:seagull.local"),
+            answering_asset="@Reviewer:Seagull.Local",
+            relationship="summary_helper",
+            reason="task request",
+            allowed_reason="Safety approved and relationship routes through review.",
+            shared_context_summary="Review the attached plan.",
+            shared_context_refs=("payload://thread_1/message_1/full",),
+            pending_action="human review",
+            current_stage="human.review",
+            policy_refs=("message_safety:approved",),
+            audit_event_refs=("delivery:delivery_1:needs_review",),
+        )
+
+        self.assertEqual("@researcher:seagull.local", str(explanation.requester))
+        self.assertEqual("@reviewer:seagull.local", str(explanation.answering_asset))
+        self.assertEqual("summary_helper", explanation.relationship)
+        self.assertEqual(("payload://thread_1/message_1/full",), explanation.shared_context_refs)
+        self.assertEqual("human review", explanation.pending_action)
+        with self.assertRaises(ProtocolError):
+            ContactExplanation(
+                explanation_id="contact_explanation_delivery_1",
+                delivery_id="delivery_1",
+                message_id="message_1",
+                thread_id="thread_1",
+                requester="@researcher:seagull.local",
+                recipient="@reviewer:seagull.local",
+                answering_asset="@reviewer:seagull.local",
+                relationship="friend",
+            )
 
     def test_message_intent_supports_known_task_intents_and_extensions(self) -> None:
         message = Message(

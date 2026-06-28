@@ -953,6 +953,67 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual("cloud_node", decision.action_request.runtime)
         self.assertTrue(decision.action_request.requires_approval)
 
+    def test_contact_explanation_summarizes_delivery_and_pending_action(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Open this URL when approved.",
+            content_ref="payload://thread_1/message_1/full",
+            refs=(MessageRef(type="url", url="https://example.com", remember_as="approval target"),),
+        )
+        self.service.save_thread_summary(result.thread.thread_id, "Researcher asked reviewer to inspect a URL.")
+
+        explanation = self.service.explain_contact(result.deliveries[0].delivery_id)
+
+        self.assertEqual("contact_explanation_delivery_1", explanation.explanation_id)
+        self.assertEqual("@researcher:gulls.ai", explanation.requester_handle)
+        self.assertEqual("@reviewer:gulls.ai", explanation.answering_asset_handle)
+        self.assertEqual("needs_approval", explanation.relationship)
+        self.assertIn("sent a message", explanation.reason)
+        self.assertIn("message safety status is approved", explanation.allowed_reason)
+        self.assertEqual("Researcher asked reviewer to inspect a URL.", explanation.shared_context_summary)
+        self.assertEqual(
+            ("payload://thread_1/message_1/full", "https://example.com"),
+            explanation.shared_context_refs,
+        )
+        self.assertIsNone(explanation.pending_action)
+        self.assertIn("message_safety:approved", explanation.policy_refs)
+        self.assertIn("delivery:delivery_1:delivered", explanation.audit_event_refs)
+
+        decision = self.service.decide_delivery(
+            result.deliveries[0].delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            decision="action",
+            action_type="open_url",
+            action_target="https://example.com",
+            action_runtime="cloud_node",
+        )
+        action_explanation = self.service.explain_contact(decision.delivery.delivery_id)
+
+        self.assertEqual("action.before", action_explanation.current_stage)
+        self.assertEqual("open_url for https://example.com (requires approval)", action_explanation.pending_action)
+        self.assertIn("action_approval_required:true", action_explanation.policy_refs)
+        self.assertIn("action_request:action_1:pending", action_explanation.audit_event_refs)
+
+    def test_contact_explanation_includes_task_policy_state(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the referenced plan.",
+            context_refs=("payload://task_1/context",),
+            input_ref="payload://task_1/input",
+        )
+        delivery = self.service.get_inbox("@reviewer:gulls.ai")[0].delivery
+
+        explanation = self.service.explain_contact(delivery.delivery_id)
+
+        self.assertEqual(task.request_message_id, explanation.message_id)
+        self.assertIn("requested delegated task work", explanation.reason)
+        self.assertEqual("task task_1 is requested", explanation.pending_action)
+        self.assertIn("payload://task_1/context", explanation.shared_context_refs)
+        self.assertIn("payload://task_1/input", explanation.shared_context_refs)
+        self.assertIn("policy_decision:local_safety_allow", explanation.policy_refs)
+
     def test_agent_cannot_decide_another_agents_delivery(self) -> None:
         result = self.service.send_message(
             sender_handle="@researcher:gulls.ai",

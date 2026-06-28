@@ -535,3 +535,38 @@ class LocalMessageLoopTest(TestCase):
         )
         self.assertEqual("replied", decision["delivery"]["status"])
         self.assertEqual(message["thread_id"], decision["reply"]["thread_id"])
+
+    def test_local_api_reads_contact_explanation(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        message = self.api.create_message(
+            {
+                "sender_handle": "@researcher:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "Open this URL when approved.",
+                "refs": [{"type": "url", "url": "https://example.com", "remember_as": "approval target"}],
+            }
+        )
+        delivery_id = message["deliveries"][0]["delivery_id"]
+        self.api.submit_delivery_decision(
+            delivery_id,
+            {
+                "agent_handle": "@reviewer:seagull.local",
+                "decision": "action",
+                "action_type": "open_url",
+                "action_target": "https://example.com",
+            },
+        )
+
+        explanation = self.api.read_contact_explanation(delivery_id)["explanation"]
+
+        self.assertEqual("contact_explanation_delivery_1", explanation["explanation_id"])
+        self.assertEqual("@researcher:seagull.local", explanation["requester_handle"])
+        self.assertEqual("@reviewer:seagull.local", explanation["answering_asset_handle"])
+        self.assertEqual("needs_approval", explanation["relationship"])
+        self.assertIn("message safety status is approved", explanation["allowed_reason"])
+        self.assertEqual("Open this URL when approved.", explanation["shared_context_summary"])
+        self.assertEqual(["https://example.com"], explanation["shared_context_refs"])
+        self.assertEqual("open_url for https://example.com (requires approval)", explanation["pending_action"])
+        self.assertIn("action_approval_required:true", explanation["policy_refs"])
+        self.assertIn("action_request:action_1:pending", explanation["audit_event_refs"])

@@ -8,6 +8,7 @@ from message_hub.domain import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    ContactExplanation,
     ContextBudget,
     ContextPack,
     ContextPayloadRef,
@@ -489,6 +490,14 @@ class LocalMessageHubApi:
 
         return {"deliveries": [delivery_to_dict(delivery) for delivery in deliveries]}
 
+    def read_contact_explanation(self, delivery_id: str) -> dict[str, Any]:
+        try:
+            explanation = self._service.explain_contact(delivery_id)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"explanation": contact_explanation_to_dict(explanation)}
+
     def submit_hook_result(self, delivery_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
             delivery = self._service.apply_hook_result(
@@ -679,6 +688,30 @@ def delivery_to_dict(delivery: Delivery) -> dict[str, Any]:
         "created_at": datetime_to_string(delivery.created_at),
         "updated_at": datetime_to_string(delivery.updated_at),
         "acked_at": datetime_to_string(delivery.acked_at),
+    }
+
+
+def contact_explanation_to_dict(explanation: ContactExplanation) -> dict[str, Any]:
+    return {
+        "explanation_id": explanation.explanation_id,
+        "delivery_id": explanation.delivery_id,
+        "message_id": explanation.message_id,
+        "thread_id": explanation.thread_id,
+        "requester_agent_id": explanation.requester_agent_id,
+        "requester_handle": explanation.requester_handle,
+        "recipient_agent_id": explanation.recipient_agent_id,
+        "recipient_handle": explanation.recipient_handle,
+        "answering_asset_handle": explanation.answering_asset_handle,
+        "relationship": explanation.relationship,
+        "reason": explanation.reason,
+        "allowed_reason": explanation.allowed_reason,
+        "shared_context_summary": explanation.shared_context_summary,
+        "shared_context_refs": list(explanation.shared_context_refs),
+        "pending_action": explanation.pending_action,
+        "current_stage": explanation.current_stage,
+        "policy_refs": list(explanation.policy_refs),
+        "audit_event_refs": list(explanation.audit_event_refs),
+        "created_at": datetime_to_string(explanation.created_at),
     }
 
 

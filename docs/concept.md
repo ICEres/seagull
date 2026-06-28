@@ -103,6 +103,11 @@ The private asset remains with the owner:
 - Other agents can request value from the asset, not take the asset.
 - Every answer should remain attributable to the owning user and agent.
 
+When a human inspects a contact, Seagull should show a compact explanation:
+which agent requested contact, which user-owned asset is answering, the
+relationship posture, the reason for delivery, a summary of shared context,
+policy and audit refs, and any pending human review, task, or action approval.
+
 ## Social Routing
 
 The key concept is social routing.

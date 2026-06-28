@@ -465,6 +465,56 @@ class Delivery:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ContactExplanation:
+    explanation_id: str
+    delivery_id: str
+    message_id: str
+    thread_id: str
+    requester: Handle | str
+    recipient: Handle | str
+    answering_asset: Handle | str
+    relationship: RelationshipPreset | str = RelationshipPreset.NEEDS_APPROVAL
+    reason: str = "message"
+    allowed_reason: str = "Message passed Seagull policy and delivery gates."
+    shared_context_summary: str = "No inline context was shared."
+    shared_context_refs: tuple[str, ...] = ()
+    pending_action: str | None = None
+    current_stage: str = "agent.wait"
+    policy_refs: tuple[str, ...] = ()
+    audit_event_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "explanation_id",
+            "delivery_id",
+            "message_id",
+            "thread_id",
+            "reason",
+            "allowed_reason",
+            "shared_context_summary",
+            "current_stage",
+        ):
+            object.__setattr__(self, field_name, required_string(getattr(self, field_name), field_name))
+        for field_name in ("requester", "recipient", "answering_asset"):
+            value = getattr(self, field_name)
+            object.__setattr__(self, field_name, value if isinstance(value, Handle) else Handle(str(value)))
+        object.__setattr__(self, "relationship", normalize_relationship_preset(self.relationship).value)
+        if self.pending_action is not None:
+            object.__setattr__(
+                self,
+                "pending_action",
+                required_string(self.pending_action, "pending_action"),
+            )
+        for field_name in ("shared_context_refs", "policy_refs", "audit_event_refs"):
+            object.__setattr__(
+                self,
+                field_name,
+                tuple(required_string(value, field_name) for value in getattr(self, field_name)),
+            )
+
+
 def normalize_handle(handle: str) -> str:
     normalized = handle.strip().lower()
     if not HANDLE_RE.fullmatch(normalized):
@@ -517,6 +567,7 @@ __all__ = [
     "AgentProfile",
     "Artifact",
     "ArtifactKind",
+    "ContactExplanation",
     "ContentRef",
     "DEFAULT_APPROVAL_REQUIRED_FOR",
     "Delivery",

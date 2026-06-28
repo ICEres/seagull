@@ -44,6 +44,7 @@ describe("message hub client", () => {
       decision: "reply",
       content: "Done",
     });
+    await client.explainContact("delivery_1");
 
     expect(calls).toEqual([
       {
@@ -53,6 +54,10 @@ describe("message hub client", () => {
       {
         path: "/deliveries/delivery_1/decision",
         body: { agent_handle: "@agent:seagull.local", decision: "reply", content: "Done" },
+      },
+      {
+        path: "/deliveries/delivery_1/contact-explanation",
+        body: undefined,
       },
     ]);
   });

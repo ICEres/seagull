@@ -192,6 +192,29 @@ class Delivery:
 
 
 @dataclass(frozen=True, slots=True)
+class ContactExplanation:
+    explanation_id: str
+    delivery_id: str
+    message_id: str
+    thread_id: str
+    requester_agent_id: str
+    requester_handle: str
+    recipient_agent_id: str
+    recipient_handle: str
+    answering_asset_handle: str
+    relationship: str
+    reason: str
+    allowed_reason: str
+    shared_context_summary: str
+    shared_context_refs: tuple[str, ...] = ()
+    pending_action: str | None = None
+    current_stage: str = "agent.wait"
+    policy_refs: tuple[str, ...] = ()
+    audit_event_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class ThreadSummary:
     thread_id: str
     summary_id: str

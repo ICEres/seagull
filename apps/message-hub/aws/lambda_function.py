@@ -24,6 +24,8 @@ DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
 MAX_ENVELOPE_INLINE_CHARS = 4000
+DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
+CONTACT_EXPLANATION_SUMMARY_CHARS = 280
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -166,6 +168,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "POST" and path.endswith("/decision"):
             delivery_id = delivery_path_param(path, "/decision")
             return submit_delivery_decision(delivery_id, event)
+
+        if method == "GET" and path.endswith("/contact-explanation"):
+            delivery_id = delivery_path_param(path, "/contact-explanation")
+            return read_contact_explanation(delivery_id)
 
         if method == "GET" and path.startswith("/threads/") and path.endswith("/context"):
             thread_id = path_param(path, "/threads/", "/context")
@@ -1107,6 +1113,221 @@ def submit_delivery_decision(delivery_id: str, event: dict[str, Any]) -> dict[st
     delivery["workflow_trace"] = list(delivery.get("workflow_trace", [])) + [trace]
     deliveries_table.put_item(Item=without_none(delivery))
     return response(200, {"delivery": clean_item(delivery), "reply": None, "action_request": None})
+
+
+def read_contact_explanation(delivery_id: str) -> dict[str, Any]:
+    delivery = require_delivery(delivery_id)
+    message = messages_table.get_item(Key={"message_id": delivery["message_id"]}).get("Item")
+    if message is None:
+        raise NotFound(f"message not found: {delivery['message_id']}")
+    thread = get_thread_record(delivery["thread_id"])
+    if thread is None:
+        raise NotFound(f"thread not found: {delivery['thread_id']}")
+
+    requester = require_agent(delivery["sender_agent_id"])
+    recipient = require_agent(delivery["recipient_agent_id"])
+    relationship = DEFAULT_CONTACT_RELATIONSHIP
+    summary = latest_thread_summary(delivery["thread_id"])
+    tasks = contact_tasks_for_message(delivery["thread_id"], message["message_id"])
+    explanation = {
+        "explanation_id": f"contact_explanation_{delivery['delivery_id']}",
+        "delivery_id": delivery["delivery_id"],
+        "message_id": message["message_id"],
+        "thread_id": delivery["thread_id"],
+        "requester_agent_id": requester["agent_id"],
+        "requester_handle": requester["handle"],
+        "recipient_agent_id": recipient["agent_id"],
+        "recipient_handle": recipient["handle"],
+        "answering_asset_handle": recipient["handle"],
+        "relationship": relationship,
+        "reason": contact_reason(message, delivery, requester, recipient),
+        "allowed_reason": contact_allowed_reason(message, delivery, relationship),
+        "shared_context_summary": contact_shared_context_summary(message, delivery, summary),
+        "shared_context_refs": contact_shared_context_refs(message, delivery, tasks),
+        "pending_action": contact_pending_action(delivery, tasks),
+        "current_stage": delivery.get("current_stage", "agent.wait"),
+        "policy_refs": contact_policy_refs(message, delivery, relationship, tasks),
+        "audit_event_refs": contact_audit_refs(delivery, thread),
+        "created_at": delivery.get("updated_at") or delivery.get("created_at"),
+    }
+    return response(200, {"explanation": clean_item(explanation)})
+
+
+def contact_tasks_for_message(thread_id: str, message_id: str) -> list[dict[str, Any]]:
+    if tasks_table is None:
+        return []
+    result = tasks_table.query(
+        IndexName="thread-created-at-index",
+        KeyConditionExpression=Key("thread_id").eq(thread_id),
+        ScanIndexForward=True,
+        Limit=100,
+    )
+    return [task for task in result.get("Items", []) if task.get("request_message_id") == message_id]
+
+
+def contact_reason(
+    message: dict[str, Any],
+    delivery: dict[str, Any],
+    requester: dict[str, Any],
+    recipient: dict[str, Any],
+) -> str:
+    intent = str(message.get("intent") or "message").replace("_", " ")
+    route_entries = [
+        entry
+        for entry in delivery.get("workflow_trace", [])
+        if entry.get("hook") == "route.resolve"
+    ]
+    if message.get("intent") == "task_request":
+        return f"{requester['handle']} requested delegated task work from {recipient['handle']}."
+    if message.get("intent") == "reply":
+        return f"{requester['handle']} replied to {recipient['handle']} in this thread."
+    if route_entries:
+        route_labels = ", ".join(str(entry.get("note") or entry.get("action")) for entry in route_entries)
+        return f"{requester['handle']} sent a {intent}; routing delivered it to {recipient['handle']} via {route_labels}."
+    return f"{requester['handle']} sent a {intent} to {recipient['handle']}."
+
+
+def contact_allowed_reason(
+    message: dict[str, Any],
+    delivery: dict[str, Any],
+    relationship: str,
+) -> str:
+    status = str(delivery.get("status") or "delivered")
+    reasons = [
+        f"message safety status is {message.get('safety_status', 'unknown')}",
+        f"relationship is {relationship}",
+    ]
+    if status == "needs_review":
+        reasons.append("delivery is held for human review")
+    elif status == "pending_action" and delivery.get("action_request"):
+        action_request = delivery["action_request"]
+        reasons.append(
+            "requested action requires approval"
+            if action_request.get("requires_approval", True)
+            else "requested action is preapproved"
+        )
+    else:
+        reasons.append(f"delivery state is {status}")
+    return f"Seagull allowed the contact because {'; '.join(reasons)}."
+
+
+def contact_shared_context_summary(
+    message: dict[str, Any],
+    delivery: dict[str, Any],
+    summary: dict[str, Any] | None,
+) -> str:
+    if summary and summary.get("summary_text"):
+        return truncate_contact_text(str(summary["summary_text"]))
+    content = delivery.get("current_content_inline") or message.get("content_inline")
+    if isinstance(content, str) and content:
+        return truncate_contact_text(content)
+    content_ref = delivery.get("current_content_ref") or message.get("content_ref")
+    if isinstance(content_ref, str) and content_ref:
+        return f"Context was shared by reference: {content_ref}."
+
+    refs = delivery.get("refs") or message.get("refs") or []
+    labels = [
+        ref.get("remember_as") or ref.get("find") or ref.get("type")
+        for ref in refs
+        if isinstance(ref, dict)
+    ]
+    if labels:
+        return truncate_contact_text(f"Context was shared as refs: {', '.join(labels)}.")
+    return "No inline context was shared."
+
+
+def contact_shared_context_refs(
+    message: dict[str, Any],
+    delivery: dict[str, Any],
+    tasks: list[dict[str, Any]],
+) -> list[str]:
+    values = [message.get("content_ref"), delivery.get("current_content_ref")]
+    for ref in [*message.get("refs", []), *delivery.get("refs", [])]:
+        if isinstance(ref, dict):
+            values.append(ref.get("url"))
+    for task in tasks:
+        values.extend(task.get("context_refs", []))
+        values.extend([task.get("context_pack_ref"), task.get("input_ref"), task.get("result_ref")])
+        values.extend(task.get("artifact_refs", []))
+    return unique_contact_strings(values)
+
+
+def contact_pending_action(delivery: dict[str, Any], tasks: list[dict[str, Any]]) -> str | None:
+    action_request = delivery.get("action_request")
+    if isinstance(action_request, dict):
+        approval = "requires approval" if action_request.get("requires_approval", True) else "preapproved"
+        target = f" for {action_request['target']}" if action_request.get("target") else ""
+        return f"{action_request.get('type')}{target} ({approval})"
+    if delivery.get("status") == "needs_review":
+        return "human review"
+    for task in tasks:
+        state = task.get("state")
+        if state not in {"completed", "refused", "failed"}:
+            return f"task {task.get('task_id')} is {state}"
+    if delivery.get("status") == "pending_action":
+        return str(delivery.get("current_stage") or "action.before")
+    return None
+
+
+def contact_policy_refs(
+    message: dict[str, Any],
+    delivery: dict[str, Any],
+    relationship: str,
+    tasks: list[dict[str, Any]],
+) -> list[str]:
+    values = [
+        f"message_safety:{message.get('safety_status', 'unknown')}",
+        f"relationship:{relationship}",
+    ]
+    if delivery.get("status") == "needs_review":
+        values.append("delivery_gate:human_review")
+    action_request = delivery.get("action_request")
+    if isinstance(action_request, dict):
+        approval = str(bool(action_request.get("requires_approval", True))).lower()
+        values.append(f"action_approval_required:{approval}")
+    for task in tasks:
+        if task.get("policy_decision_id"):
+            values.append(f"policy_decision:{task['policy_decision_id']}")
+    return unique_contact_strings(values)
+
+
+def contact_audit_refs(delivery: dict[str, Any], thread: dict[str, Any]) -> list[str]:
+    values = [
+        f"delivery:{delivery['delivery_id']}:{delivery.get('status', 'delivered')}",
+        f"message:{delivery['message_id']}",
+        f"thread:{thread['thread_id']}:message_count:{thread.get('message_count', 0)}",
+    ]
+    values.extend(
+        f"workflow_trace:{index}:{entry.get('hook')}:{entry.get('action')}"
+        for index, entry in enumerate(delivery.get("workflow_trace", []), start=1)
+        if isinstance(entry, dict)
+    )
+    action_request = delivery.get("action_request")
+    if isinstance(action_request, dict):
+        values.append(
+            f"action_request:{action_request.get('action_request_id')}:{action_request.get('status', 'pending')}"
+        )
+    return unique_contact_strings(values)
+
+
+def truncate_contact_text(value: str) -> str:
+    if len(value) <= CONTACT_EXPLANATION_SUMMARY_CHARS:
+        return value
+    return f"{value[:CONTACT_EXPLANATION_SUMMARY_CHARS].rstrip()}..."
+
+
+def unique_contact_strings(values: list[Any]) -> list[str]:
+    normalized = []
+    seen = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        stripped = value.strip()
+        if not stripped or stripped in seen:
+            continue
+        normalized.append(stripped)
+        seen.add(stripped)
+    return normalized
 
 
 def send_result(message_id: str, *, idempotent: bool) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from message_hub.domain.models import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    ContactExplanation,
     ContextBudget,
     ContextPack,
     ContextPayloadRef,
@@ -84,6 +85,8 @@ DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
 MAX_ENVELOPE_INLINE_CHARS = 4000
+DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
+CONTACT_EXPLANATION_SUMMARY_CHARS = 280
 PAYLOAD_RETENTION_READY = "ready"
 PAYLOAD_RETENTION_EXPIRED = "expired"
 PAYLOAD_RETENTION_COMPACTED = "compacted"
@@ -513,6 +516,45 @@ class MessageHubService:
             thread=thread,
             summary=self._repository.get_latest_thread_summary(thread_id),
             recent_messages=self._repository.list_thread_messages(thread_id, limit=recent_limit),
+        )
+
+    def explain_contact(self, delivery_id: str) -> ContactExplanation:
+        delivery = self._require_delivery(delivery_id)
+        message = self._require_message(delivery.message_id)
+        thread = self._repository.get_thread(delivery.thread_id)
+        if thread is None:
+            raise NotFoundError(f"thread not found: {delivery.thread_id}")
+
+        requester = self._require_agent(delivery.sender_agent_id)
+        recipient = self._require_agent(delivery.recipient_agent_id)
+        relationship = DEFAULT_CONTACT_RELATIONSHIP
+        summary = self._repository.get_latest_thread_summary(delivery.thread_id)
+        tasks = tuple(
+            task
+            for task in self._repository.list_tasks_by_thread(delivery.thread_id, limit=100)
+            if task.request_message_id == message.message_id
+        )
+
+        return ContactExplanation(
+            explanation_id=f"contact_explanation_{delivery.delivery_id}",
+            delivery_id=delivery.delivery_id,
+            message_id=message.message_id,
+            thread_id=delivery.thread_id,
+            requester_agent_id=requester.agent_id,
+            requester_handle=requester.handle,
+            recipient_agent_id=recipient.agent_id,
+            recipient_handle=recipient.handle,
+            answering_asset_handle=recipient.handle,
+            relationship=relationship,
+            reason=contact_reason(message, delivery, requester, recipient),
+            allowed_reason=contact_allowed_reason(message, delivery, relationship),
+            shared_context_summary=contact_shared_context_summary(message, delivery, summary),
+            shared_context_refs=contact_shared_context_refs(message, delivery, tasks),
+            pending_action=contact_pending_action(delivery, tasks),
+            current_stage=delivery.current_stage,
+            policy_refs=contact_policy_refs(message, delivery, relationship, tasks),
+            audit_event_refs=contact_audit_refs(delivery, thread),
+            created_at=delivery.updated_at,
         )
 
     def get_context_pack(
@@ -1378,6 +1420,12 @@ class MessageHubService:
             raise NotFoundError(f"agent not found: {agent_id}")
         return agent
 
+    def _require_message(self, message_id: str) -> Message:
+        message = self._repository.get_message(message_id)
+        if message is None:
+            raise NotFoundError(f"message not found: {message_id}")
+        return message
+
     def _require_delivery(self, delivery_id: str) -> Delivery:
         delivery = self._repository.get_delivery(delivery_id)
         if delivery is None:
@@ -1873,6 +1921,162 @@ def normalize_task_state(state: str) -> TaskState:
 
 def task_ref(task_id: str, label: str) -> MessageRef:
     return MessageRef(type="task", url=f"seagull://tasks/{task_id}", remember_as=label)
+
+
+def contact_reason(
+    message: Message,
+    delivery: Delivery,
+    requester: Agent,
+    recipient: Agent,
+) -> str:
+    intent = message.intent.replace("_", " ")
+    route_entries = tuple(entry for entry in delivery.workflow_trace if entry.hook == "route.resolve")
+    if message.intent == "task_request":
+        return f"{requester.handle} requested delegated task work from {recipient.handle}."
+    if message.intent == "reply":
+        return f"{requester.handle} replied to {recipient.handle} in this thread."
+    if route_entries:
+        route_labels = ", ".join(entry.note or entry.action for entry in route_entries)
+        return f"{requester.handle} sent a {intent}; routing delivered it to {recipient.handle} via {route_labels}."
+    return f"{requester.handle} sent a {intent} to {recipient.handle}."
+
+
+def contact_allowed_reason(
+    message: Message,
+    delivery: Delivery,
+    relationship: str,
+) -> str:
+    reasons = [
+        f"message safety status is {message.safety_status}",
+        f"relationship is {relationship}",
+    ]
+    if delivery.status == DeliveryStatus.NEEDS_REVIEW:
+        reasons.append("delivery is held for human review")
+    elif delivery.status == DeliveryStatus.PENDING_ACTION and delivery.action_request is not None:
+        reasons.append(
+            "requested action requires approval"
+            if delivery.action_request.requires_approval
+            else "requested action is preapproved"
+        )
+    else:
+        reasons.append(f"delivery state is {delivery.status.value}")
+    return f"Seagull allowed the contact because {'; '.join(reasons)}."
+
+
+def contact_shared_context_summary(
+    message: Message,
+    delivery: Delivery,
+    summary: ThreadSummary | None,
+) -> str:
+    if summary is not None and summary.summary_text:
+        return truncate_explanation_text(summary.summary_text)
+    content = delivery.current_content_inline or message.content_inline
+    if content:
+        return truncate_explanation_text(content)
+    content_ref = delivery.current_content_ref or message.content_ref
+    if content_ref:
+        return f"Context was shared by reference: {content_ref}."
+
+    refs = delivery.refs or message.refs
+    labels = tuple(ref.remember_as or ref.find or ref.type for ref in refs)
+    if labels:
+        return truncate_explanation_text(f"Context was shared as refs: {', '.join(labels)}.")
+    return "No inline context was shared."
+
+
+def contact_shared_context_refs(
+    message: Message,
+    delivery: Delivery,
+    tasks: tuple[TaskRecord, ...],
+) -> tuple[str, ...]:
+    values: list[str | None] = [
+        message.content_ref,
+        delivery.current_content_ref,
+    ]
+    for ref in (*message.refs, *delivery.refs):
+        values.append(ref.url)
+    for task in tasks:
+        values.extend(task.context_refs)
+        values.extend(
+            (
+                task.context_pack_ref,
+                task.input_ref,
+                task.result_ref,
+            )
+        )
+        values.extend(task.artifact_refs)
+    return unique_strings(values)
+
+
+def contact_pending_action(delivery: Delivery, tasks: tuple[TaskRecord, ...]) -> str | None:
+    if delivery.action_request is not None:
+        approval = "requires approval" if delivery.action_request.requires_approval else "preapproved"
+        target = f" for {delivery.action_request.target}" if delivery.action_request.target else ""
+        return f"{delivery.action_request.type}{target} ({approval})"
+    if delivery.status == DeliveryStatus.NEEDS_REVIEW:
+        return "human review"
+    for task in tasks:
+        if task.state not in {TaskState.COMPLETED, TaskState.REFUSED, TaskState.FAILED}:
+            return f"task {task.task_id} is {task.state.value}"
+    if delivery.status == DeliveryStatus.PENDING_ACTION:
+        return delivery.current_stage
+    return None
+
+
+def contact_policy_refs(
+    message: Message,
+    delivery: Delivery,
+    relationship: str,
+    tasks: tuple[TaskRecord, ...],
+) -> tuple[str, ...]:
+    values: list[str | None] = [
+        f"message_safety:{message.safety_status}",
+        f"relationship:{relationship}",
+    ]
+    if delivery.status == DeliveryStatus.NEEDS_REVIEW:
+        values.append("delivery_gate:human_review")
+    if delivery.action_request is not None:
+        values.append(f"action_approval_required:{str(delivery.action_request.requires_approval).lower()}")
+    for task in tasks:
+        if task.policy_decision_id is not None:
+            values.append(f"policy_decision:{task.policy_decision_id}")
+    return unique_strings(values)
+
+
+def contact_audit_refs(delivery: Delivery, thread: ThreadRecord) -> tuple[str, ...]:
+    values: list[str | None] = [
+        f"delivery:{delivery.delivery_id}:{delivery.status.value}",
+        f"message:{delivery.message_id}",
+        f"thread:{thread.thread_id}:message_count:{thread.message_count}",
+    ]
+    values.extend(
+        f"workflow_trace:{index}:{entry.hook}:{entry.action}"
+        for index, entry in enumerate(delivery.workflow_trace, start=1)
+    )
+    if delivery.action_request is not None:
+        values.append(f"action_request:{delivery.action_request.action_request_id}:{delivery.action_request.status}")
+    return unique_strings(values)
+
+
+def truncate_explanation_text(value: str) -> str:
+    if len(value) <= CONTACT_EXPLANATION_SUMMARY_CHARS:
+        return value
+    summary = value[:CONTACT_EXPLANATION_SUMMARY_CHARS].rstrip()
+    return f"{summary}..."
+
+
+def unique_strings(values: Sequence[str | None]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        stripped = value.strip()
+        if not stripped or stripped in seen:
+            continue
+        normalized.append(stripped)
+        seen.add(stripped)
+    return tuple(normalized)
 
 
 def require_bounded_int(value: int, field_name: str, *, minimum: int, maximum: int) -> int:

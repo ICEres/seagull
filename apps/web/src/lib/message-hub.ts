@@ -158,6 +158,28 @@ export type DecisionResult = {
   action_request: ActionRequest | null;
 };
 
+export type ContactExplanation = {
+  explanation_id: string;
+  delivery_id: string;
+  message_id: string;
+  thread_id: string;
+  requester_agent_id: string;
+  requester_handle: string;
+  recipient_agent_id: string;
+  recipient_handle: string;
+  answering_asset_handle: string;
+  relationship: string;
+  reason: string;
+  allowed_reason: string;
+  shared_context_summary: string;
+  shared_context_refs: string[];
+  pending_action: string | null;
+  current_stage: string;
+  policy_refs: string[];
+  audit_event_refs: string[];
+  created_at: string;
+};
+
 export class MessageHubError extends Error {
   readonly status: number;
   readonly code: string;
@@ -275,6 +297,10 @@ export class MessageHubClient {
       method: "POST",
       body,
     });
+  }
+
+  explainContact(deliveryId: string): Promise<{ explanation: ContactExplanation }> {
+    return this.request(`/deliveries/${encodeURIComponent(deliveryId)}/contact-explanation`);
   }
 
   private async request<T>(path: string, init: RequestInitJson = {}): Promise<T> {

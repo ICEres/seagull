@@ -71,7 +71,7 @@ class PayloadRecord:
 @dataclass(frozen=True, slots=True)
 class StoredPayload:
     record: PayloadRecord
-    compressed_content: bytes
+    compressed_content: bytes | None
 
 
 @dataclass(frozen=True, slots=True)

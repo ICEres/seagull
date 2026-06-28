@@ -39,11 +39,17 @@ class MessageHubRepository(Protocol):
     def list_messages_by_sender(self, sender_agent_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         """Return messages created by an agent in newest-first order."""
 
+    def list_messages_by_content_ref(self, content_ref: str) -> tuple[Message, ...]:
+        """Return messages that reference a payload by content_ref."""
+
     def put_payload(self, payload: StoredPayload) -> None:
         """Persist a compressed payload blob and metadata."""
 
     def get_payload(self, content_ref: str) -> StoredPayload | None:
         """Return a compressed payload by content reference."""
+
+    def update_payload(self, payload: StoredPayload) -> None:
+        """Replace a payload blob and metadata."""
 
     def put_thread(self, thread: ThreadRecord) -> None:
         """Create or replace thread metadata."""

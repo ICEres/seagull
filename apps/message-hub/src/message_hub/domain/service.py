@@ -66,6 +66,14 @@ class ForbiddenDeliveryError(MessageHubError):
     """Raised when an agent tries to mutate another agent's delivery."""
 
 
+class ForbiddenPayloadError(MessageHubError):
+    """Raised when a requester cannot fetch a payload."""
+
+
+class PayloadUnavailableError(MessageHubError):
+    """Raised when payload metadata exists but content bytes are unavailable."""
+
+
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
 DeliveryEventPublisher = Callable[[dict[str, Any]], None]
@@ -73,6 +81,16 @@ DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
 MAX_ENVELOPE_INLINE_CHARS = 4000
+PAYLOAD_RETENTION_READY = "ready"
+PAYLOAD_RETENTION_EXPIRED = "expired"
+PAYLOAD_RETENTION_COMPACTED = "compacted"
+PAYLOAD_RETENTION_DELETED = "deleted"
+PAYLOAD_RETENTION_STATES = {
+    PAYLOAD_RETENTION_READY,
+    PAYLOAD_RETENTION_EXPIRED,
+    PAYLOAD_RETENTION_COMPACTED,
+    PAYLOAD_RETENTION_DELETED,
+}
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -202,6 +220,7 @@ class MessageHubService:
         content_bytes = content.encode("utf-8") if isinstance(content, str) else bytes(content)
         normalized_media_type = normalize_required(media_type, "media_type")
         normalized_access_scope = normalize_payload_access_scope(access_scope)
+        normalized_ttl_expires_at = normalize_payload_ttl_expires_at(ttl_expires_at)
         compressed_content = gzip.compress(content_bytes, compresslevel=6, mtime=0)
         content_ref = f"payload://{self._new_id('payload')}"
         now = self._clock()
@@ -213,8 +232,8 @@ class MessageHubService:
             compression="gzip",
             compressed_byte_length=len(compressed_content),
             compressed_hash=payload_hash(compressed_content),
-            ttl_expires_at=ttl_expires_at,
-            retention_state="ready",
+            ttl_expires_at=normalized_ttl_expires_at,
+            retention_state=PAYLOAD_RETENTION_READY,
             access_scope=normalized_access_scope,
             storage_provider="local_node",
             storage_ref=content_ref,
@@ -229,10 +248,40 @@ class MessageHubService:
         payload = self._repository.get_payload(normalized_content_ref)
         if payload is None:
             raise NotFoundError(f"payload not found: {normalized_content_ref}")
-        return payload
+        return self._refresh_payload_retention(payload)
 
-    def read_payload_content(self, content_ref: str) -> tuple[PayloadRecord, bytes]:
+    def update_payload_retention(self, content_ref: str, *, retention_state: str) -> PayloadRecord:
+        normalized_retention_state = normalize_payload_retention_state(retention_state)
         payload = self.get_payload(content_ref)
+        if normalized_retention_state == PAYLOAD_RETENTION_READY and payload.compressed_content is None:
+            raise InvalidMessageError("cannot restore ready payload state without retained content")
+
+        retained_content = (
+            payload.compressed_content
+            if normalized_retention_state == PAYLOAD_RETENTION_READY
+            else None
+        )
+        updated = StoredPayload(
+            record=replace(payload.record, retention_state=normalized_retention_state),
+            compressed_content=retained_content,
+        )
+        self._repository.update_payload(updated)
+        return updated.record
+
+    def read_payload_content(
+        self,
+        content_ref: str,
+        *,
+        requester_handle: str | None = None,
+    ) -> tuple[PayloadRecord, bytes]:
+        payload = self.get_payload(content_ref)
+        self._require_payload_fetch_authorized(payload.record, requester_handle)
+        if payload.record.retention_state != PAYLOAD_RETENTION_READY:
+            raise PayloadUnavailableError(
+                f"payload content is {payload.record.retention_state}: {payload.record.content_ref}"
+            )
+        if payload.compressed_content is None:
+            raise PayloadUnavailableError(f"payload content is unavailable: {payload.record.content_ref}")
         return payload.record, gzip.decompress(payload.compressed_content)
 
     def send_message(
@@ -1283,6 +1332,59 @@ class MessageHubService:
                 )
             )
 
+    def _refresh_payload_retention(self, payload: StoredPayload) -> StoredPayload:
+        record = payload.record
+        if record.retention_state != PAYLOAD_RETENTION_READY:
+            return payload
+        if record.ttl_expires_at is None or record.ttl_expires_at > self._clock():
+            return payload
+
+        updated = StoredPayload(
+            record=replace(record, retention_state=PAYLOAD_RETENTION_EXPIRED),
+            compressed_content=None,
+        )
+        self._repository.update_payload(updated)
+        return updated
+
+    def _require_payload_fetch_authorized(
+        self,
+        payload: PayloadRecord,
+        requester_handle: str | None,
+    ) -> None:
+        if payload.access_scope == "public":
+            return
+        if requester_handle is None:
+            raise ForbiddenPayloadError(
+                f"requester_handle is required for {payload.access_scope} payload access"
+            )
+
+        normalized_requester = normalize_handle(requester_handle)
+        requester = self._repository.get_agent_by_handle(normalized_requester)
+        if requester is None:
+            raise ForbiddenPayloadError(f"agent cannot fetch payload: {normalized_requester}")
+        if self._payload_fetch_is_allowed_for_agent(payload, requester):
+            return
+
+        raise ForbiddenPayloadError(f"agent cannot fetch payload: {normalized_requester}")
+
+    def _payload_fetch_is_allowed_for_agent(self, payload: PayloadRecord, agent: Agent) -> bool:
+        messages = self._repository.list_messages_by_content_ref(payload.content_ref)
+        if not messages:
+            return False
+
+        if payload.access_scope == "owner":
+            return any(message.sender_agent_id == agent.agent_id for message in messages)
+        if payload.access_scope == "recipients":
+            return any(agent.agent_id in message.recipient_agent_ids for message in messages)
+        if payload.access_scope == "thread":
+            for message in messages:
+                thread = self._repository.get_thread(message.thread_id)
+                if thread is not None and agent.agent_id in thread.participants:
+                    return True
+            return False
+
+        return False
+
     def _new_id(self, prefix: str) -> str:
         return self._id_factory(prefix)
 
@@ -1331,6 +1433,21 @@ def normalize_payload_access_scope(access_scope: str) -> str:
     if normalized not in {"owner", "thread", "recipients", "public"}:
         raise InvalidMessageError("access_scope must be owner, thread, recipients, or public")
     return normalized
+
+
+def normalize_payload_retention_state(retention_state: str) -> str:
+    normalized = normalize_required(retention_state, "retention_state").lower()
+    if normalized not in PAYLOAD_RETENTION_STATES:
+        raise InvalidMessageError("retention_state must be ready, expired, compacted, or deleted")
+    return normalized
+
+
+def normalize_payload_ttl_expires_at(ttl_expires_at: datetime | None) -> datetime | None:
+    if ttl_expires_at is None:
+        return None
+    if ttl_expires_at.tzinfo is None or ttl_expires_at.utcoffset() is None:
+        raise InvalidMessageError("ttl_expires_at must include a timezone")
+    return ttl_expires_at
 
 
 def payload_hash(content: bytes) -> str:

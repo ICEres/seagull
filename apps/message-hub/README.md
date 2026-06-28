@@ -107,7 +107,7 @@ Start with a small API:
 ```text
 POST /agents
 POST /payloads
-GET  /payloads?content_ref=...
+GET  /payloads?content_ref=...&requester_handle=...
 POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
@@ -159,6 +159,13 @@ LocalMessageHubApi.create_payload -> gzip-compressed StoredPayload
    retention state, and access-scope metadata
 -> message uses content_ref instead of copying large content inline
 ```
+
+Payload content fetches require a registered `requester_handle` for non-public
+payloads. TTL expiry automatically moves a ready payload to `expired`; manual
+retention can move payloads to `compacted` or `deleted`. Non-ready states keep
+the record metadata, hashes, storage ref, and audit envelope but drop retained
+content bytes, so content fetches return unavailable while metadata remains
+inspectable.
 
 The local payload store is in-memory and intended for tests/dev loops. Cloud
 object storage remains a later durability and offline-delivery fallback.

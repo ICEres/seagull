@@ -173,7 +173,10 @@ class LocalMessageLoopTest(TestCase):
             }
         )
         inbox = self.api.read_inbox("@reviewer:seagull.local")
-        fetched = self.api.read_payload(payload["content_ref"])
+        fetched = self.api.read_payload(
+            payload["content_ref"],
+            requester_handle="@reviewer:seagull.local",
+        )
         context_pack = self.api.read_context_pack(
             post["thread_id"],
             requester_handle="@reviewer:seagull.local",
@@ -193,6 +196,48 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual(large_content, fetched["content"])
         self.assertEqual(large_content.encode("utf-8"), fetched["content_bytes"])
         self.assertEqual([payload["content_ref"]], [ref["content_ref"] for ref in context_pack["payload_refs"]])
+
+    def test_local_api_expired_payload_returns_gone_and_keeps_metadata(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        payload = self.api.create_payload(
+            {
+                "content": "short lived payload",
+                "media_type": "text/plain",
+                "ttl_expires_at": "2026-06-13T00:00:00+00:00",
+            }
+        )
+        post = self.api.create_message(
+            {
+                "sender_handle": "@researcher:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content_ref": payload["content_ref"],
+            }
+        )
+
+        with self.assertRaises(ApiError) as context:
+            self.api.read_payload(
+                payload["content_ref"],
+                requester_handle="@reviewer:seagull.local",
+            )
+
+        metadata = self.api.read_payload_metadata(payload["content_ref"])
+        inbox = self.api.read_inbox("@reviewer:seagull.local")
+        context_pack = self.api.read_context_pack(
+            post["thread_id"],
+            requester_handle="@reviewer:seagull.local",
+        )
+        self.assertEqual(410, context.exception.status_code)
+        self.assertEqual("payload_unavailable", context.exception.error)
+        self.assertEqual("expired", metadata["payload"]["retention_state"])
+        self.assertEqual(payload["payload"]["hash"], metadata["payload"]["hash"])
+        self.assertEqual(payload["payload"]["compressed_hash"], metadata["payload"]["compressed_hash"])
+        self.assertEqual(payload["payload"]["storage_ref"], metadata["payload"]["storage_ref"])
+        self.assertEqual(payload["content_ref"], post["message"]["content_ref"])
+        self.assertEqual(payload["content_ref"], inbox["items"][0]["current_message"]["content_ref"])
+        self.assertEqual([payload["content_ref"]], [ref["content_ref"] for ref in context_pack["payload_refs"]])
+        self.assertNotIn("content", metadata)
+        self.assertNotIn("content_bytes", metadata)
 
     def test_local_api_public_agent_profile_redacts_private_runtime_fields(self) -> None:
         result = self.api.register_agent(

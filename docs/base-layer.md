@@ -130,7 +130,7 @@ Core concepts:
 - Compression.
 - Original and compressed hash.
 - TTL.
-- Retention state.
+- Retention state: `ready`, `expired`, `compacted`, or `deleted`.
 - Access scope.
 - Optional fetch policy reference.
 - Optional chunk manifest.
@@ -143,7 +143,9 @@ should not be copied into message rows, inbox rows, queues, webhooks, or
 notifications. Payload references are a general transport and audit primitive.
 Messages should carry only the `content_ref`; fetch/storage APIs and audit
 records can resolve the manifest when they need hashes, compression metadata,
-chunks, retention state, or storage-provider details.
+chunks, retention state, or storage-provider details. Content fetches must
+respect TTL and access scope; non-ready payloads keep envelope, hash, manifest,
+thread, and audit metadata without retaining full payload bytes forever.
 
 ### Delivery State
 

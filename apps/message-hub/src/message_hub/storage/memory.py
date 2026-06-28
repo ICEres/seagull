@@ -29,6 +29,7 @@ class InMemoryMessageHubRepository:
         self._messages_by_id: dict[str, Message] = {}
         self._message_ids_by_thread: dict[str, list[str]] = defaultdict(list)
         self._message_ids_by_sender: dict[str, list[str]] = defaultdict(list)
+        self._message_ids_by_content_ref: dict[str, list[str]] = defaultdict(list)
         self._payloads_by_ref: dict[str, StoredPayload] = {}
         self._threads_by_id: dict[str, ThreadRecord] = {}
         self._deliveries_by_id: dict[str, Delivery] = {}
@@ -75,6 +76,8 @@ class InMemoryMessageHubRepository:
             self._messages_by_id[message.message_id] = message
             self._message_ids_by_thread[message.thread_id].append(message.message_id)
             self._message_ids_by_sender[message.sender_agent_id].append(message.message_id)
+            if message.content_ref is not None:
+                self._message_ids_by_content_ref[message.content_ref].append(message.message_id)
 
     def get_message(self, message_id: str) -> Message | None:
         with self._lock:
@@ -104,6 +107,16 @@ class InMemoryMessageHubRepository:
             messages = messages[:limit]
         return tuple(messages)
 
+    def list_messages_by_content_ref(self, content_ref: str) -> tuple[Message, ...]:
+        with self._lock:
+            messages = [
+                self._messages_by_id[message_id]
+                for message_id in self._message_ids_by_content_ref.get(content_ref, [])
+            ]
+
+        messages.sort(key=lambda message: (message.created_at, message.message_id))
+        return tuple(messages)
+
     def put_payload(self, payload: StoredPayload) -> None:
         with self._lock:
             content_ref = payload.record.content_ref
@@ -114,6 +127,13 @@ class InMemoryMessageHubRepository:
     def get_payload(self, content_ref: str) -> StoredPayload | None:
         with self._lock:
             return self._payloads_by_ref.get(content_ref)
+
+    def update_payload(self, payload: StoredPayload) -> None:
+        with self._lock:
+            content_ref = payload.record.content_ref
+            if content_ref not in self._payloads_by_ref:
+                raise ValueError(f"payload does not exist: {content_ref}")
+            self._payloads_by_ref[content_ref] = payload
 
     def put_thread(self, thread: ThreadRecord) -> None:
         with self._lock:

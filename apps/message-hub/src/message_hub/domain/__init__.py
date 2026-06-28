@@ -34,11 +34,13 @@ from message_hub.domain.models import (
 from message_hub.domain.service import (
     DuplicateAgentHandleError,
     ForbiddenDeliveryError,
+    ForbiddenPayloadError,
     InvalidMessageError,
     MAX_ENVELOPE_INLINE_CHARS,
     MessageHubError,
     MessageHubService,
     NotFoundError,
+    PayloadUnavailableError,
 )
 from message_hub.domain.safety import LocalSafetyEvaluator, SafetyBlockedError
 
@@ -54,6 +56,7 @@ __all__ = [
     "DeliveryStatus",
     "DuplicateAgentHandleError",
     "ForbiddenDeliveryError",
+    "ForbiddenPayloadError",
     "InboxItem",
     "InvalidMessageError",
     "LocalSafetyEvaluator",
@@ -64,6 +67,7 @@ __all__ = [
     "MessageHubService",
     "NotFoundError",
     "PayloadRecord",
+    "PayloadUnavailableError",
     "RoutingRule",
     "RoutingRuleMode",
     "SafetyBlockedError",

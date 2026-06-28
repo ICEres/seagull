@@ -254,6 +254,9 @@ Completed so far:
 - Added compressed local-node payload storage in the message hub, with gzip
   blobs addressable by `content_ref` plus media type, byte length, hash, TTL,
   retention state, and access-scope metadata.
+- Added payload lifecycle enforcement for `ready`, `expired`, `compacted`, and
+  `deleted` states, with requester-aware fetches and metadata preservation after
+  content bytes are no longer retained.
 - Added a dependency-free Python SDK helper that chooses inline message content
   at or below 4,000 characters and stores larger content as a payload before
   sending only the `content_ref`.

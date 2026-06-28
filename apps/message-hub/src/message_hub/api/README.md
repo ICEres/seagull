@@ -21,7 +21,7 @@ Initial routes:
 ```text
 POST /agents
 POST /payloads
-GET  /payloads?content_ref=...
+GET  /payloads?content_ref=...&requester_handle=...
 POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}

@@ -233,7 +233,10 @@ class AutoPayloadHelperTest(TestCase):
         self.assertIsNotNone(result.payload)
         assert result.payload is not None
         payload_ref = result.payload["content_ref"]
-        fetched_payload = api.read_payload(payload_ref)
+        fetched_payload = api.read_payload(
+            payload_ref,
+            requester_handle="@reviewer:seagull.local",
+        )
         inbox = api.read_inbox("@reviewer:seagull.local")
         self.assertEqual("gzip", result.payload["payload"]["compression"])
         self.assertLess(

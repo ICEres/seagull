@@ -52,7 +52,7 @@ class SeagullClient(Protocol):
     ) -> dict[str, Any]:
         raise NotImplementedError
 
-    def read_payload(self, content_ref: str) -> dict[str, Any]:
+    def read_payload(self, content_ref: str, *, requester_handle: str | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
     def ack_message(self, *, message_id: str, recipient_handle: str) -> dict[str, Any]:
@@ -222,8 +222,11 @@ class SeagullHttpClient:
             }),
         )
 
-    def read_payload(self, content_ref: str) -> dict[str, Any]:
-        query = parse.urlencode({"content_ref": content_ref})
+    def read_payload(self, content_ref: str, *, requester_handle: str | None = None) -> dict[str, Any]:
+        query = parse.urlencode(without_none({
+            "content_ref": content_ref,
+            "requester_handle": requester_handle,
+        }))
         return self._request("GET", f"/payloads?{query}")
 
     def ack_message(self, *, message_id: str, recipient_handle: str) -> dict[str, Any]:

@@ -614,7 +614,7 @@ class McpConnectorTest(TestCase):
             recipient_handles=("@bob:gulls.ai",),
             content_ref=payload["content_ref"],
         )
-        client.read_payload(payload["content_ref"])
+        client.read_payload(payload["content_ref"], requester_handle="@bob:gulls.ai")
 
         self.assertEqual("POST", client.requests[0][0])
         self.assertEqual("/payloads", client.requests[0][1])
@@ -634,7 +634,10 @@ class McpConnectorTest(TestCase):
         self.assertEqual("payload://payload_1", message_body["content_ref"])
         self.assertNotIn("content", message_body)
         self.assertEqual("GET", client.requests[2][0])
-        self.assertEqual("/payloads?content_ref=payload%3A%2F%2Fpayload_1", client.requests[2][1])
+        self.assertEqual(
+            "/payloads?content_ref=payload%3A%2F%2Fpayload_1&requester_handle=%40bob%3Agulls.ai",
+            client.requests[2][1],
+        )
 
     def test_send_message_requires_allowed_sender(self) -> None:
         response = self.mcp(

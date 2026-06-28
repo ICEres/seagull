@@ -14,12 +14,14 @@ from message_hub.domain import (
     Delivery,
     DuplicateAgentHandleError,
     ForbiddenDeliveryError,
+    ForbiddenPayloadError,
     InboxItem,
     InvalidMessageError,
     Message,
     MessageRef,
     MessageHubService,
     NotFoundError,
+    PayloadUnavailableError,
     PayloadRecord,
     RoutingRule,
     SafetyBlockedError,
@@ -96,13 +98,25 @@ class LocalMessageHubApi:
             "payload": payload_record_to_dict(payload.record),
         }
 
-    def read_payload(self, content_ref: str) -> dict[str, Any]:
+    def read_payload(
+        self,
+        content_ref: str,
+        *,
+        requester_handle: str | None = None,
+    ) -> dict[str, Any]:
         try:
-            record, content = self._service.read_payload_content(content_ref)
+            record, content = self._service.read_payload_content(
+                content_ref,
+                requester_handle=requester_handle,
+            )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenPayloadError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
+        except PayloadUnavailableError as exc:
+            raise ApiError(410, "payload_unavailable", str(exc)) from exc
 
         result: dict[str, Any] = {
             "content_ref": record.content_ref,
@@ -114,6 +128,37 @@ class LocalMessageHubApi:
         except UnicodeDecodeError:
             pass
         return result
+
+    def read_payload_metadata(self, content_ref: str) -> dict[str, Any]:
+        try:
+            payload = self._service.get_payload(content_ref)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "content_ref": payload.record.content_ref,
+            "payload": payload_record_to_dict(payload.record),
+        }
+
+    def update_payload_retention(self, content_ref: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            payload = self._service.update_payload_retention(
+                content_ref,
+                retention_state=required_string(body, "retention_state"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        except PayloadUnavailableError as exc:
+            raise ApiError(410, "payload_unavailable", str(exc)) from exc
+
+        return {
+            "content_ref": payload.content_ref,
+            "payload": payload_record_to_dict(payload),
+        }
 
     def register_agent(self, body: dict[str, Any]) -> dict[str, Any]:
         try:

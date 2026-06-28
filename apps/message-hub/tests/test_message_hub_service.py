@@ -9,11 +9,13 @@ from unittest import TestCase
 from message_hub.domain import (
     DeliveryStatus,
     ForbiddenDeliveryError,
+    ForbiddenPayloadError,
     InvalidMessageError,
     MAX_ENVELOPE_INLINE_CHARS,
     MessageHubService,
     MessageRef,
     NotFoundError,
+    PayloadUnavailableError,
     TaskState,
 )
 from message_hub.storage import InMemoryMessageHubRepository
@@ -81,7 +83,15 @@ class MessageHubServiceTest(TestCase):
             media_type="text/plain",
             access_scope="thread",
         )
-        record, fetched_content = self.service.read_payload_content(payload.record.content_ref)
+        self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+        record, fetched_content = self.service.read_payload_content(
+            payload.record.content_ref,
+            requester_handle="@reviewer:gulls.ai",
+        )
 
         self.assertEqual("payload://payload_1", payload.record.content_ref)
         self.assertEqual("text/plain", payload.record.media_type)
@@ -95,6 +105,7 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual("local_node", payload.record.storage_provider)
         self.assertEqual(payload.record.content_ref, payload.record.storage_ref)
         self.assertLess(payload.record.compressed_byte_length, payload.record.byte_length)
+        self.assertIsNotNone(payload.compressed_content)
         self.assertEqual(
             f"sha256:{hashlib.sha256(payload.compressed_content).hexdigest()}",
             payload.record.compressed_hash,
@@ -102,6 +113,121 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual(content, gzip.decompress(payload.compressed_content))
         self.assertEqual(payload.record, record)
         self.assertEqual(content, fetched_content)
+
+    def test_non_public_payload_fetch_requires_registered_requester(self) -> None:
+        payload = self.service.create_payload(
+            content="private payload",
+            media_type="text/plain",
+            access_scope="recipients",
+        )
+        self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+
+        with self.assertRaises(ForbiddenPayloadError):
+            self.service.read_payload_content(payload.record.content_ref)
+        with self.assertRaises(ForbiddenPayloadError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@unknown:gulls.ai",
+            )
+        with self.assertRaises(ForbiddenPayloadError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@map-reader:gulls.ai",
+            )
+
+        _, private_content = self.service.read_payload_content(
+            payload.record.content_ref,
+            requester_handle="@reviewer:gulls.ai",
+        )
+        self.assertEqual(b"private payload", private_content)
+
+        public_payload = self.service.create_payload(
+            content="public payload",
+            media_type="text/plain",
+            access_scope="public",
+        )
+        _, public_content = self.service.read_payload_content(public_payload.record.content_ref)
+        self.assertEqual(b"public payload", public_content)
+
+    def test_expired_payload_content_is_unavailable_but_metadata_remains(self) -> None:
+        content = b"payload with a short ttl"
+        expires_at = datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=1)
+        payload = self.service.create_payload(
+            content=content,
+            media_type="text/plain",
+            ttl_expires_at=expires_at,
+        )
+        self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+
+        with self.assertRaises(PayloadUnavailableError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@reviewer:gulls.ai",
+            )
+
+        stored = self.service.get_payload(payload.record.content_ref)
+        self.assertEqual("expired", stored.record.retention_state)
+        self.assertIsNone(stored.compressed_content)
+        self.assertEqual(payload.record.content_ref, stored.record.content_ref)
+        self.assertEqual(payload.record.media_type, stored.record.media_type)
+        self.assertEqual(payload.record.byte_length, stored.record.byte_length)
+        self.assertEqual(payload.record.hash, stored.record.hash)
+        self.assertEqual(payload.record.compressed_hash, stored.record.compressed_hash)
+        self.assertEqual(payload.record.ttl_expires_at, stored.record.ttl_expires_at)
+        self.assertEqual(payload.record.access_scope, stored.record.access_scope)
+        self.assertEqual(payload.record.storage_ref, stored.record.storage_ref)
+
+    def test_payload_ttl_requires_timezone(self) -> None:
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_payload(
+                content="payload",
+                media_type="text/plain",
+                ttl_expires_at=datetime(2026, 6, 12),
+            )
+
+    def test_payload_retention_can_compact_and_delete_without_losing_metadata(self) -> None:
+        payload = self.service.create_payload(
+            content=b"payload that can be compacted",
+            media_type="application/octet-stream",
+        )
+        self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+
+        compacted = self.service.update_payload_retention(
+            payload.record.content_ref,
+            retention_state="compacted",
+        )
+        stored = self.service.get_payload(payload.record.content_ref)
+        self.assertEqual("compacted", compacted.retention_state)
+        self.assertEqual(compacted, stored.record)
+        self.assertIsNone(stored.compressed_content)
+        self.assertEqual(payload.record.content_ref, stored.record.content_ref)
+        self.assertEqual(payload.record.hash, stored.record.hash)
+        self.assertEqual(payload.record.compressed_hash, stored.record.compressed_hash)
+        self.assertEqual(payload.record.storage_ref, stored.record.storage_ref)
+        with self.assertRaises(PayloadUnavailableError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@reviewer:gulls.ai",
+            )
+
+        deleted = self.service.update_payload_retention(
+            payload.record.content_ref,
+            retention_state="deleted",
+        )
+        self.assertEqual("deleted", deleted.retention_state)
+        self.assertEqual(payload.record.hash, deleted.hash)
 
     def test_context_pack_applies_budget_and_redacts_private_refs(self) -> None:
         result = self.service.send_message(

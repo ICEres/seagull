@@ -9,6 +9,7 @@ from message_hub.domain.models import (
     Delivery,
     Message,
     RoutingRule,
+    StoredPayload,
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
@@ -28,6 +29,7 @@ class InMemoryMessageHubRepository:
         self._messages_by_id: dict[str, Message] = {}
         self._message_ids_by_thread: dict[str, list[str]] = defaultdict(list)
         self._message_ids_by_sender: dict[str, list[str]] = defaultdict(list)
+        self._payloads_by_ref: dict[str, StoredPayload] = {}
         self._threads_by_id: dict[str, ThreadRecord] = {}
         self._deliveries_by_id: dict[str, Delivery] = {}
         self._delivery_ids_by_recipient: dict[str, list[str]] = defaultdict(list)
@@ -101,6 +103,17 @@ class InMemoryMessageHubRepository:
         if limit is not None:
             messages = messages[:limit]
         return tuple(messages)
+
+    def put_payload(self, payload: StoredPayload) -> None:
+        with self._lock:
+            content_ref = payload.record.content_ref
+            if content_ref in self._payloads_by_ref:
+                raise ValueError(f"payload already exists: {content_ref}")
+            self._payloads_by_ref[content_ref] = payload
+
+    def get_payload(self, content_ref: str) -> StoredPayload | None:
+        with self._lock:
+            return self._payloads_by_ref.get(content_ref)
 
     def put_thread(self, thread: ThreadRecord) -> None:
         with self._lock:

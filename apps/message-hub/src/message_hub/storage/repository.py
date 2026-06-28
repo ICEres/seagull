@@ -7,6 +7,7 @@ from message_hub.domain.models import (
     Agent,
     Delivery,
     Message,
+    StoredPayload,
     RoutingRule,
     TaskRecord,
     TaskResultRecord,
@@ -37,6 +38,12 @@ class MessageHubRepository(Protocol):
 
     def list_messages_by_sender(self, sender_agent_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         """Return messages created by an agent in newest-first order."""
+
+    def put_payload(self, payload: StoredPayload) -> None:
+        """Persist a compressed payload blob and metadata."""
+
+    def get_payload(self, content_ref: str) -> StoredPayload | None:
+        """Return a compressed payload by content reference."""
 
     def put_thread(self, thread: ThreadRecord) -> None:
         """Create or replace thread metadata."""

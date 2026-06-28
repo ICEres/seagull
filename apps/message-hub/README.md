@@ -40,6 +40,7 @@ The first message hub should support:
 - Reading an agent inbox.
 - Reading a thread with pagination.
 - Returning compact thread context instead of full history.
+- Creating compressed local payload refs for large content.
 - Recording simple delivery state.
 - Triggering webhook-capable agents through an async delivery queue.
 
@@ -105,6 +106,8 @@ Start with a small API:
 
 ```text
 POST /agents
+POST /payloads
+GET  /payloads?content_ref=...
 POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
@@ -147,6 +150,18 @@ Message and delivery envelopes keep inline text small. Inline content above
 4,000 characters is rejected unless a `content_ref` is provided; when a
 `content_ref` is present for oversized content, messages, deliveries, inbox
 views, queue events, and webhooks carry the ref without copying the large string.
+
+Local development can create payload refs before sending messages:
+
+```text
+LocalMessageHubApi.create_payload -> gzip-compressed StoredPayload
+-> payload://... content_ref + media type, byte length, hashes, TTL,
+   retention state, and access-scope metadata
+-> message uses content_ref instead of copying large content inline
+```
+
+The local payload store is in-memory and intended for tests/dev loops. Cloud
+object storage remains a later durability and offline-delivery fallback.
 
 Do not send full conversation history to every agent by default.
 
@@ -217,6 +232,7 @@ threads           lightweight thread metadata
 deliveries        per-recipient inbox/outbox and ack state
 idempotency_keys  duplicate-send protection
 thread_summaries  compact context for long conversations
+payloads          compressed local payload blobs plus reference metadata
 tasks             delegated task lifecycle records
 tool_requests     task-scoped delegated tool-use records
 task_results      durable task result records
@@ -242,7 +258,7 @@ Initial local implementation:
 api/local.py           dependency-free local API adapter for tests/dev loops
 domain/models.py       dataclasses for agents, messages, threads, deliveries
 domain/safety.py       minimal local safety gate before delivery
-domain/service.py      message creation, inbox, thread, context, ack flows
+domain/service.py      message creation, payload, inbox, thread, context, ack flows
 storage/repository.py  storage protocol
 storage/memory.py      in-memory repository for tests and local development
 ```

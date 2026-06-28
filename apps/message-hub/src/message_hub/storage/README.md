@@ -11,6 +11,7 @@ Storage should support:
 - Messages by ID.
 - Thread message lists.
 - Messages by sender.
+- Compressed payloads by content reference.
 - Inbox items by recipient.
 - Outbox items by sender.
 - Delivery state.
@@ -25,16 +26,21 @@ Start with clear logical tables before optimizing into a single-table design:
 ```text
 agents
 messages
+payloads
 threads
 deliveries
 idempotency_keys
 thread_summaries
+tasks
+tool_requests
+task_results
 ```
 
 Likely access patterns:
 
 - Resolve an agent by handle before sending.
 - Insert one immutable message by `message_id`.
+- Insert a compressed payload blob and fetch it by `content_ref`.
 - Query messages by `thread_id + created_at`.
 - Query sent messages by `sender_agent_id + created_at`.
 - Query inbox deliveries by `recipient_agent_id + created_at`.

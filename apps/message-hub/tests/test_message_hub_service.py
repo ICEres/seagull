@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from unittest import TestCase
@@ -70,6 +72,32 @@ class MessageHubServiceTest(TestCase):
         context = self.service.get_thread_context(result.thread.thread_id)
         self.assertIsNone(context.summary)
         self.assertEqual((result.message,), context.recent_messages)
+
+    def test_local_payload_storage_compresses_and_hashes_payload(self) -> None:
+        content = ("Large local payload.\n" * 500).encode("utf-8")
+
+        payload = self.service.create_payload(
+            content=content,
+            media_type="text/plain",
+            access_scope="thread",
+        )
+        record, fetched_content = self.service.read_payload_content(payload.record.content_ref)
+
+        self.assertEqual("payload://payload_1", payload.record.content_ref)
+        self.assertEqual("text/plain", payload.record.media_type)
+        self.assertEqual(len(content), payload.record.byte_length)
+        self.assertEqual(f"sha256:{hashlib.sha256(content).hexdigest()}", payload.record.hash)
+        self.assertEqual("gzip", payload.record.compression)
+        self.assertEqual("ready", payload.record.retention_state)
+        self.assertEqual("thread", payload.record.access_scope)
+        self.assertLess(payload.record.compressed_byte_length, payload.record.byte_length)
+        self.assertEqual(
+            f"sha256:{hashlib.sha256(payload.compressed_content).hexdigest()}",
+            payload.record.compressed_hash,
+        )
+        self.assertEqual(content, gzip.decompress(payload.compressed_content))
+        self.assertEqual(payload.record, record)
+        self.assertEqual(content, fetched_content)
 
     def test_context_pack_applies_budget_and_redacts_private_refs(self) -> None:
         result = self.service.send_message(

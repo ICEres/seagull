@@ -20,6 +20,8 @@ Initial routes:
 
 ```text
 POST /agents
+POST /payloads
+GET  /payloads?content_ref=...
 POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}

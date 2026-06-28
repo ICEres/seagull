@@ -251,13 +251,16 @@ Completed so far:
 - Enforced a small-envelope boundary for messages, deliveries, inbox rows,
   queue events, webhooks, task objectives, and task results. Oversized inline
   content requires a `content_ref` and is not copied into delivery surfaces.
+- Added compressed local-node payload storage in the message hub, with gzip
+  blobs addressable by `content_ref` plus media type, byte length, hash, TTL,
+  retention state, and access-scope metadata.
 
 Remaining:
 
 - Harden the protocol boundary between durable messages, task lifecycle records,
   optional stream events, and large payload references.
-- Wire `content_ref` and payload manifest types through APIs, SDK helpers, and
-  storage instead of only the shared protocol package.
+- Wire `content_ref` and payload manifest types through SDK helpers and future
+  HTTP/cloud storage adapters instead of only local APIs.
 - Wire scoped tool-grant records into policy and audit for narrow, explicit
   cross-agent MCP exceptions.
 - Keep token streaming out of the MVP. Store final results, artifacts, task
@@ -282,6 +285,8 @@ Exit state:
   `content_ref`.
 - The connector and MCP surfaces can expose context and artifacts as references
   instead of large inline tool responses.
+- The local message hub can create and fetch gzip-compressed payload records by
+  `content_ref`.
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.
@@ -303,7 +308,7 @@ Exit state:
   foundation before exposing personal agent assets to other agents.
 - Add SDK size detection, compression, `content_ref` creation, manifest hashes,
   fetch authorization, TTL, and retention state.
-- Support local-node payload storage first, with cloud object storage as an
+- Build on the local-node payload storage path, with cloud object storage as an
   optional durability/offline-delivery fallback.
 - Defer live token streaming. V1 should support small inline messages plus
   whole compressed payload references with TTL; resumable chunks and true

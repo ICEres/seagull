@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -19,9 +21,11 @@ from message_hub.domain.models import (
     InboxItem,
     Message,
     MessageRef,
+    PayloadRecord,
     RoutingRule,
     RoutingRuleMode,
     SendMessageResult,
+    StoredPayload,
     TaskRecord,
     TaskResultRecord,
     TaskState,
@@ -186,6 +190,48 @@ class MessageHubService:
         )
         self._repository.put_routing_rule(rule)
         return rule
+
+    def create_payload(
+        self,
+        *,
+        content: str | bytes,
+        media_type: str,
+        access_scope: str = "recipients",
+        ttl_expires_at: datetime | None = None,
+    ) -> StoredPayload:
+        content_bytes = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        normalized_media_type = normalize_required(media_type, "media_type")
+        normalized_access_scope = normalize_payload_access_scope(access_scope)
+        compressed_content = gzip.compress(content_bytes, compresslevel=6, mtime=0)
+        content_ref = f"payload://{self._new_id('payload')}"
+        now = self._clock()
+        record = PayloadRecord(
+            content_ref=content_ref,
+            media_type=normalized_media_type,
+            byte_length=len(content_bytes),
+            hash=payload_hash(content_bytes),
+            compression="gzip",
+            compressed_byte_length=len(compressed_content),
+            compressed_hash=payload_hash(compressed_content),
+            ttl_expires_at=ttl_expires_at,
+            retention_state="ready",
+            access_scope=normalized_access_scope,
+            created_at=now,
+        )
+        payload = StoredPayload(record=record, compressed_content=compressed_content)
+        self._repository.put_payload(payload)
+        return payload
+
+    def get_payload(self, content_ref: str) -> StoredPayload:
+        normalized_content_ref = normalize_required(content_ref, "content_ref")
+        payload = self._repository.get_payload(normalized_content_ref)
+        if payload is None:
+            raise NotFoundError(f"payload not found: {normalized_content_ref}")
+        return payload
+
+    def read_payload_content(self, content_ref: str) -> tuple[PayloadRecord, bytes]:
+        payload = self.get_payload(content_ref)
+        return payload.record, gzip.decompress(payload.compressed_content)
 
     def send_message(
         self,
@@ -1276,6 +1322,17 @@ def normalized_optional_string(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def normalize_payload_access_scope(access_scope: str) -> str:
+    normalized = normalize_required(access_scope, "access_scope").lower()
+    if normalized not in {"owner", "thread", "recipients", "public"}:
+        raise InvalidMessageError("access_scope must be owner, thread, recipients, or public")
+    return normalized
+
+
+def payload_hash(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
 def require_small_inline(value: str, field_name: str) -> None:

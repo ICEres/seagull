@@ -20,6 +20,7 @@ from message_hub.domain import (
     MessageRef,
     MessageHubService,
     NotFoundError,
+    PayloadRecord,
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
@@ -78,6 +79,41 @@ class LocalMessageHubApi:
 
     def health(self) -> dict[str, Any]:
         return {"ok": True, "app": "message-hub", "storage": "memory"}
+
+    def create_payload(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            payload = self._service.create_payload(
+                content=payload_content(body),
+                media_type=optional_string(body, "media_type") or "text/plain; charset=utf-8",
+                access_scope=optional_string(body, "access_scope") or "recipients",
+                ttl_expires_at=optional_datetime(body, "ttl_expires_at"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+
+        return {
+            "content_ref": payload.record.content_ref,
+            "payload": payload_record_to_dict(payload.record),
+        }
+
+    def read_payload(self, content_ref: str) -> dict[str, Any]:
+        try:
+            record, content = self._service.read_payload_content(content_ref)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        result: dict[str, Any] = {
+            "content_ref": record.content_ref,
+            "payload": payload_record_to_dict(record),
+            "content_bytes": content,
+        }
+        try:
+            result["content"] = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        return result
 
     def register_agent(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -420,6 +456,22 @@ def send_result_to_dict(result: SendMessageResult) -> dict[str, Any]:
         "deliveries": [delivery_to_dict(delivery) for delivery in result.deliveries],
         "message_id": result.message.message_id,
         "thread_id": result.thread.thread_id,
+    }
+
+
+def payload_record_to_dict(payload: PayloadRecord) -> dict[str, Any]:
+    return {
+        "content_ref": payload.content_ref,
+        "media_type": payload.media_type,
+        "byte_length": payload.byte_length,
+        "hash": payload.hash,
+        "compression": payload.compression,
+        "compressed_byte_length": payload.compressed_byte_length,
+        "compressed_hash": payload.compressed_hash,
+        "ttl_expires_at": datetime_to_string(payload.ttl_expires_at),
+        "retention_state": payload.retention_state,
+        "access_scope": payload.access_scope,
+        "created_at": datetime_to_string(payload.created_at),
     }
 
 
@@ -822,6 +874,30 @@ def refs_list(value: Any, field_name: str) -> tuple[MessageRef, ...]:
             )
         )
     return tuple(refs)
+
+
+def payload_content(body: dict[str, Any]) -> str | bytes:
+    value = body.get("content")
+    if value is None:
+        value = body.get("content_inline")
+    if value is None:
+        value = body.get("content_bytes")
+    if value is None:
+        raise ApiError(400, "bad_request", "payload content is required")
+    if not isinstance(value, (str, bytes)):
+        raise ApiError(400, "bad_request", "payload content must be a string or bytes")
+    return value
+
+
+def optional_datetime(body: dict[str, Any], field_name: str) -> datetime | None:
+    value = optional_string(body, field_name)
+    if value is None:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", f"{field_name} must be an ISO datetime") from exc
 
 
 def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:

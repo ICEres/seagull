@@ -25,7 +25,6 @@ Last updated: 2026-06-28.
   behavior.
 - Define payload reference fields: media type, byte length, compression, hash,
   TTL, retention state, access scope, and optional chunk manifest.
-- Add local payload storage for development before cloud object storage.
 - Add SDK helpers that choose inline content for small messages and payload
   refs for large context.
 - Add optional scoped tool-grant records for narrow read-only exceptions where

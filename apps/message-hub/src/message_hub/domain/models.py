@@ -50,6 +50,27 @@ class MessageRef:
 
 
 @dataclass(frozen=True, slots=True)
+class PayloadRecord:
+    content_ref: str
+    media_type: str
+    byte_length: int
+    hash: str
+    compression: str = "gzip"
+    compressed_byte_length: int = 0
+    compressed_hash: str | None = None
+    ttl_expires_at: datetime | None = None
+    retention_state: str = "ready"
+    access_scope: str = "recipients"
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class StoredPayload:
+    record: PayloadRecord
+    compressed_content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowTraceEntry:
     hook: str
     runtime: str

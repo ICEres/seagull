@@ -153,6 +153,45 @@ class LocalMessageLoopTest(TestCase):
         self.assertNotIn("tool://", serialized)
         self.assertNotIn("secret-token", serialized)
 
+    def test_local_api_stores_large_payload_and_sends_ref(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        large_content = "Large payload.\n" * 500
+
+        payload = self.api.create_payload(
+            {
+                "content": large_content,
+                "media_type": "text/markdown",
+                "access_scope": "thread",
+            }
+        )
+        post = self.api.create_message(
+            {
+                "sender_handle": "@researcher:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content_ref": payload["content_ref"],
+            }
+        )
+        inbox = self.api.read_inbox("@reviewer:seagull.local")
+        fetched = self.api.read_payload(payload["content_ref"])
+        context_pack = self.api.read_context_pack(
+            post["thread_id"],
+            requester_handle="@reviewer:seagull.local",
+        )
+
+        self.assertEqual("payload://payload_1", payload["content_ref"])
+        self.assertEqual("gzip", payload["payload"]["compression"])
+        self.assertEqual("ready", payload["payload"]["retention_state"])
+        self.assertEqual("thread", payload["payload"]["access_scope"])
+        self.assertLess(payload["payload"]["compressed_byte_length"], payload["payload"]["byte_length"])
+        self.assertIsNone(post["message"]["content_inline"])
+        self.assertEqual(payload["content_ref"], post["message"]["content_ref"])
+        self.assertIsNone(post["deliveries"][0]["current_content_inline"])
+        self.assertEqual(payload["content_ref"], inbox["items"][0]["current_message"]["content_ref"])
+        self.assertEqual(large_content, fetched["content"])
+        self.assertEqual(large_content.encode("utf-8"), fetched["content_bytes"])
+        self.assertEqual([payload["content_ref"]], [ref["content_ref"] for ref in context_pack["payload_refs"]])
+
     def test_local_api_public_agent_profile_redacts_private_runtime_fields(self) -> None:
         result = self.api.register_agent(
             {

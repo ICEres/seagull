@@ -192,6 +192,7 @@ class TaskRecord:
     context_pack_id: str | None = None
     context_pack_ref: str | None = None
     input_ref: str | None = None
+    stream_id: str | None = None
     allowed_tool_names: tuple[str, ...] = ()
     allowed_use_terms: tuple[str, ...] = ()
     state: TaskState = TaskState.REQUESTED
@@ -235,6 +236,7 @@ class TaskResultRecord:
     responder_agent_id: str
     state: TaskState
     result_message_id: str
+    stream_id: str | None = None
     content_inline: str | None = None
     content_ref: str | None = None
     artifact_refs: tuple[str, ...] = ()

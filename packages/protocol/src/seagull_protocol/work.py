@@ -202,6 +202,7 @@ class TaskRequest:
     context_pack_id: str | None = None
     context_pack_ref: str | None = None
     input_ref: str | None = None
+    stream_id: str | None = None
     allowed_tool_names: tuple[str, ...] = ()
     allowed_use_terms: tuple[str, ...] = ()
     tool_grant_ids: tuple[str, ...] = ()
@@ -212,7 +213,7 @@ class TaskRequest:
         object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
         object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
         object.__setattr__(self, "objective", required_string(self.objective, "objective"))
-        for field_name in ("context_pack_id", "context_pack_ref", "input_ref"):
+        for field_name in ("context_pack_id", "context_pack_ref", "input_ref", "stream_id"):
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, required_string(value, field_name))
@@ -239,6 +240,7 @@ class TaskResult:
     responder: Handle
     state: TaskState
     result_message_id: str | None = None
+    stream_id: str | None = None
     content: str | None = None
     content_ref: str | None = None
     artifact_refs: tuple[str, ...] = ()
@@ -248,7 +250,7 @@ class TaskResult:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
-        for field_name in ("result_message_id", "content_ref", "error"):
+        for field_name in ("result_message_id", "stream_id", "content_ref", "error"):
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, required_string(value, field_name))

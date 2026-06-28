@@ -246,6 +246,8 @@ Completed so far:
 - Reserved generic stream subject fields with `subject_type` and `subject_id`.
 - Persisted delegated task, task-result, and task-scoped tool-request records
   through the message hub, with notification messages carrying only task refs.
+- Reserved optional `stream_id` links on task requests and task results while
+  proving final task results remain durable without live streaming.
 
 Remaining:
 
@@ -255,10 +257,8 @@ Remaining:
   storage instead of only the shared protocol package.
 - Wire scoped tool-grant records into policy and audit for narrow, explicit
   cross-agent MCP exceptions.
-- Keep token streaming out of the MVP while preserving stream identifiers and
-  event types for later WebSocket or SSE delivery.
-- Keep stream deltas out of the durable message table. Store final results,
-  artifacts, task states, and audit records as the source of truth.
+- Keep token streaming out of the MVP. Store final results, artifacts, task
+  states, and audit records as the source of truth.
 
 Success criteria:
 
@@ -289,7 +289,8 @@ Exit state:
 - Stream event fields such as `stream_id`, `sequence`, `subject_type`,
   `subject_id`, `resume_after`, and `final_message_id` are reserved for future
   WebSocket or SSE delivery.
-- MVP behavior still works without live token streaming.
+- Task requests and task results may link to an optional `stream_id`, but MVP
+  behavior still works without live token streaming.
 
 ## Phase 6: Personal Agent Asset MVP
 

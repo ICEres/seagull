@@ -7,6 +7,7 @@ from unittest import TestCase
 from message_hub.domain import (
     DeliveryStatus,
     ForbiddenDeliveryError,
+    InvalidMessageError,
     MessageHubService,
     MessageRef,
     NotFoundError,
@@ -149,6 +150,77 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual((), context_pack.payload_refs)
         self.assertIn("message://message_1/content_ref", context_pack.redacted_refs)
         self.assertIn("summary://summary_1/content_ref", context_pack.redacted_refs)
+
+    def test_task_result_is_durable_without_live_stream(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Return a durable result without a live stream.",
+        )
+        self.service.accept_task(task.task_id, worker_handle="@reviewer:gulls.ai")
+
+        result = self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            content_ref="payload://task_1/result",
+            artifact_refs=("artifact://review",),
+        )
+
+        stored_results = self.repository.list_task_results(task.task_id)
+        updated_task = self.service.get_task(task.task_id)
+        result_message = self.repository.get_message(result.result_message_id)
+
+        self.assertIsNone(task.stream_id)
+        self.assertIsNone(result.stream_id)
+        self.assertIsNone(updated_task.stream_id)
+        self.assertEqual((result,), stored_results)
+        self.assertEqual(TaskState.COMPLETED, updated_task.state)
+        self.assertEqual(result.result_message_id, updated_task.result_message_id)
+        self.assertEqual("seagull://tasks/task_1/results/task_result_1", updated_task.result_ref)
+        self.assertIsNotNone(result_message)
+        assert result_message is not None
+        self.assertEqual("task_result", result_message.intent)
+        self.assertEqual("payload://task_1/result", result.content_ref)
+
+    def test_task_result_can_link_optional_stream_without_stream_events(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Return a result that links to an optional stream.",
+            stream_id="stream_1",
+        )
+
+        result = self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            content="Done.",
+        )
+
+        updated_task = self.service.get_task(task.task_id)
+        messages = self.repository.list_thread_messages(task.thread_id)
+
+        self.assertEqual("stream_1", task.stream_id)
+        self.assertEqual("stream_1", result.stream_id)
+        self.assertEqual("stream_1", updated_task.stream_id)
+        self.assertEqual(TaskState.COMPLETED, updated_task.state)
+        self.assertEqual("task_result", messages[-1].intent)
+        self.assertNotIn("stream.delta", [message.intent for message in messages])
+
+    def test_task_result_rejects_mismatched_stream_id(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Return a result for the task stream.",
+            stream_id="stream_1",
+        )
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.return_task_result(
+                task.task_id,
+                responder_handle="@reviewer:gulls.ai",
+                stream_id="stream_2",
+                content="Wrong stream.",
+            )
 
     def test_delegated_task_records_lifecycle_without_inline_task_payload_messages(self) -> None:
         task = self.service.create_task(

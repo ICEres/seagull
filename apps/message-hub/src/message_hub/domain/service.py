@@ -500,6 +500,7 @@ class MessageHubService:
         context_pack_id: str | None = None,
         context_pack_ref: str | None = None,
         input_ref: str | None = None,
+        stream_id: str | None = None,
         allowed_tool_names: Sequence[str] = (),
         allowed_use_terms: Sequence[str] = (),
         idempotency_key: str | None = None,
@@ -565,6 +566,7 @@ class MessageHubService:
             context_pack_id=normalized_optional_string(context_pack_id),
             context_pack_ref=normalized_optional_string(context_pack_ref),
             input_ref=normalized_optional_string(input_ref),
+            stream_id=normalized_optional_string(stream_id),
             allowed_tool_names=normalized_allowed_tool_names,
             allowed_use_terms=normalized_allowed_use_terms,
             state=TaskState.REQUESTED,
@@ -659,6 +661,7 @@ class MessageHubService:
         content_ref: str | None = None,
         artifact_refs: Sequence[str] = (),
         tool_use_summary_refs: Sequence[str] = (),
+        stream_id: str | None = None,
         error: str | None = None,
     ) -> TaskResultRecord:
         task = self._require_task(task_id)
@@ -672,6 +675,9 @@ class MessageHubService:
             normalize_required(ref, "tool_use_summary_ref")
             for ref in tool_use_summary_refs
         )
+        normalized_stream_id = normalized_optional_string(stream_id) or task.stream_id
+        if task.stream_id is not None and normalized_stream_id != task.stream_id:
+            raise InvalidMessageError("task result stream_id must match task stream_id")
         if (
             content is None
             and content_ref is None
@@ -700,6 +706,7 @@ class MessageHubService:
             responder_agent_id=responder.agent_id,
             state=task_state,
             result_message_id=notification.message.message_id,
+            stream_id=normalized_stream_id,
             content_inline=normalized_optional_string(content),
             content_ref=normalized_optional_string(content_ref),
             artifact_refs=normalized_artifact_refs,
@@ -713,6 +720,7 @@ class MessageHubService:
             state=task_state,
             result_message_id=notification.message.message_id,
             result_ref=result_ref,
+            stream_id=task.stream_id or normalized_stream_id,
             artifact_refs=tuple(dict.fromkeys((*task.artifact_refs, *normalized_artifact_refs))),
             updated_at=now,
         )

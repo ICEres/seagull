@@ -294,6 +294,8 @@ The current protocol package should keep this boundary explicit:
   `ToolGrant` in a work/task extension.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
+- Use optional `stream_id` links on task records/results only as live-projection
+  metadata. Durable task results must remain valid without stream events.
 - Treat message intent/type as extensible. The base can provide known constants,
   but it should not make future behavior impossible.
 - Add extension metadata to core envelopes so higher layers can carry their own

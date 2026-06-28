@@ -206,6 +206,7 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual("task_1", task_response["task_id"])
         self.assertEqual("requested", task_response["task"]["state"])
         self.assertEqual("message_1", task_response["task"]["request_message_id"])
+        self.assertIsNone(task_response["task"]["stream_id"])
         inbox = self.api.read_inbox("@reviewer:seagull.local")
         self.assertIsNone(inbox["items"][0]["message"]["content_inline"])
         self.assertEqual("task_request", inbox["items"][0]["message"]["intent"])
@@ -256,7 +257,13 @@ class LocalMessageLoopTest(TestCase):
         )
         self.assertEqual("completed", result["state"])
         self.assertEqual("task_result_1", result["result"]["result_id"])
+        self.assertIsNone(result["result"]["stream_id"])
         self.assertEqual("payload://task_1/result", result["result"]["content_ref"])
+
+        readback = self.api.read_task("task_1")
+        self.assertEqual("completed", readback["task"]["state"])
+        self.assertIsNone(readback["task"]["stream_id"])
+        self.assertEqual(result["result"]["result_message_id"], readback["task"]["result_message_id"])
 
     def test_local_api_rejects_private_task_fields(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})

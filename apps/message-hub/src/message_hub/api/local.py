@@ -203,6 +203,7 @@ class LocalMessageHubApi:
                 context_pack_id=optional_string(body, "context_pack_id"),
                 context_pack_ref=optional_string(body, "context_pack_ref"),
                 input_ref=optional_string(body, "input_ref"),
+                stream_id=optional_string(body, "stream_id"),
                 allowed_tool_names=string_list(body.get("allowed_tool_names", ()), "allowed_tool_names"),
                 allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
                 idempotency_key=optional_string(body, "idempotency_key"),
@@ -282,6 +283,7 @@ class LocalMessageHubApi:
                     body.get("tool_use_summary_refs", ()),
                     "tool_use_summary_refs",
                 ),
+                stream_id=optional_string(body, "stream_id"),
                 error=optional_string(body, "error"),
             )
         except InvalidMessageError as exc:
@@ -670,6 +672,7 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "context_pack_id": task.context_pack_id,
         "context_pack_ref": task.context_pack_ref,
         "input_ref": task.input_ref,
+        "stream_id": task.stream_id,
         "allowed_tool_names": list(task.allowed_tool_names),
         "allowed_use_terms": list(task.allowed_use_terms),
         "state": task.state.value,
@@ -715,6 +718,7 @@ def task_result_to_dict(result: TaskResultRecord) -> dict[str, Any]:
         "responder_agent_id": result.responder_agent_id,
         "state": result.state.value,
         "result_message_id": result.result_message_id,
+        "stream_id": result.stream_id,
         "content_inline": result.content_inline,
         "content_ref": result.content_ref,
         "artifact_refs": list(result.artifact_refs),

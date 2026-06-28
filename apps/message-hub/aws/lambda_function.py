@@ -474,6 +474,7 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
         "context_pack_id": optional_string(body, "context_pack_id"),
         "context_pack_ref": optional_string(body, "context_pack_ref"),
         "input_ref": optional_string(body, "input_ref"),
+        "stream_id": optional_string(body, "stream_id"),
         "allowed_tool_names": string_list(body.get("allowed_tool_names", []), "allowed_tool_names"),
         "allowed_use_terms": string_list(body.get("allowed_use_terms", []), "allowed_use_terms"),
         "state": "requested",
@@ -574,6 +575,9 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
     content_ref = optional_string(body, "content_ref")
     artifact_refs = string_list(body.get("artifact_refs", []), "artifact_refs")
     tool_use_summary_refs = string_list(body.get("tool_use_summary_refs", []), "tool_use_summary_refs")
+    stream_id = optional_string(body, "stream_id") or task.get("stream_id")
+    if task.get("stream_id") and stream_id != task["stream_id"]:
+        raise BadRequest("task result stream_id must match task stream_id")
     error = optional_string(body, "error")
     if content_inline is None and content_ref is None and not artifact_refs and error is None:
         raise BadRequest("task result requires content, content_ref, artifact_refs, or error")
@@ -607,6 +611,7 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
         "responder_agent_id": responder["agent_id"],
         "state": state,
         "result_message_id": message_body["message_id"],
+        "stream_id": stream_id,
         "content_inline": content_inline,
         "content_ref": content_ref,
         "artifact_refs": artifact_refs,
@@ -618,6 +623,8 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
     task["state"] = state
     task["result_message_id"] = message_body["message_id"]
     task["result_ref"] = result_ref
+    if stream_id:
+        task["stream_id"] = stream_id
     task["artifact_refs"] = list(dict.fromkeys([*task.get("artifact_refs", []), *artifact_refs]))
     task["updated_at"] = now
     tasks_table.put_item(Item=without_none(task))

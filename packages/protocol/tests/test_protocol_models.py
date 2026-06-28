@@ -246,6 +246,7 @@ class ProtocolModelsTest(TestCase):
             recipient=Handle("@reviewer:seagull.local"),
             objective="Review the attached plan.",
             context_pack_id="context_pack_1",
+            stream_id="stream_1",
             allowed_tool_names=("open_artifact",),
             allowed_use_terms=("no_memory",),
             tool_grant_ids=("grant_1",),
@@ -255,6 +256,7 @@ class ProtocolModelsTest(TestCase):
             responder=request.recipient,
             state=TaskState.RESULT_READY,
             result_message_id="message_2",
+            stream_id=request.stream_id,
             content_ref="payload://task_1/result",
             artifact_refs=("artifact_1",),
             tool_use_summary_refs=("artifact_tool_summary_1",),
@@ -290,6 +292,8 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
         self.assertEqual(("no_memory",), request.allowed_use_terms)
         self.assertEqual(("grant_1",), request.tool_grant_ids)
+        self.assertEqual("stream_1", request.stream_id)
+        self.assertEqual("stream_1", result.stream_id)
         self.assertEqual("payload://task_1/result", result.content_ref)
         self.assertEqual(("artifact_tool_summary_1",), result.tool_use_summary_refs)
         self.assertTrue(grant.read_only)

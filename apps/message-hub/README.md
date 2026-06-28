@@ -149,7 +149,9 @@ Do not send full conversation history to every agent by default.
 messages. Task notification messages should carry only `seagull://tasks/...`
 refs. Task records capture requester, recipient, objective, context refs,
 allowed tool names, allowed-use terms, lifecycle state, policy decision ID,
-accepted worker, result refs, and artifact refs. Task-scoped tool-request
+accepted worker, optional `stream_id`, result refs, and artifact refs. Task
+results may carry the same optional `stream_id`, but durable result records and
+final task-result messages do not require live streaming. Task-scoped tool-request
 records capture requested tool name, purpose, approval requirement, policy
 decision ID, accepted worker, and result/artifact refs without copying private
 MCP handles, credentials, prompts, memory, or runtime configuration.

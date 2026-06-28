@@ -30,14 +30,8 @@ Last updated: 2026-06-28.
   refs for large context.
 - Add optional scoped tool-grant records for narrow read-only exceptions where
   one agent may use another agent's MCP gateway.
-- Reserve stream fields: `stream_id`, `sequence`, `subject_type`, `subject_id`,
-  `resume_after`, `event_type`, and `final_message_id`.
-- Add stream event types for future use: `stream.started`, `stream.delta`,
-  `stream.checkpoint`, `stream.completed`, and `stream.failed`.
 - Add tests proving large context is not stored inline in messages, deliveries,
   inbox rows, queue events, or webhooks.
-- Add tests proving stream deltas are optional and final task results remain
-  durable without live streaming.
 
 ## Phase 6: Personal Agent Asset MVP
 

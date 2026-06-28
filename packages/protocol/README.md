@@ -42,3 +42,5 @@ Initial schema candidates:
 
 Keep the base protocol small. Work/task behavior should use extension models
 instead of forcing every Seagull interaction to look like a task.
+Task stream IDs are optional links to future live projections; task results are
+durable records without requiring stream events.

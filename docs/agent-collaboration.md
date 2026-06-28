@@ -272,6 +272,9 @@ Stream events should be compact:
 Each stream event should carry `stream_id`, `subject_type`, `subject_id`,
 `sequence`, `event_type`, and enough data to resume after a disconnect. Final
 answers, artifacts, task states, and audit records must still be durable.
+Task requests and task results may carry an optional `stream_id` to connect the
+durable record to a future live projection, but creating, reading, or completing
+a task must not require a stream.
 
 Do not stream raw credentials, full logs, hidden reasoning, huge files, or every
 internal tool call as social messages. Store detailed traces in audit or log

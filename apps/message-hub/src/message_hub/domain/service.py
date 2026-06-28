@@ -216,6 +216,8 @@ class MessageHubService:
             ttl_expires_at=ttl_expires_at,
             retention_state="ready",
             access_scope=normalized_access_scope,
+            storage_provider="local_node",
+            storage_ref=content_ref,
             created_at=now,
         )
         payload = StoredPayload(record=record, compressed_content=compressed_content)

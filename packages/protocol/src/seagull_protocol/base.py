@@ -78,6 +78,12 @@ class PayloadAccessScope(str, Enum):
     PUBLIC = "public"
 
 
+class PayloadStorageProvider(str, Enum):
+    LOCAL_NODE = "local_node"
+    CLOUD_OBJECT = "cloud_object"
+    EXTERNAL = "external"
+
+
 class HookType(str, Enum):
     SEND_BEFORE = "send.before"
     ROUTE_RESOLVE = "route.resolve"
@@ -201,9 +207,12 @@ class ContentRef:
     byte_length: int
     hash: str
     compression: PayloadCompression = PayloadCompression.NONE
+    compressed_byte_length: int | None = None
+    compressed_hash: str | None = None
     ttl_expires_at: datetime | None = None
     retention_state: PayloadRetentionState = PayloadRetentionState.READY
     access_scope: PayloadAccessScope = PayloadAccessScope.RECIPIENTS
+    fetch_policy_ref: str | None = None
     chunk_manifest_ref: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
@@ -212,6 +221,12 @@ class ContentRef:
         object.__setattr__(self, "media_type", required_string(self.media_type, "media_type"))
         object.__setattr__(self, "hash", required_string(self.hash, "hash"))
         require_non_negative_int(self.byte_length, "byte_length")
+        if self.compressed_byte_length is not None:
+            require_non_negative_int(self.compressed_byte_length, "compressed_byte_length")
+        if self.compressed_hash is not None:
+            object.__setattr__(self, "compressed_hash", required_string(self.compressed_hash, "compressed_hash"))
+        if self.fetch_policy_ref is not None:
+            object.__setattr__(self, "fetch_policy_ref", required_string(self.fetch_policy_ref, "fetch_policy_ref"))
         if self.chunk_manifest_ref is not None:
             object.__setattr__(
                 self,
@@ -227,6 +242,8 @@ class PayloadChunk:
     byte_offset: int
     byte_length: int
     hash: str | None = None
+    compressed_byte_length: int | None = None
+    compressed_hash: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "content_ref", required_string(self.content_ref, "content_ref"))
@@ -235,6 +252,10 @@ class PayloadChunk:
         require_non_negative_int(self.byte_length, "byte_length")
         if self.hash is not None:
             object.__setattr__(self, "hash", required_string(self.hash, "hash"))
+        if self.compressed_byte_length is not None:
+            require_non_negative_int(self.compressed_byte_length, "compressed_byte_length")
+        if self.compressed_hash is not None:
+            object.__setattr__(self, "compressed_hash", required_string(self.compressed_hash, "compressed_hash"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,10 +263,14 @@ class PayloadManifest:
     manifest_id: str
     payload: ContentRef
     chunks: tuple[PayloadChunk, ...] = ()
+    storage_provider: PayloadStorageProvider = PayloadStorageProvider.LOCAL_NODE
+    storage_ref: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "manifest_id", required_string(self.manifest_id, "manifest_id"))
+        if self.storage_ref is not None:
+            object.__setattr__(self, "storage_ref", required_string(self.storage_ref, "storage_ref"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +409,7 @@ __all__ = [
     "PayloadCompression",
     "PayloadManifest",
     "PayloadRetentionState",
+    "PayloadStorageProvider",
     "ProtocolError",
     "RoutingRuleMode",
     "Thread",

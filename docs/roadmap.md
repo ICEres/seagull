@@ -257,6 +257,9 @@ Completed so far:
 - Added a dependency-free Python SDK helper that chooses inline message content
   at or below 4,000 characters and stores larger content as a payload before
   sending only the `content_ref`.
+- Extended the shared payload manifest schema with compressed byte/hash
+  metadata, optional chunk metadata, access/fetch policy metadata, and
+  local-node/cloud-object storage hints.
 
 Remaining:
 
@@ -291,6 +294,8 @@ Exit state:
 - The local message hub can create and fetch gzip-compressed payload records by
   `content_ref`.
 - The Python SDK helper can hide inline-vs-payload branching from local callers.
+- The shared payload manifest schema covers local-node payloads now and future
+  cloud object storage without requiring large content in message envelopes.
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.

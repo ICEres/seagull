@@ -61,6 +61,10 @@ class PayloadRecord:
     ttl_expires_at: datetime | None = None
     retention_state: str = "ready"
     access_scope: str = "recipients"
+    fetch_policy_ref: str | None = None
+    chunk_manifest_ref: str | None = None
+    storage_provider: str = "local_node"
+    storage_ref: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 

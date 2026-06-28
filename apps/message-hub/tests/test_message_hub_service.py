@@ -90,6 +90,10 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual("gzip", payload.record.compression)
         self.assertEqual("ready", payload.record.retention_state)
         self.assertEqual("thread", payload.record.access_scope)
+        self.assertIsNone(payload.record.fetch_policy_ref)
+        self.assertIsNone(payload.record.chunk_manifest_ref)
+        self.assertEqual("local_node", payload.record.storage_provider)
+        self.assertEqual(payload.record.content_ref, payload.record.storage_ref)
         self.assertLess(payload.record.compressed_byte_length, payload.record.byte_length)
         self.assertEqual(
             f"sha256:{hashlib.sha256(payload.compressed_content).hexdigest()}",

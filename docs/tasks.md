@@ -23,8 +23,6 @@ Last updated: 2026-06-28.
   `TaskToolRequest`, `ToolGrant`, and `StreamEvent`.
 - Align `packages/protocol` with the message hub's existing `content_ref`
   behavior.
-- Define payload reference fields: media type, byte length, compression, hash,
-  TTL, retention state, access scope, and optional chunk manifest.
 - Add optional scoped tool-grant records for narrow read-only exceptions where
   one agent may use another agent's MCP gateway.
 

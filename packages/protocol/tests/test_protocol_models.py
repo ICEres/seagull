@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest import TestCase
 
 from seagull_protocol import (
@@ -21,6 +22,7 @@ from seagull_protocol import (
     PayloadCompression,
     PayloadManifest,
     PayloadRetentionState,
+    PayloadStorageProvider,
     ProtocolError,
     StreamEvent,
     StreamEventType,
@@ -143,8 +145,11 @@ class ProtocolModelsTest(TestCase):
             byte_length=4096,
             hash="sha256:abc123",
             compression=PayloadCompression.GZIP,
+            compressed_byte_length=1024,
+            compressed_hash="sha256:def456",
             retention_state=PayloadRetentionState.READY,
             access_scope=PayloadAccessScope.THREAD,
+            fetch_policy_ref="policy://thread_1/payload_fetch",
         )
         message = Message(
             message_id="message_1",
@@ -168,6 +173,9 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual("payload://thread_1/context/full", message.content_ref)
         self.assertEqual(message.content_ref, delivery.current_content_ref)
         self.assertEqual(PayloadCompression.GZIP, payload.compression)
+        self.assertEqual(1024, payload.compressed_byte_length)
+        self.assertEqual("sha256:def456", payload.compressed_hash)
+        self.assertEqual("policy://thread_1/payload_fetch", payload.fetch_policy_ref)
 
     def test_payload_manifest_can_reference_chunks(self) -> None:
         payload = ContentRef(
@@ -175,6 +183,10 @@ class ProtocolModelsTest(TestCase):
             media_type="application/json",
             byte_length=12,
             hash="sha256:payload",
+            compression=PayloadCompression.GZIP,
+            compressed_byte_length=8,
+            compressed_hash="sha256:compressed_payload",
+            access_scope=PayloadAccessScope.THREAD,
             chunk_manifest_ref="manifest_1",
         )
         manifest = PayloadManifest(
@@ -187,12 +199,70 @@ class ProtocolModelsTest(TestCase):
                     byte_offset=0,
                     byte_length=12,
                     hash="sha256:chunk",
+                    compressed_byte_length=8,
+                    compressed_hash="sha256:compressed_chunk",
                 ),
             ),
+            storage_provider=PayloadStorageProvider.LOCAL_NODE,
+            storage_ref="local-node://payloads/payload_1",
         )
 
         self.assertEqual(payload.content_ref, manifest.payload.content_ref)
+        self.assertEqual(PayloadStorageProvider.LOCAL_NODE, manifest.storage_provider)
+        self.assertEqual("local-node://payloads/payload_1", manifest.storage_ref)
         self.assertEqual("payload://task_1/input/chunk/0", manifest.chunks[0].content_ref)
+        self.assertEqual(8, manifest.chunks[0].compressed_byte_length)
+
+    def test_payload_manifest_is_small_and_cloud_ready(self) -> None:
+        payload = ContentRef(
+            content_ref="payload://task_1/result",
+            media_type="text/markdown",
+            byte_length=9000,
+            hash="sha256:plain",
+            compression=PayloadCompression.GZIP,
+            compressed_byte_length=3000,
+            compressed_hash="sha256:gzip",
+            retention_state=PayloadRetentionState.READY,
+            access_scope=PayloadAccessScope.RECIPIENTS,
+            fetch_policy_ref="policy://task_1/result_fetch",
+        )
+        manifest = PayloadManifest(
+            manifest_id="manifest_1",
+            payload=payload,
+            storage_provider=PayloadStorageProvider.CLOUD_OBJECT,
+            storage_ref="s3://seagull-dev-payloads/task_1/result.gz",
+        )
+        envelope = Message(
+            message_id="message_1",
+            thread_id="thread_1",
+            sender=Handle("@researcher:seagull.local"),
+            recipients=(Handle("@reviewer:seagull.local"),),
+            intent=MessageIntent.TASK_RESULT,
+            visibility=Visibility.DIRECT,
+            content_ref=payload.content_ref,
+        )
+        manifest_wire = {
+            "manifest_id": manifest.manifest_id,
+            "content_ref": manifest.payload.content_ref,
+            "media_type": manifest.payload.media_type,
+            "byte_length": manifest.payload.byte_length,
+            "hash": manifest.payload.hash,
+            "compression": manifest.payload.compression.value,
+            "compressed_byte_length": manifest.payload.compressed_byte_length,
+            "compressed_hash": manifest.payload.compressed_hash,
+            "ttl_expires_at": manifest.payload.ttl_expires_at,
+            "retention_state": manifest.payload.retention_state.value,
+            "access_scope": manifest.payload.access_scope.value,
+            "fetch_policy_ref": manifest.payload.fetch_policy_ref,
+            "storage_provider": manifest.storage_provider.value,
+            "storage_ref": manifest.storage_ref,
+            "chunks": [],
+        }
+
+        self.assertEqual("payload://task_1/result", envelope.content_ref)
+        self.assertIsNone(envelope.content)
+        self.assertEqual(PayloadStorageProvider.CLOUD_OBJECT, manifest.storage_provider)
+        self.assertLess(len(json.dumps(manifest_wire, separators=(",", ":"))), 1000)
 
     def test_context_pack_carries_budgeted_context_without_inline_payload(self) -> None:
         payload = ContentRef(
@@ -330,6 +400,27 @@ class ProtocolModelsTest(TestCase):
                 media_type="text/plain",
                 byte_length=-1,
                 hash="sha256:bad",
+            )
+
+        with self.assertRaises(ProtocolError):
+            ContentRef(
+                content_ref="payload://bad",
+                media_type="text/plain",
+                byte_length=12,
+                hash="sha256:bad",
+                compressed_byte_length=-1,
+            )
+
+        with self.assertRaises(ProtocolError):
+            PayloadManifest(
+                manifest_id="manifest_1",
+                payload=ContentRef(
+                    content_ref="payload://bad",
+                    media_type="text/plain",
+                    byte_length=12,
+                    hash="sha256:bad",
+                ),
+                storage_ref=" ",
             )
 
         with self.assertRaises(ProtocolError):

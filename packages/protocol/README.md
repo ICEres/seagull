@@ -24,6 +24,29 @@ Recommended approach:
 - Move to explicit language-neutral schemas later if the protocol needs a
   formal compatibility process.
 
+## Payload Manifest Shape
+
+`ContentRef` is the small reference metadata that messages, deliveries, context
+packs, and task records may carry. It includes:
+
+- `content_ref`, media type, original byte length, and original hash.
+- Compression algorithm plus optional compressed byte length and compressed hash.
+- TTL, retention state, access scope, and optional fetch policy reference.
+- Optional `chunk_manifest_ref` when chunk metadata lives separately.
+
+`PayloadManifest` wraps a `ContentRef` with optional chunk records and storage
+hints:
+
+- `storage_provider`: `local_node`, `cloud_object`, or `external`.
+- `storage_ref`: backend-specific locator such as a local-node key or future
+  object-storage URI.
+- `chunks`: optional `PayloadChunk` records with original and compressed chunk
+  metadata.
+
+Messages should still carry only the `content_ref` string. Payload manifests are
+for fetch/storage APIs and audit records, not for copying large data into
+message envelopes.
+
 Initial schema candidates:
 
 - Handle.

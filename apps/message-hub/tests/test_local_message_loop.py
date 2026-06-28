@@ -183,6 +183,8 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual("gzip", payload["payload"]["compression"])
         self.assertEqual("ready", payload["payload"]["retention_state"])
         self.assertEqual("thread", payload["payload"]["access_scope"])
+        self.assertEqual("local_node", payload["payload"]["storage_provider"])
+        self.assertEqual(payload["content_ref"], payload["payload"]["storage_ref"])
         self.assertLess(payload["payload"]["compressed_byte_length"], payload["payload"]["byte_length"])
         self.assertIsNone(post["message"]["content_inline"])
         self.assertEqual(payload["content_ref"], post["message"]["content_ref"])

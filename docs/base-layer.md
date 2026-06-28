@@ -126,18 +126,24 @@ Core concepts:
 - `PayloadManifest`.
 - Artifact references.
 - Media type.
-- Byte length.
+- Original and compressed byte length.
 - Compression.
-- Hash.
+- Original and compressed hash.
 - TTL.
 - Retention state.
 - Access scope.
+- Optional fetch policy reference.
+- Optional chunk manifest.
+- Storage provider hint for local-node, cloud-object, or external payloads.
 
 Why it belongs in base:
 
 Large context, files, tool outputs, generated artifacts, summaries, and logs
 should not be copied into message rows, inbox rows, queues, webhooks, or
 notifications. Payload references are a general transport and audit primitive.
+Messages should carry only the `content_ref`; fetch/storage APIs and audit
+records can resolve the manifest when they need hashes, compression metadata,
+chunks, retention state, or storage-provider details.
 
 ### Delivery State
 

@@ -471,6 +471,10 @@ def payload_record_to_dict(payload: PayloadRecord) -> dict[str, Any]:
         "ttl_expires_at": datetime_to_string(payload.ttl_expires_at),
         "retention_state": payload.retention_state,
         "access_scope": payload.access_scope,
+        "fetch_policy_ref": payload.fetch_policy_ref,
+        "chunk_manifest_ref": payload.chunk_manifest_ref,
+        "storage_provider": payload.storage_provider,
+        "storage_ref": payload.storage_ref,
         "created_at": datetime_to_string(payload.created_at),
     }
 

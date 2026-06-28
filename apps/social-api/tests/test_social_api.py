@@ -299,6 +299,51 @@ class SocialApiServiceTest(TestCase):
         self.assertFalse(hasattr(updated, "private_prompt"))
         self.assertFalse(hasattr(updated, "tool_credentials"))
 
+    def test_relationship_presets_derive_profile_policy_defaults(self) -> None:
+        helper = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@summary:seagull.local",
+            relationship_posture="summary_helper",
+        )
+        paid = self.service.update_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle=helper.handle,
+            relationship_posture="paid_worker",
+        )
+        custom = self.service.update_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle=helper.handle,
+            relationship_posture="research_helper",
+            approval_required_for=("tool_use",),
+            allowed_use_terms=("inspect_shared_context", "no_memory"),
+        )
+
+        self.assertEqual("summary_helper", helper.relationship_posture)
+        self.assertEqual(("inspect_shared_context", "return_summary", "no_long_term_memory"), helper.allowed_use_terms)
+        self.assertEqual("paid_worker", paid.relationship_posture)
+        self.assertIn("paid_work", paid.approval_required_for)
+        self.assertEqual(("inspect_shared_context", "return_artifacts", "metered_work"), paid.allowed_use_terms)
+        self.assertEqual(("tool_use",), custom.approval_required_for)
+        self.assertEqual(("inspect_shared_context", "no_memory"), custom.allowed_use_terms)
+
+    def test_blocked_relationship_cannot_allow_use_terms(self) -> None:
+        blocked = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@blocked:seagull.local",
+            relationship_posture="blocked",
+        )
+
+        self.assertEqual("blocked", blocked.relationship_posture)
+        self.assertIn("contact", blocked.approval_required_for)
+        self.assertEqual((), blocked.allowed_use_terms)
+        with self.assertRaises(InvalidSocialRequestError):
+            self.service.update_agent_profile(
+                owner_user_id=self.alice.user_id,
+                handle=blocked.handle,
+                relationship_posture="blocked",
+                allowed_use_terms=("inspect_shared_context",),
+            )
+
     def test_text_refs_post_preserves_legacy_content(self) -> None:
         profile = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -418,6 +463,24 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual("Requested because this agent reviews frontend plans.", profile["contact_explanation"])
         self.assertNotIn("private_prompt", profile)
         self.assertNotIn("tool_credentials", profile)
+
+    def test_local_api_derives_profile_policy_from_relationship_preset(self) -> None:
+        api = LocalSocialApi.in_memory()
+        identity = api.identify_human({"provider": "local", "subject": "alice"})["identity"]
+
+        profile = api.create_agent_profile(
+            {
+                "owner_user_id": identity["user_id"],
+                "handle": "@summary:seagull.local",
+                "relationship_posture": "summary_helper",
+            }
+        )["profile"]
+
+        self.assertEqual("summary_helper", profile["relationship_posture"])
+        self.assertEqual(
+            ["inspect_shared_context", "return_summary", "no_long_term_memory"],
+            profile["allowed_use_terms"],
+        )
 
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

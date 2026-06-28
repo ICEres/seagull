@@ -116,11 +116,83 @@ class AgentDecision(str, Enum):
     ASK_HUMAN = "ask_human"
 
 
+class RelationshipPreset(str, Enum):
+    NEEDS_APPROVAL = "needs_approval"
+    TRUSTED_REVIEWER = "trusted_reviewer"
+    SUMMARY_HELPER = "summary_helper"
+    RESEARCH_HELPER = "research_helper"
+    BLOCKED = "blocked"
+    PAID_WORKER = "paid_worker"
+
+
 DEFAULT_APPROVAL_REQUIRED_FOR = (
     "private_context",
     "tool_use",
     "high_cost_work",
 )
+
+BLOCKED_APPROVAL_REQUIRED_FOR = (
+    "contact",
+    "private_context",
+    "tool_use",
+    "high_cost_work",
+    "paid_work",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipPresetDefaults:
+    preset: RelationshipPreset
+    trust_label: str
+    routing_mode: RoutingRuleMode
+    approval_required_for: tuple[str, ...]
+    allowed_use_terms: tuple[str, ...]
+
+
+RELATIONSHIP_PRESET_DEFAULTS = {
+    RelationshipPreset.NEEDS_APPROVAL: RelationshipPresetDefaults(
+        preset=RelationshipPreset.NEEDS_APPROVAL,
+        trust_label="unknown",
+        routing_mode=RoutingRuleMode.REVIEW,
+        approval_required_for=DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms=(),
+    ),
+    RelationshipPreset.TRUSTED_REVIEWER: RelationshipPresetDefaults(
+        preset=RelationshipPreset.TRUSTED_REVIEWER,
+        trust_label="trusted",
+        routing_mode=RoutingRuleMode.REVIEW,
+        approval_required_for=DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms=("inspect_shared_context", "return_feedback", "return_artifacts"),
+    ),
+    RelationshipPreset.SUMMARY_HELPER: RelationshipPresetDefaults(
+        preset=RelationshipPreset.SUMMARY_HELPER,
+        trust_label="limited",
+        routing_mode=RoutingRuleMode.REVIEW,
+        approval_required_for=DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms=("inspect_shared_context", "return_summary", "no_long_term_memory"),
+    ),
+    RelationshipPreset.RESEARCH_HELPER: RelationshipPresetDefaults(
+        preset=RelationshipPreset.RESEARCH_HELPER,
+        trust_label="limited",
+        routing_mode=RoutingRuleMode.REVIEW,
+        approval_required_for=DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms=("inspect_shared_context", "return_research_notes", "cite_sources"),
+    ),
+    RelationshipPreset.BLOCKED: RelationshipPresetDefaults(
+        preset=RelationshipPreset.BLOCKED,
+        trust_label="blocked",
+        routing_mode=RoutingRuleMode.BLOCK,
+        approval_required_for=BLOCKED_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms=(),
+    ),
+    RelationshipPreset.PAID_WORKER: RelationshipPresetDefaults(
+        preset=RelationshipPreset.PAID_WORKER,
+        trust_label="limited",
+        routing_mode=RoutingRuleMode.REVIEW,
+        approval_required_for=(*DEFAULT_APPROVAL_REQUIRED_FOR, "paid_work"),
+        allowed_use_terms=("inspect_shared_context", "return_artifacts", "metered_work"),
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +255,7 @@ class AgentProfile:
         object.__setattr__(
             self,
             "relationship_posture",
-            required_string(self.relationship_posture, "relationship_posture"),
+            normalize_relationship_preset(self.relationship_posture).value,
         )
         object.__setattr__(
             self,
@@ -410,6 +482,21 @@ def normalize_message_intent(intent: MessageIntent | str) -> MessageIntent | str
         return value
 
 
+def normalize_relationship_preset(preset: RelationshipPreset | str) -> RelationshipPreset:
+    if isinstance(preset, RelationshipPreset):
+        return preset
+    value = required_string(preset, "relationship_posture")
+    try:
+        return RelationshipPreset(value)
+    except ValueError as exc:
+        allowed = ", ".join(member.value for member in RelationshipPreset)
+        raise ProtocolError(f"relationship_posture must be one of: {allowed}") from exc
+
+
+def relationship_preset_defaults(preset: RelationshipPreset | str) -> RelationshipPresetDefaults:
+    return RELATIONSHIP_PRESET_DEFAULTS[normalize_relationship_preset(preset)]
+
+
 def required_string(value: str, field_name: str) -> str:
     if not isinstance(value, str):
         raise ProtocolError(f"{field_name} must be a string")
@@ -447,10 +534,14 @@ __all__ = [
     "PayloadRetentionState",
     "PayloadStorageProvider",
     "ProtocolError",
+    "RelationshipPreset",
+    "RelationshipPresetDefaults",
     "RoutingRuleMode",
     "Thread",
     "Visibility",
     "WorkflowTraceEntry",
     "normalize_handle",
     "normalize_message_intent",
+    "normalize_relationship_preset",
+    "relationship_preset_defaults",
 ]

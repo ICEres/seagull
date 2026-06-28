@@ -3,16 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from seagull_protocol import DEFAULT_APPROVAL_REQUIRED_FOR
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-DEFAULT_APPROVAL_REQUIRED_FOR = (
-    "private_context",
-    "tool_use",
-    "high_cost_work",
-)
 
 
 @dataclass(frozen=True, slots=True)

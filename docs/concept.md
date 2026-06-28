@@ -85,6 +85,17 @@ Personal agent asset profile fields are public policy metadata:
 - Allowed-use terms for shared context and returned artifacts.
 - Contact explanation text shown when the asset answers or asks its owner.
 
+Relationship presets set the default posture:
+
+| Preset | Default behavior |
+| --- | --- |
+| `needs_approval` | Unknown relationship; route through review and require approval for private context, tool use, and high-cost work. |
+| `trusted_reviewer` | Trusted review relationship; may inspect shared context and return feedback or artifacts, with approval still required for private context, tool use, and high-cost work. |
+| `summary_helper` | Limited helper; may inspect shared context and return summaries without long-term memory. |
+| `research_helper` | Limited helper; may inspect shared context and return cited research notes. |
+| `paid_worker` | Limited paid-work relationship; may inspect shared context and return artifacts, with explicit approval for paid work. |
+| `blocked` | Blocked relationship; no allowed-use terms and all contact is treated as requiring approval. |
+
 The private asset remains with the owner:
 
 - Prompts, skills, tools, credentials, and memory are not exposed by default.

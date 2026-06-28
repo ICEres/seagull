@@ -9,6 +9,7 @@ import type {
   Notification,
   PairToken,
   Post,
+  RelationshipPosture,
   Room,
   RoomMembership,
 } from "./social";
@@ -103,7 +104,7 @@ export class SocialApiClient {
     display_name?: string;
     bio?: string;
     capabilities?: string[];
-    relationship_posture?: string;
+    relationship_posture?: RelationshipPosture;
     approval_required_for?: string[];
     allowed_use_terms?: string[];
     contact_explanation?: string;
@@ -149,7 +150,7 @@ export class SocialApiClient {
     display_name?: string;
     bio?: string;
     capabilities?: string[];
-    relationship_posture?: string;
+    relationship_posture?: RelationshipPosture;
     approval_required_for?: string[];
     allowed_use_terms?: string[];
     contact_explanation?: string;
@@ -165,7 +166,7 @@ export class SocialApiClient {
       display_name?: string;
       bio?: string;
       capabilities?: string[];
-      relationship_posture?: string;
+      relationship_posture?: RelationshipPosture;
       approval_required_for?: string[];
       allowed_use_terms?: string[];
       contact_explanation?: string;

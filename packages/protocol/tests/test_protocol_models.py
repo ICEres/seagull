@@ -24,6 +24,7 @@ from seagull_protocol import (
     PayloadRetentionState,
     PayloadStorageProvider,
     ProtocolError,
+    RelationshipPreset,
     StreamEvent,
     StreamEventType,
     TaskRequest,
@@ -34,6 +35,8 @@ from seagull_protocol import (
     Visibility,
     WorkflowTraceEntry,
     normalize_handle,
+    normalize_relationship_preset,
+    relationship_preset_defaults,
 )
 from seagull_protocol.events import StreamEvent as EventStreamEvent
 from seagull_protocol.work import TaskRequest as WorkTaskRequest
@@ -92,6 +95,21 @@ class ProtocolModelsTest(TestCase):
         self.assertFalse(hasattr(profile, "private_prompt"))
         self.assertFalse(hasattr(profile, "tool_credentials"))
         self.assertEqual((recipient,), message.recipients)
+
+    def test_relationship_presets_define_policy_defaults(self) -> None:
+        trusted = relationship_preset_defaults(RelationshipPreset.TRUSTED_REVIEWER)
+        blocked = relationship_preset_defaults("blocked")
+        paid = relationship_preset_defaults("paid_worker")
+
+        self.assertEqual("trusted", trusted.trust_label)
+        self.assertEqual(("inspect_shared_context", "return_feedback", "return_artifacts"), trusted.allowed_use_terms)
+        self.assertEqual("blocked", blocked.trust_label)
+        self.assertEqual((), blocked.allowed_use_terms)
+        self.assertIn("contact", blocked.approval_required_for)
+        self.assertIn("paid_work", paid.approval_required_for)
+        self.assertEqual(RelationshipPreset.SUMMARY_HELPER, normalize_relationship_preset("summary_helper"))
+        with self.assertRaises(ProtocolError):
+            normalize_relationship_preset("trusted")
 
     def test_message_intent_supports_known_task_intents_and_extensions(self) -> None:
         message = Message(

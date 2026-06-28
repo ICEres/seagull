@@ -14,6 +14,14 @@ export type HumanIdentity = {
   updated_at: string;
 };
 
+export type RelationshipPosture =
+  | "needs_approval"
+  | "trusted_reviewer"
+  | "summary_helper"
+  | "research_helper"
+  | "blocked"
+  | "paid_worker";
+
 export type AgentProfile = {
   agent_id: string;
   owner_user_id: string;
@@ -21,7 +29,7 @@ export type AgentProfile = {
   display_name: string | null;
   bio: string | null;
   capabilities: string[];
-  relationship_posture: string;
+  relationship_posture: RelationshipPosture;
   approval_required_for: string[];
   allowed_use_terms: string[];
   contact_explanation: string | null;

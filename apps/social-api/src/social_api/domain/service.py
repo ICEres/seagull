@@ -7,11 +7,16 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from seagull_protocol import ProtocolError, normalize_handle
+from seagull_protocol import (
+    ProtocolError,
+    RelationshipPreset,
+    normalize_handle,
+    normalize_relationship_preset,
+    relationship_preset_defaults,
+)
 
 from social_api.domain.models import (
     AgentProfileRecord,
-    DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
     FollowRecord,
     HumanIdentity,
@@ -116,8 +121,8 @@ class SocialApiService:
         bio: str | None = None,
         capabilities: Sequence[str] = (),
         relationship_posture: str = "needs_approval",
-        approval_required_for: Sequence[str] = DEFAULT_APPROVAL_REQUIRED_FOR,
-        allowed_use_terms: Sequence[str] = (),
+        approval_required_for: Sequence[str] | None = None,
+        allowed_use_terms: Sequence[str] | None = None,
         contact_explanation: str | None = None,
         protocols: Sequence[str] = ("seagull",),
         node_id: str | None = None,
@@ -133,6 +138,13 @@ class SocialApiService:
             raise DuplicateAgentHandleError(f"agent handle already exists: {normalized_handle}")
 
         now = self._clock()
+        normalized_relationship_posture, normalized_approval_required_for, normalized_allowed_use_terms = (
+            normalize_relationship_policy(
+                relationship_posture=relationship_posture,
+                approval_required_for=approval_required_for,
+                allowed_use_terms=allowed_use_terms,
+            )
+        )
         profile = AgentProfileRecord(
             agent_id=self._new_id("agent"),
             owner_user_id=owner_user_id,
@@ -140,9 +152,9 @@ class SocialApiService:
             display_name=clean_optional(display_name),
             bio=clean_optional(bio),
             capabilities=clean_string_tuple(capabilities, "capabilities"),
-            relationship_posture=normalized_required(relationship_posture, "relationship_posture"),
-            approval_required_for=clean_string_tuple(approval_required_for, "approval_required_for"),
-            allowed_use_terms=clean_string_tuple(allowed_use_terms, "allowed_use_terms"),
+            relationship_posture=normalized_relationship_posture,
+            approval_required_for=normalized_approval_required_for,
+            allowed_use_terms=normalized_allowed_use_terms,
             contact_explanation=clean_optional(contact_explanation),
             protocols=clean_string_tuple(protocols, "protocols") or ("seagull",),
             node_id=clean_optional(node_id),
@@ -169,20 +181,29 @@ class SocialApiService:
     ) -> AgentProfileRecord:
         profile = self._require_profile_by_handle(handle)
         self._require_owner(owner_user_id, profile)
+        normalized_relationship_posture, normalized_approval_required_for, normalized_allowed_use_terms = (
+            normalize_relationship_policy(
+                relationship_posture=relationship_posture
+                if relationship_posture is not None
+                else profile.relationship_posture,
+                approval_required_for=approval_required_for,
+                allowed_use_terms=allowed_use_terms,
+                current_approval_required_for=profile.approval_required_for
+                if relationship_posture is None
+                else None,
+                current_allowed_use_terms=profile.allowed_use_terms
+                if relationship_posture is None
+                else None,
+            )
+        )
         updated = replace(
             profile,
             display_name=clean_optional(display_name) if display_name is not None else profile.display_name,
             bio=clean_optional(bio) if bio is not None else profile.bio,
             capabilities=clean_string_tuple(capabilities, "capabilities") if capabilities is not None else profile.capabilities,
-            relationship_posture=normalized_required(relationship_posture, "relationship_posture")
-            if relationship_posture is not None
-            else profile.relationship_posture,
-            approval_required_for=clean_string_tuple(approval_required_for, "approval_required_for")
-            if approval_required_for is not None
-            else profile.approval_required_for,
-            allowed_use_terms=clean_string_tuple(allowed_use_terms, "allowed_use_terms")
-            if allowed_use_terms is not None
-            else profile.allowed_use_terms,
+            relationship_posture=normalized_relationship_posture,
+            approval_required_for=normalized_approval_required_for,
+            allowed_use_terms=normalized_allowed_use_terms,
             contact_explanation=clean_optional(contact_explanation)
             if contact_explanation is not None
             else profile.contact_explanation,
@@ -284,8 +305,8 @@ class SocialApiService:
         bio: str | None = None,
         capabilities: Sequence[str] = (),
         relationship_posture: str = "needs_approval",
-        approval_required_for: Sequence[str] = DEFAULT_APPROVAL_REQUIRED_FOR,
-        allowed_use_terms: Sequence[str] = (),
+        approval_required_for: Sequence[str] | None = None,
+        allowed_use_terms: Sequence[str] | None = None,
         contact_explanation: str | None = None,
         protocols: Sequence[str] = ("seagull",),
         delivery_mode: str = "pull",
@@ -586,6 +607,40 @@ def normalize_agent_handle(handle: str) -> str:
         return normalize_handle(handle)
     except ProtocolError as exc:
         raise InvalidSocialRequestError(str(exc)) from exc
+
+
+def normalize_relationship_policy(
+    *,
+    relationship_posture: str,
+    approval_required_for: Sequence[str] | None = None,
+    allowed_use_terms: Sequence[str] | None = None,
+    current_approval_required_for: Sequence[str] | None = None,
+    current_allowed_use_terms: Sequence[str] | None = None,
+) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    try:
+        preset = normalize_relationship_preset(relationship_posture)
+    except ProtocolError as exc:
+        raise InvalidSocialRequestError(str(exc)) from exc
+
+    defaults = relationship_preset_defaults(preset)
+    normalized_approval_required_for = (
+        clean_string_tuple(approval_required_for, "approval_required_for")
+        if approval_required_for is not None
+        else clean_string_tuple(current_approval_required_for, "approval_required_for")
+        if current_approval_required_for is not None
+        else defaults.approval_required_for
+    )
+    normalized_allowed_use_terms = (
+        clean_string_tuple(allowed_use_terms, "allowed_use_terms")
+        if allowed_use_terms is not None
+        else clean_string_tuple(current_allowed_use_terms, "allowed_use_terms")
+        if current_allowed_use_terms is not None
+        else defaults.allowed_use_terms
+    )
+
+    if preset == RelationshipPreset.BLOCKED and normalized_allowed_use_terms:
+        raise InvalidSocialRequestError("blocked relationship cannot allow use terms")
+    return preset.value, normalized_approval_required_for, normalized_allowed_use_terms
 
 
 def normalize_slug(slug: str) -> str:

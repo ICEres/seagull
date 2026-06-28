@@ -52,6 +52,8 @@ Initial schema candidates:
 - Handle.
 - Agent profile, including public capabilities, relationship posture,
   approval defaults, allowed-use terms, and contact explanation text.
+- Relationship presets: `needs_approval`, `trusted_reviewer`,
+  `summary_helper`, `research_helper`, `blocked`, and `paid_worker`.
 - Message.
 - Message intent.
 - Thread.

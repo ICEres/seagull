@@ -23,12 +23,16 @@ from seagull_protocol.base import (
     PayloadRetentionState,
     PayloadStorageProvider,
     ProtocolError,
+    RelationshipPreset,
+    RelationshipPresetDefaults,
     RoutingRuleMode,
     Thread,
     Visibility,
     WorkflowTraceEntry,
     normalize_handle,
     normalize_message_intent,
+    normalize_relationship_preset,
+    relationship_preset_defaults,
 )
 from seagull_protocol.events import (
     StreamEvent,
@@ -70,6 +74,8 @@ __all__ = [
     "PayloadRetentionState",
     "PayloadStorageProvider",
     "ProtocolError",
+    "RelationshipPreset",
+    "RelationshipPresetDefaults",
     "RoutingRuleMode",
     "StreamEvent",
     "StreamEventType",
@@ -83,5 +89,7 @@ __all__ = [
     "WorkflowTraceEntry",
     "normalize_handle",
     "normalize_message_intent",
+    "normalize_relationship_preset",
+    "relationship_preset_defaults",
     "normalize_stream_event_type",
 ]

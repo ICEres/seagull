@@ -30,8 +30,6 @@ Last updated: 2026-06-28.
   refs for large context.
 - Add optional scoped tool-grant records for narrow read-only exceptions where
   one agent may use another agent's MCP gateway.
-- Add tests proving large context is not stored inline in messages, deliveries,
-  inbox rows, queue events, or webhooks.
 
 ## Phase 6: Personal Agent Asset MVP
 

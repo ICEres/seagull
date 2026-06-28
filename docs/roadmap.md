@@ -248,6 +248,9 @@ Completed so far:
   through the message hub, with notification messages carrying only task refs.
 - Reserved optional `stream_id` links on task requests and task results while
   proving final task results remain durable without live streaming.
+- Enforced a small-envelope boundary for messages, deliveries, inbox rows,
+  queue events, webhooks, task objectives, and task results. Oversized inline
+  content requires a `content_ref` and is not copied into delivery surfaces.
 
 Remaining:
 
@@ -274,7 +277,9 @@ Exit state:
   `TaskRequest`, `TaskResult`, `TaskToolRequest`, `ToolGrant`, and
   `StreamEvent`.
 - The message hub accepts small inline messages plus content refs without
-  putting huge strings in deliveries, inbox rows, queues, or webhooks.
+  putting huge strings in messages, deliveries, inbox rows, queues, webhooks,
+  or task-result storage. Inline content above 4,000 characters requires a
+  `content_ref`.
 - The connector and MCP surfaces can expose context and artifacts as references
   instead of large inline tool responses.
 - The message hub exposes a context-pack API that returns compact thread state,

@@ -8,6 +8,7 @@ from message_hub.domain import (
     DeliveryStatus,
     ForbiddenDeliveryError,
     InvalidMessageError,
+    MAX_ENVELOPE_INLINE_CHARS,
     MessageHubService,
     MessageRef,
     NotFoundError,
@@ -151,6 +152,66 @@ class MessageHubServiceTest(TestCase):
         self.assertIn("message://message_1/content_ref", context_pack.redacted_refs)
         self.assertIn("summary://summary_1/content_ref", context_pack.redacted_refs)
 
+    def test_large_inline_message_requires_content_ref_before_delivery(self) -> None:
+        large_content = "x" * (MAX_ENVELOPE_INLINE_CHARS + 1)
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.send_message(
+                sender_handle="@researcher:gulls.ai",
+                recipient_handles=["@reviewer:gulls.ai"],
+                content=large_content,
+            )
+
+        self.assertIsNone(self.repository.get_thread("thread_1"))
+        self.assertEqual((), self.repository.list_deliveries_by_recipient(self.recipient.agent_id))
+
+    def test_large_message_with_content_ref_stays_out_of_inbox_rows(self) -> None:
+        large_content = "x" * (MAX_ENVELOPE_INLINE_CHARS + 1)
+
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content=large_content,
+            content_ref="payload://thread_1/message_1/full",
+        )
+        inbox = self.service.get_inbox("@reviewer:gulls.ai")
+
+        self.assertIsNone(result.message.content_inline)
+        self.assertEqual("payload://thread_1/message_1/full", result.message.content_ref)
+        self.assertIsNone(result.deliveries[0].current_content_inline)
+        self.assertEqual("payload://thread_1/message_1/full", result.deliveries[0].current_content_ref)
+        self.assertIsNone(inbox[0].message.content_inline)
+        self.assertIsNone(inbox[0].delivery.current_content_inline)
+        self.assertEqual("payload://thread_1/message_1/full", inbox[0].message.content_ref)
+
+    def test_hook_result_large_inline_requires_content_ref(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Small delivery.",
+        )
+        large_content = "x" * (MAX_ENVELOPE_INLINE_CHARS + 1)
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.apply_hook_result(
+                result.deliveries[0].delivery_id,
+                hook="receive.before",
+                runtime="cloud_node",
+                content=large_content,
+            )
+
+        updated = self.service.apply_hook_result(
+            result.deliveries[0].delivery_id,
+            hook="receive.before",
+            runtime="cloud_node",
+            content=large_content,
+            content_ref="payload://delivery_1/current",
+        )
+
+        self.assertIsNone(updated.current_content_inline)
+        self.assertEqual("payload://delivery_1/current", updated.current_content_ref)
+        self.assertEqual(("current_content_inline", "current_content_ref"), updated.workflow_trace[-1].changed)
+
     def test_task_result_is_durable_without_live_stream(self) -> None:
         task = self.service.create_task(
             requester_handle="@researcher:gulls.ai",
@@ -181,6 +242,45 @@ class MessageHubServiceTest(TestCase):
         assert result_message is not None
         self.assertEqual("task_result", result_message.intent)
         self.assertEqual("payload://task_1/result", result.content_ref)
+
+    def test_large_task_result_content_requires_content_ref(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Return a large result by ref.",
+        )
+        large_content = "x" * (MAX_ENVELOPE_INLINE_CHARS + 1)
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.return_task_result(
+                task.task_id,
+                responder_handle="@reviewer:gulls.ai",
+                content=large_content,
+            )
+
+        result = self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            content=large_content,
+            content_ref="payload://task_1/result",
+        )
+        result_message = self.repository.get_message(result.result_message_id)
+
+        self.assertIsNone(result.content_inline)
+        self.assertEqual("payload://task_1/result", result.content_ref)
+        self.assertIsNotNone(result_message)
+        assert result_message is not None
+        self.assertIsNone(result_message.content_inline)
+        self.assertEqual("payload://task_1/result", result_message.content_ref)
+
+    def test_large_task_objective_is_rejected(self) -> None:
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_task(
+                requester_handle="@researcher:gulls.ai",
+                recipient_handle="@reviewer:gulls.ai",
+                objective="x" * (MAX_ENVELOPE_INLINE_CHARS + 1),
+                input_ref="payload://task_1/input",
+            )
 
     def test_task_result_can_link_optional_stream_without_stream_events(self) -> None:
         task = self.service.create_task(

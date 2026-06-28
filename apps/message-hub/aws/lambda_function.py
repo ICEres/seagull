@@ -23,6 +23,7 @@ SAFETY_BLOCKED_TERMS = tuple(
 DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+MAX_ENVELOPE_INLINE_CHARS = 4000
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -307,17 +308,17 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
     recipients = [require_agent_by_handle(handle) for handle in recipient_handles]
     visibility = optional_string(body, "visibility") or "direct"
     refs = refs_list(body.get("refs", []), "refs")
+    content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
+    content_ref = optional_string(body, "content_ref")
     recipients, routing_trace, needs_review = apply_routing_rules(
         recipients=recipients,
-        content_inline=optional_string(body, "content") or optional_string(body, "content_inline"),
-        content_ref=optional_string(body, "content_ref"),
+        content_inline=content_inline,
+        content_ref=content_ref,
         refs=refs,
     )
     if visibility != "public" and not recipients:
         raise BadRequest("direct or limited messages require at least one recipient")
 
-    content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
-    content_ref = optional_string(body, "content_ref")
     if content_inline is None and content_ref is None and not refs:
         raise BadRequest("content, content_ref, or refs is required")
 
@@ -328,6 +329,11 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
             return response(200, send_result(existing_message_id, idempotent=True))
 
     safety_status = local_safety_status(content_inline)
+    stored_content_inline, stored_content_ref = envelope_content_for_storage(
+        content_inline,
+        content_ref,
+        "message content",
+    )
 
     thread_id = optional_string(body, "thread_id")
     now = now_iso()
@@ -348,8 +354,8 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         "sender_handle": sender["handle"],
         "intent": optional_string(body, "intent") or "message",
         "visibility": visibility,
-        "content_inline": content_inline,
-        "content_ref": content_ref,
+        "content_inline": stored_content_inline,
+        "content_ref": stored_content_ref,
         "refs": refs,
         "schema_version": "seagull.message.v1",
         "safety_status": safety_status,
@@ -384,8 +390,8 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
             "recipient_handle": recipient["handle"],
             "status": "needs_review" if needs_review else "delivered",
             "retry_count": 0,
-            "current_content_inline": content_inline,
-            "current_content_ref": content_ref,
+            "current_content_inline": stored_content_inline,
+            "current_content_ref": stored_content_ref,
             "refs": refs,
             "workflow_trace": routing_trace,
             "current_stage": "human.review" if needs_review else "agent.wait",
@@ -436,6 +442,7 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
     requester = require_agent_by_handle(required(body, "requester_handle"))
     recipient = require_agent_by_handle(required(body, "recipient_handle"))
     objective = required(body, "objective")
+    require_small_inline(objective, "objective")
     idempotency_key = optional_string(body, "idempotency_key")
     if idempotency_key:
         existing_task_id = get_idempotent_task_id(requester["agent_id"], idempotency_key)
@@ -575,11 +582,16 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
     content_ref = optional_string(body, "content_ref")
     artifact_refs = string_list(body.get("artifact_refs", []), "artifact_refs")
     tool_use_summary_refs = string_list(body.get("tool_use_summary_refs", []), "tool_use_summary_refs")
+    stored_content_inline, stored_content_ref = envelope_content_for_storage(
+        content_inline,
+        content_ref,
+        "task result content",
+    )
     stream_id = optional_string(body, "stream_id") or task.get("stream_id")
     if task.get("stream_id") and stream_id != task["stream_id"]:
         raise BadRequest("task result stream_id must match task stream_id")
     error = optional_string(body, "error")
-    if content_inline is None and content_ref is None and not artifact_refs and error is None:
+    if stored_content_inline is None and stored_content_ref is None and not artifact_refs and error is None:
         raise BadRequest("task result requires content, content_ref, artifact_refs, or error")
 
     result_id = f"task_result_{uuid.uuid4().hex}"
@@ -595,7 +607,7 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
                         "thread_id": task["thread_id"],
                         "intent": "task_result",
                         "visibility": "direct",
-                        "content_ref": content_ref,
+                        "content_ref": stored_content_ref,
                         "refs": [{"type": "task_result", "url": result_ref, "remember_as": "task result"}],
                     }
                 )
@@ -612,8 +624,8 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
         "state": state,
         "result_message_id": message_body["message_id"],
         "stream_id": stream_id,
-        "content_inline": content_inline,
-        "content_ref": content_ref,
+        "content_inline": stored_content_inline,
+        "content_ref": stored_content_ref,
         "artifact_refs": artifact_refs,
         "tool_use_summary_refs": tool_use_summary_refs,
         "error": error,
@@ -966,11 +978,23 @@ def submit_hook_result(delivery_id: str, event: dict[str, Any]) -> dict[str, Any
     content_inline = optional_string(body, "content") or optional_string(body, "current_content_inline")
     content_ref = optional_string(body, "content_ref") or optional_string(body, "current_content_ref")
     if content_inline is not None:
-        delivery["current_content_inline"] = content_inline
+        stored_content_inline, stored_content_ref = envelope_content_for_storage(
+            content_inline,
+            content_ref,
+            "delivery content",
+        )
+        delivery["current_content_inline"] = stored_content_inline
         changed.append("current_content_inline")
+        if stored_content_ref is not None:
+            delivery["current_content_ref"] = stored_content_ref
+            changed.append("current_content_ref")
     if content_ref is not None:
         delivery["current_content_ref"] = content_ref
-        changed.append("current_content_ref")
+        if content_inline is None:
+            delivery.pop("current_content_inline", None)
+            changed.append("current_content_inline")
+        if "current_content_ref" not in changed:
+            changed.append("current_content_ref")
     if refs:
         delivery["refs"] = list(delivery.get("refs", [])) + refs
         changed.append("refs")
@@ -1637,6 +1661,23 @@ def optional_string(body: dict[str, Any], key: str) -> str | None:
         raise BadRequest(f"{key} must be a string")
     value = value.strip()
     return value or None
+
+
+def require_small_inline(value: str, field_name: str) -> None:
+    if len(value) > MAX_ENVELOPE_INLINE_CHARS:
+        raise BadRequest(f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; use refs or content_ref")
+
+
+def envelope_content_for_storage(
+    content_inline: str | None,
+    content_ref: str | None,
+    field_name: str,
+) -> tuple[str | None, str | None]:
+    if content_inline is not None and len(content_inline) > MAX_ENVELOPE_INLINE_CHARS:
+        if content_ref is None:
+            raise BadRequest(f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; provide content_ref")
+        return None, content_ref
+    return content_inline, content_ref
 
 
 def string_list(value: Any, name: str) -> list[str]:

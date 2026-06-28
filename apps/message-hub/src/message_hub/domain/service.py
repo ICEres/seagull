@@ -68,6 +68,7 @@ DeliveryEventPublisher = Callable[[dict[str, Any]], None]
 DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+MAX_ENVELOPE_INLINE_CHARS = 4000
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -200,7 +201,8 @@ class MessageHubService:
         idempotency_key: str | None = None,
     ) -> SendMessageResult:
         message_refs = tuple(normalize_message_ref(ref) for ref in refs)
-        if content is None and content_ref is None and not message_refs:
+        normalized_content_ref = normalized_optional_string(content_ref)
+        if content is None and normalized_content_ref is None and not message_refs:
             raise InvalidMessageError("message content, content_ref, or refs are required")
 
         sender = self._require_agent_by_handle(sender_handle)
@@ -209,7 +211,7 @@ class MessageHubService:
         recipients, routing_trace, needs_review = self._apply_routing_rules(
             recipients=recipients,
             content=content,
-            content_ref=content_ref,
+            content_ref=normalized_content_ref,
             refs=message_refs,
         )
         if not recipients and visibility != "public":
@@ -228,13 +230,18 @@ class MessageHubService:
                 sender=sender,
                 recipients=recipients,
                 content=content,
-                content_ref=content_ref,
+                content_ref=normalized_content_ref,
                 intent=intent,
                 visibility=visibility,
                 thread_id=thread_id,
             )
         )
         require_deliverable(safety_decision)
+        stored_content, stored_content_ref = envelope_content_for_storage(
+            content,
+            normalized_content_ref,
+            "message content",
+        )
 
         now = self._clock()
         resolved_thread_id = thread_id or self._new_id("thread")
@@ -245,8 +252,8 @@ class MessageHubService:
             recipient_agent_ids=tuple(agent.agent_id for agent in recipients),
             intent=intent,
             visibility=visibility,
-            content_inline=content,
-            content_ref=content_ref,
+            content_inline=stored_content,
+            content_ref=stored_content_ref,
             refs=message_refs,
             safety_status=safety_status_for(safety_decision),
             created_at=now,
@@ -286,8 +293,8 @@ class MessageHubService:
                 sender_agent_id=sender.agent_id,
                 recipient_agent_id=recipient.agent_id,
                 status=DeliveryStatus.NEEDS_REVIEW if needs_review else DeliveryStatus.DELIVERED,
-                current_content_inline=content,
-                current_content_ref=content_ref,
+                current_content_inline=stored_content,
+                current_content_ref=stored_content_ref,
                 refs=message_refs,
                 workflow_trace=routing_trace,
                 current_stage="human.review" if needs_review else "agent.wait",
@@ -508,6 +515,7 @@ class MessageHubService:
         requester = self._require_agent_by_handle(requester_handle)
         recipient = self._require_agent_by_handle(recipient_handle)
         normalized_objective = normalize_required(objective, "objective")
+        require_small_inline(normalized_objective, "objective")
         normalized_context_refs = tuple(normalize_required(ref, "context_ref") for ref in context_refs)
         normalized_allowed_tool_names = tuple(
             normalize_required(tool_name, "allowed_tool_name")
@@ -675,12 +683,17 @@ class MessageHubService:
             normalize_required(ref, "tool_use_summary_ref")
             for ref in tool_use_summary_refs
         )
+        stored_content, stored_content_ref = envelope_content_for_storage(
+            content,
+            content_ref,
+            "task result content",
+        )
         normalized_stream_id = normalized_optional_string(stream_id) or task.stream_id
         if task.stream_id is not None and normalized_stream_id != task.stream_id:
             raise InvalidMessageError("task result stream_id must match task stream_id")
         if (
-            content is None
-            and content_ref is None
+            stored_content is None
+            and stored_content_ref is None
             and not normalized_artifact_refs
             and error is None
         ):
@@ -691,7 +704,7 @@ class MessageHubService:
         notification = self.send_message(
             sender_handle=responder.handle,
             recipient_handles=(self._require_agent(task.requester_agent_id).handle,),
-            content_ref=content_ref,
+            content_ref=stored_content_ref,
             refs=(MessageRef(type="task_result", url=result_ref, remember_as="task result"),),
             intent="task_result",
             visibility="direct",
@@ -707,8 +720,8 @@ class MessageHubService:
             state=task_state,
             result_message_id=notification.message.message_id,
             stream_id=normalized_stream_id,
-            content_inline=normalized_optional_string(content),
-            content_ref=normalized_optional_string(content_ref),
+            content_inline=stored_content,
+            content_ref=stored_content_ref,
             artifact_refs=normalized_artifact_refs,
             tool_use_summary_refs=normalized_tool_use_summary_refs,
             error=normalized_optional_string(error),
@@ -883,11 +896,23 @@ class MessageHubService:
         current_stage = next_stage_after_hook(normalized_hook, delivery.current_stage)
 
         if content is not None:
-            current_content_inline = content
+            current_content_inline, normalized_content_ref = envelope_content_for_storage(
+                content,
+                content_ref,
+                "delivery content",
+            )
             changed.append("current_content_inline")
+            if normalized_content_ref is not None:
+                current_content_ref = normalized_content_ref
+                changed.append("current_content_ref")
         if content_ref is not None:
-            current_content_ref = content_ref
-            changed.append("current_content_ref")
+            normalized_content_ref = normalized_optional_string(content_ref)
+            current_content_ref = normalized_content_ref
+            if content is None:
+                current_content_inline = None
+                changed.append("current_content_inline")
+            if "current_content_ref" not in changed:
+                changed.append("current_content_ref")
         if normalized_refs:
             delivery_refs = (*delivery.refs, *normalized_refs)
             changed.append("refs")
@@ -1251,6 +1276,28 @@ def normalized_optional_string(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def require_small_inline(value: str, field_name: str) -> None:
+    if len(value) > MAX_ENVELOPE_INLINE_CHARS:
+        raise InvalidMessageError(
+            f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; use refs or content_ref"
+        )
+
+
+def envelope_content_for_storage(
+    content: str | None,
+    content_ref: str | None,
+    field_name: str,
+) -> tuple[str | None, str | None]:
+    normalized_content_ref = normalized_optional_string(content_ref)
+    if content is not None and len(content) > MAX_ENVELOPE_INLINE_CHARS:
+        if normalized_content_ref is None:
+            raise InvalidMessageError(
+                f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; provide content_ref"
+            )
+        return None, normalized_content_ref
+    return content, normalized_content_ref
 
 
 def normalize_routing_rule_mode(mode: str) -> RoutingRuleMode:

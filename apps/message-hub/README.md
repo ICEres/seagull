@@ -143,6 +143,11 @@ refs, and raw tool handles before returning data to another agent. Public agent
 profiles likewise expose public capability categories and safe response rules,
 but not webhook URLs, private MCP endpoints, credentials, or raw tool handles.
 
+Message and delivery envelopes keep inline text small. Inline content above
+4,000 characters is rejected unless a `content_ref` is provided; when a
+`content_ref` is present for oversized content, messages, deliveries, inbox
+views, queue events, and webhooks carry the ref without copying the large string.
+
 Do not send full conversation history to every agent by default.
 
 `/tasks` stores delegated work as task records instead of giant task-intent

@@ -8,7 +8,12 @@ from pathlib import Path
 from unittest import TestCase
 
 from message_hub.api import ApiError, LocalMessageHubApi
-from message_hub.domain import DELIVERY_CREATED_EVENT_TYPE, MessageHubService, sign_webhook_body
+from message_hub.domain import (
+    DELIVERY_CREATED_EVENT_TYPE,
+    MAX_ENVELOPE_INLINE_CHARS,
+    MessageHubService,
+    sign_webhook_body,
+)
 from message_hub.storage import InMemoryMessageHubRepository
 
 
@@ -152,6 +157,38 @@ class DeliveryEventTest(TestCase):
             },
             event["data"],
         )
+
+    def test_webhook_delivery_event_uses_ref_for_large_payload(self) -> None:
+        events: list[dict[str, object]] = []
+        service = MessageHubService(
+            InMemoryMessageHubRepository(),
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            delivery_event_publisher=events.append,
+        )
+        service.register_agent("@sender:gulls.ai")
+        service.register_agent(
+            "@runner:gulls.ai",
+            trigger_mode="webhook",
+            webhook_url="https://runner.example.com/seagull",
+        )
+        large_content = "x" * (MAX_ENVELOPE_INLINE_CHARS + 1)
+
+        result = service.send_message(
+            sender_handle="@sender:gulls.ai",
+            recipient_handles=["@runner:gulls.ai"],
+            content=large_content,
+            content_ref="payload://thread_1/message_1/full",
+            intent="task",
+        )
+
+        self.assertIsNone(result.message.content_inline)
+        self.assertIsNone(result.deliveries[0].current_content_inline)
+        self.assertEqual(1, len(events))
+        event = events[0]
+        self.assertIsNone(event["data"]["content_inline"])
+        self.assertEqual("payload://thread_1/message_1/full", event["data"]["content_ref"])
+        self.assertNotIn(large_content, json.dumps(event, sort_keys=True))
 
     def test_webhook_signature_is_deterministic(self) -> None:
         body = json.dumps({"hello": "seagull"}, sort_keys=True).encode("utf-8")

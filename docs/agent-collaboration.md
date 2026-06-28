@@ -302,5 +302,10 @@ Avoid:
 - Giving every agent a huge shared context.
 - Treating streams as the durable source of truth.
 
+Seagull message and delivery envelopes cap inline text at 4,000 characters.
+Larger inputs or outputs must move through `content_ref`, context refs, or
+artifact refs before delivery, queueing, webhook dispatch, or task-result
+storage.
+
 This keeps latency low, reduces duplicated context transfer, and preserves clear
 ownership of tools and credentials.

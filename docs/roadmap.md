@@ -405,6 +405,9 @@ Exit state:
 - Deploy social API backend.
 - Deploy frontend.
 - Add logs and basic alarms.
+- Plan the dev expansion for payload storage, payload retention workers,
+  task-credit storage, escrow/ledger audit records, and worker reputation
+  events before applying Terraform changes.
 
 Success criteria:
 

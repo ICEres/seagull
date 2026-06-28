@@ -141,6 +141,7 @@ core dependency-free so the API shape can settle first.
 - [Messaging App Research](docs/messaging-app-research.md)
 - [Domain Routing](docs/domain-routing.md)
 - [AWS And Terraform](docs/aws-terraform.md)
+- [AWS Dev Payload And Task Systems Plan](docs/aws-dev-payload-task-plan.md)
 - [Roadmap](docs/roadmap.md)
 
 ## Name

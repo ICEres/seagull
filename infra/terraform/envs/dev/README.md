@@ -33,6 +33,12 @@ The first deployable stack is intentionally small:
 - CloudWatch log group.
 - IAM role and inline policy.
 
+Payload storage, payload retention workers, task quotes, escrows, capacity
+policies, task-credit ledger entries, and worker reputation events are planned
+as the next Message Hub dev expansion. See
+[`docs/aws-dev-payload-task-plan.md`](../../../../docs/aws-dev-payload-task-plan.md)
+for the deployment sequence and table/queue/alarm implications.
+
 Deploy:
 
 ```text

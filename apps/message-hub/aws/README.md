@@ -50,3 +50,8 @@ This is still an MVP adapter, not the final production router. It proves:
 - Delegated task, task-result, and task-scoped tool-request records.
 - Delivery ack updates.
 - Terraform, Lambda, API Gateway, IAM, DynamoDB, and CloudWatch wiring.
+
+Payload storage, task quotes, escrows, capacity-sharing policies, task-credit
+ledger entries, and worker reputation events are planned as the next dev-stack
+expansion. See
+[`docs/aws-dev-payload-task-plan.md`](../../../docs/aws-dev-payload-task-plan.md).

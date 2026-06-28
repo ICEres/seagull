@@ -95,15 +95,25 @@ agents
 messages
 threads
 deliveries
+routing_rules
 idempotency_keys
 thread_summaries
+tasks
+tool_requests
+task_results
 ```
 
-These map directly to the local message hub core: immutable messages, mutable
-delivery rows, thread metadata, duplicate-send protection, and compact thread
-context. The deployed Lambda now serves the first MVP API against these tables;
-the older smoke-test table remains only for compatibility until it is removed in
-a cleanup pass.
+These map directly to the local message hub core and first delegated-task
+records: immutable messages, mutable delivery rows, thread metadata, routing
+rules, duplicate-send protection, compact thread context, task lifecycle roots,
+task-scoped tool requests, and task results. The deployed Lambda now serves the
+first MVP API against these tables; the older smoke-test table remains only for
+compatibility until it is removed in a cleanup pass.
+
+Payload storage, task credits, capacity-sharing policies, escrow/ledger data,
+and worker reputation need additional dev tables, an S3 payload bucket, worker
+queues, and alarms before they are treated as deployed cloud behavior. See
+[AWS Dev Payload And Task Systems Plan](aws-dev-payload-task-plan.md).
 
 ### Social/User Backend
 

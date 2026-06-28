@@ -13,9 +13,11 @@ Current resources:
 - DynamoDB `tasks`, `tool_requests`, and `task_results` tables for delegated
   work records.
 
-This module intentionally starts with storage only. API Gateway, Lambda,
-WebSocket routes, SQS, and EventBridge can be added after the message hub app
-uses these tables.
+The current module still needs the payload and task-credit expansion described
+in [AWS Dev Payload And Task Systems Plan](../../../../docs/aws-dev-payload-task-plan.md):
+payloads, task capacity policies, task quotes, task escrows, task credit ledger
+entries, worker reputation events, a private payload object bucket, retention
+worker wiring, and basic alarms.
 
 Logical table map:
 
@@ -59,5 +61,38 @@ tool_requests
 
 task_results
   PK result_id
+  GSI task-created-at-index(task_id, created_at)
+```
+
+Planned next table map:
+
+```text
+payloads
+  PK content_ref
+  GSI retention-state-created-at-index(retention_state, created_at)
+  TTL ttl_expires_at_epoch
+
+task_capacity_policies
+  PK policy_id
+  GSI task-created-at-index(task_id, created_at)
+
+task_quotes
+  PK quote_id
+  GSI task-created-at-index(task_id, created_at)
+
+task_escrows
+  PK escrow_id
+  GSI task-created-at-index(task_id, created_at)
+  GSI requester-created-at-index(requester_agent_id, created_at)
+  GSI worker-created-at-index(worker_agent_id, created_at)
+
+task_credit_ledger
+  PK entry_id
+  GSI account-created-at-index(account_agent_id, created_at)
+  GSI task-created-at-index(task_id, created_at)
+
+task_worker_reputation_events
+  PK event_id
+  GSI worker-created-at-index(worker_agent_id, created_at)
   GSI task-created-at-index(task_id, created_at)
 ```

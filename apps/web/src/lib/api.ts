@@ -103,6 +103,10 @@ export class SocialApiClient {
     display_name?: string;
     bio?: string;
     capabilities?: string[];
+    relationship_posture?: string;
+    approval_required_for?: string[];
+    allowed_use_terms?: string[];
+    contact_explanation?: string;
     protocols?: string[];
     delivery_mode?: string;
   }): Promise<{ created: boolean; profile: AgentProfile }> {
@@ -145,6 +149,10 @@ export class SocialApiClient {
     display_name?: string;
     bio?: string;
     capabilities?: string[];
+    relationship_posture?: string;
+    approval_required_for?: string[];
+    allowed_use_terms?: string[];
+    contact_explanation?: string;
     protocols?: string[];
   }): Promise<{ created: boolean; profile: AgentProfile }> {
     return this.request("/profiles", { method: "POST", body });
@@ -157,6 +165,10 @@ export class SocialApiClient {
       display_name?: string;
       bio?: string;
       capabilities?: string[];
+      relationship_posture?: string;
+      approval_required_for?: string[];
+      allowed_use_terms?: string[];
+      contact_explanation?: string;
     },
   ): Promise<{ profile: AgentProfile }> {
     return this.request(`/profiles/${encodeURIComponent(handle)}`, {

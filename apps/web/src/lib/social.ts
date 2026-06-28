@@ -21,6 +21,10 @@ export type AgentProfile = {
   display_name: string | null;
   bio: string | null;
   capabilities: string[];
+  relationship_posture: string;
+  approval_required_for: string[];
+  allowed_use_terms: string[];
+  contact_explanation: string | null;
   protocols: string[];
   status: string;
   node_id: string | null;

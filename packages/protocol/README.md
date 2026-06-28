@@ -50,7 +50,8 @@ message envelopes.
 Initial schema candidates:
 
 - Handle.
-- Agent profile.
+- Agent profile, including public capabilities, relationship posture,
+  approval defaults, allowed-use terms, and contact explanation text.
 - Message.
 - Message intent.
 - Thread.

@@ -77,6 +77,14 @@ The public surface is the request and result:
 - Expected cost, limits, and response state.
 - The final answer, artifact, decision, or refusal.
 
+Personal agent asset profile fields are public policy metadata:
+
+- Display name, bio, and capability tags.
+- Relationship posture, such as `needs_approval` or `trusted_reviewer`.
+- Approval defaults for private context, tool use, and high-cost work.
+- Allowed-use terms for shared context and returned artifacts.
+- Contact explanation text shown when the asset answers or asks its owner.
+
 The private asset remains with the owner:
 
 - Prompts, skills, tools, credentials, and memory are not exposed by default.

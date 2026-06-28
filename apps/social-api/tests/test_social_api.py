@@ -268,6 +268,37 @@ class SocialApiServiceTest(TestCase):
 
         self.assertEqual((mapped,), filtered)
 
+    def test_profile_asset_policy_fields_are_public_metadata(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@reviewer:seagull.local",
+            display_name="Reviewer",
+            capabilities=("review",),
+            relationship_posture="trusted_reviewer",
+            approval_required_for=("private_context", "tool_use"),
+            allowed_use_terms=("inspect_shared_context", "return_artifacts"),
+            contact_explanation="Requested because this agent reviews frontend plans.",
+        )
+        updated = self.service.update_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle=profile.handle,
+            relationship_posture="needs_approval",
+            approval_required_for=("private_context", "tool_use", "high_cost_work"),
+            allowed_use_terms=("inspect_shared_context",),
+            contact_explanation="Requester matched a review capability.",
+        )
+
+        self.assertEqual("trusted_reviewer", profile.relationship_posture)
+        self.assertEqual(("private_context", "tool_use"), profile.approval_required_for)
+        self.assertEqual(("inspect_shared_context", "return_artifacts"), profile.allowed_use_terms)
+        self.assertEqual("Requested because this agent reviews frontend plans.", profile.contact_explanation)
+        self.assertEqual("needs_approval", updated.relationship_posture)
+        self.assertEqual(("private_context", "tool_use", "high_cost_work"), updated.approval_required_for)
+        self.assertEqual(("inspect_shared_context",), updated.allowed_use_terms)
+        self.assertEqual("Requester matched a review capability.", updated.contact_explanation)
+        self.assertFalse(hasattr(updated, "private_prompt"))
+        self.assertFalse(hasattr(updated, "tool_credentials"))
+
     def test_text_refs_post_preserves_legacy_content(self) -> None:
         profile = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -363,6 +394,30 @@ class LocalSocialApiTest(TestCase):
             api.create_agent_profile(body)
 
         self.assertEqual(409, error.exception.status_code)
+
+    def test_local_api_exposes_profile_asset_policy_fields(self) -> None:
+        api = LocalSocialApi.in_memory()
+        identity = api.identify_human({"provider": "local", "subject": "alice"})["identity"]
+
+        profile = api.create_agent_profile(
+            {
+                "owner_user_id": identity["user_id"],
+                "handle": "@reviewer:seagull.local",
+                "display_name": "Reviewer",
+                "capabilities": ["review"],
+                "relationship_posture": "trusted_reviewer",
+                "approval_required_for": ["private_context", "tool_use"],
+                "allowed_use_terms": ["inspect_shared_context", "return_artifacts"],
+                "contact_explanation": "Requested because this agent reviews frontend plans.",
+            }
+        )["profile"]
+
+        self.assertEqual("trusted_reviewer", profile["relationship_posture"])
+        self.assertEqual(["private_context", "tool_use"], profile["approval_required_for"])
+        self.assertEqual(["inspect_shared_context", "return_artifacts"], profile["allowed_use_terms"])
+        self.assertEqual("Requested because this agent reviews frontend plans.", profile["contact_explanation"])
+        self.assertNotIn("private_prompt", profile)
+        self.assertNotIn("tool_credentials", profile)
 
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

@@ -6,6 +6,7 @@ from typing import Any
 
 from social_api.domain import (
     AgentProfileRecord,
+    DEFAULT_APPROVAL_REQUIRED_FOR,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     FeedEvent,
@@ -146,6 +147,13 @@ class LocalSocialApi:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture") or "needs_approval",
+                approval_required_for=string_list(
+                    body.get("approval_required_for", DEFAULT_APPROVAL_REQUIRED_FOR),
+                    "approval_required_for",
+                ),
+                allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
                 protocols=string_list(body.get("protocols", ("seagull",)), "protocols"),
                 delivery_mode=optional_string(body, "delivery_mode") or "pull",
             )
@@ -165,6 +173,13 @@ class LocalSocialApi:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture") or "needs_approval",
+                approval_required_for=string_list(
+                    body.get("approval_required_for", DEFAULT_APPROVAL_REQUIRED_FOR),
+                    "approval_required_for",
+                ),
+                allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
                 protocols=string_list(body.get("protocols", ("seagull",)), "protocols"),
             )
         except DuplicateAgentHandleError as exc:
@@ -183,6 +198,10 @@ class LocalSocialApi:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=optional_string_list(body, "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture"),
+                approval_required_for=optional_string_list(body, "approval_required_for"),
+                allowed_use_terms=optional_string_list(body, "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
             )
         except PermissionDeniedError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
@@ -397,6 +416,10 @@ def agent_profile_to_dict(profile: AgentProfileRecord) -> dict[str, Any]:
         "display_name": profile.display_name,
         "bio": profile.bio,
         "capabilities": list(profile.capabilities),
+        "relationship_posture": profile.relationship_posture,
+        "approval_required_for": list(profile.approval_required_for),
+        "allowed_use_terms": list(profile.allowed_use_terms),
+        "contact_explanation": profile.contact_explanation,
         "protocols": list(profile.protocols),
         "status": profile.status,
         "node_id": profile.node_id,

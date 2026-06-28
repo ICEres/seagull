@@ -20,6 +20,7 @@ from social_api.api.local import (
     room_to_dict,
 )
 from social_api.domain import (
+    DEFAULT_APPROVAL_REQUIRED_FOR,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     HumanIdentity,
@@ -134,6 +135,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture") or "needs_approval",
+                approval_required_for=string_list(
+                    body.get("approval_required_for", DEFAULT_APPROVAL_REQUIRED_FOR),
+                    "approval_required_for",
+                ),
+                allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
                 protocols=string_list(body.get("protocols", ("seagull",)), "protocols"),
                 delivery_mode=optional_string(body, "delivery_mode") or "pull",
             )
@@ -147,6 +155,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture") or "needs_approval",
+                approval_required_for=string_list(
+                    body.get("approval_required_for", DEFAULT_APPROVAL_REQUIRED_FOR),
+                    "approval_required_for",
+                ),
+                allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
                 protocols=string_list(body.get("protocols", ("seagull",)), "protocols"),
             )
             return response(200, {"created": True, "profile": agent_profile_to_dict(profile)})
@@ -171,6 +186,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 display_name=optional_string(body, "display_name"),
                 bio=optional_string(body, "bio"),
                 capabilities=optional_string_list(body, "capabilities"),
+                relationship_posture=optional_string(body, "relationship_posture"),
+                approval_required_for=optional_string_list(body, "approval_required_for"),
+                allowed_use_terms=optional_string_list(body, "allowed_use_terms"),
+                contact_explanation=optional_string(body, "contact_explanation"),
             )
             return response(200, {"profile": agent_profile_to_dict(profile)})
 

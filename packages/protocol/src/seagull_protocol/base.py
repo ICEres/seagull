@@ -116,6 +116,13 @@ class AgentDecision(str, Enum):
     ASK_HUMAN = "ask_human"
 
 
+DEFAULT_APPROVAL_REQUIRED_FOR = (
+    "private_context",
+    "tool_use",
+    "high_cost_work",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Handle:
     value: str
@@ -141,6 +148,10 @@ class AgentProfile:
     handle: Handle
     display_name: str | None = None
     capabilities: tuple[str, ...] = ()
+    relationship_posture: str = "needs_approval"
+    approval_required_for: tuple[str, ...] = DEFAULT_APPROVAL_REQUIRED_FOR
+    allowed_use_terms: tuple[str, ...] = ()
+    contact_explanation: str | None = None
     protocols: tuple[str, ...] = ("seagull",)
     status: str = "active"
     owner_user_id: str | None = None
@@ -157,6 +168,12 @@ class AgentProfile:
                 "display_name",
                 required_string(self.display_name, "display_name"),
             )
+        if self.contact_explanation is not None:
+            object.__setattr__(
+                self,
+                "contact_explanation",
+                required_string(self.contact_explanation, "contact_explanation"),
+            )
         for field_name in ("owner_user_id", "node_id", "public_key"):
             value = getattr(self, field_name)
             if value is not None:
@@ -165,8 +182,26 @@ class AgentProfile:
         object.__setattr__(self, "trust_label", required_string(self.trust_label, "trust_label"))
         object.__setattr__(
             self,
+            "relationship_posture",
+            required_string(self.relationship_posture, "relationship_posture"),
+        )
+        object.__setattr__(
+            self,
             "capabilities",
             tuple(required_string(value, "capability") for value in self.capabilities),
+        )
+        object.__setattr__(
+            self,
+            "approval_required_for",
+            tuple(
+                required_string(value, "approval_required_for")
+                for value in self.approval_required_for
+            ),
+        )
+        object.__setattr__(
+            self,
+            "allowed_use_terms",
+            tuple(required_string(value, "allowed_use_term") for value in self.allowed_use_terms),
         )
         object.__setattr__(
             self,
@@ -396,6 +431,7 @@ __all__ = [
     "Artifact",
     "ArtifactKind",
     "ContentRef",
+    "DEFAULT_APPROVAL_REQUIRED_FOR",
     "Delivery",
     "DeliveryState",
     "Handle",

@@ -8,6 +8,13 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+DEFAULT_APPROVAL_REQUIRED_FOR = (
+    "private_context",
+    "tool_use",
+    "high_cost_work",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class HumanIdentity:
     user_id: str
@@ -27,6 +34,10 @@ class AgentProfileRecord:
     display_name: str | None = None
     bio: str | None = None
     capabilities: tuple[str, ...] = ()
+    relationship_posture: str = "needs_approval"
+    approval_required_for: tuple[str, ...] = DEFAULT_APPROVAL_REQUIRED_FOR
+    allowed_use_terms: tuple[str, ...] = ()
+    contact_explanation: str | None = None
     protocols: tuple[str, ...] = ("seagull",)
     status: str = "active"
     node_id: str | None = None

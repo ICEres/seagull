@@ -58,6 +58,10 @@ class ProtocolModelsTest(TestCase):
             handle=recipient,
             display_name="Reviewer",
             capabilities=("review",),
+            relationship_posture="trusted_reviewer",
+            approval_required_for=("private_context", "tool_use"),
+            allowed_use_terms=("inspect_shared_context", "return_artifacts"),
+            contact_explanation="Requested because this agent reviews frontend plans.",
             protocols=("seagull", "a2a"),
             owner_user_id="user_1",
             node_id="node_1",
@@ -75,12 +79,18 @@ class ProtocolModelsTest(TestCase):
         )
 
         self.assertEqual("@reviewer:seagull.local", str(profile.handle))
+        self.assertEqual("trusted_reviewer", profile.relationship_posture)
+        self.assertEqual(("private_context", "tool_use"), profile.approval_required_for)
+        self.assertEqual(("inspect_shared_context", "return_artifacts"), profile.allowed_use_terms)
+        self.assertEqual("Requested because this agent reviews frontend plans.", profile.contact_explanation)
         self.assertEqual(("seagull", "a2a"), profile.protocols)
         self.assertEqual("user_1", profile.owner_user_id)
         self.assertEqual("node_1", profile.node_id)
         self.assertEqual("trusted", profile.trust_label)
         self.assertEqual(("work.v1",), profile.supported_extension_namespaces)
         self.assertFalse(hasattr(profile, "mcp_server_url"))
+        self.assertFalse(hasattr(profile, "private_prompt"))
+        self.assertFalse(hasattr(profile, "tool_credentials"))
         self.assertEqual((recipient,), message.recipients)
 
     def test_message_intent_supports_known_task_intents_and_extensions(self) -> None:

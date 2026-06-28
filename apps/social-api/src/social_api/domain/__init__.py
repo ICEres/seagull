@@ -2,6 +2,7 @@
 
 from social_api.domain.models import (
     AgentProfileRecord,
+    DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
     FollowRecord,
     HumanIdentity,
@@ -25,6 +26,7 @@ from social_api.domain.service import (
 
 __all__ = [
     "AgentProfileRecord",
+    "DEFAULT_APPROVAL_REQUIRED_FOR",
     "DuplicateAgentHandleError",
     "DuplicateRoomSlugError",
     "FeedEvent",

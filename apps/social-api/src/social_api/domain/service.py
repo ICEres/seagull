@@ -11,6 +11,7 @@ from seagull_protocol import ProtocolError, normalize_handle
 
 from social_api.domain.models import (
     AgentProfileRecord,
+    DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
     FollowRecord,
     HumanIdentity,
@@ -114,6 +115,10 @@ class SocialApiService:
         display_name: str | None = None,
         bio: str | None = None,
         capabilities: Sequence[str] = (),
+        relationship_posture: str = "needs_approval",
+        approval_required_for: Sequence[str] = DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms: Sequence[str] = (),
+        contact_explanation: str | None = None,
         protocols: Sequence[str] = ("seagull",),
         node_id: str | None = None,
         delivery_mode: str = "pull",
@@ -135,6 +140,10 @@ class SocialApiService:
             display_name=clean_optional(display_name),
             bio=clean_optional(bio),
             capabilities=clean_string_tuple(capabilities, "capabilities"),
+            relationship_posture=normalized_required(relationship_posture, "relationship_posture"),
+            approval_required_for=clean_string_tuple(approval_required_for, "approval_required_for"),
+            allowed_use_terms=clean_string_tuple(allowed_use_terms, "allowed_use_terms"),
+            contact_explanation=clean_optional(contact_explanation),
             protocols=clean_string_tuple(protocols, "protocols") or ("seagull",),
             node_id=clean_optional(node_id),
             delivery_mode=normalize_delivery_mode(delivery_mode),
@@ -153,6 +162,10 @@ class SocialApiService:
         display_name: str | None = None,
         bio: str | None = None,
         capabilities: Sequence[str] | None = None,
+        relationship_posture: str | None = None,
+        approval_required_for: Sequence[str] | None = None,
+        allowed_use_terms: Sequence[str] | None = None,
+        contact_explanation: str | None = None,
     ) -> AgentProfileRecord:
         profile = self._require_profile_by_handle(handle)
         self._require_owner(owner_user_id, profile)
@@ -161,6 +174,18 @@ class SocialApiService:
             display_name=clean_optional(display_name) if display_name is not None else profile.display_name,
             bio=clean_optional(bio) if bio is not None else profile.bio,
             capabilities=clean_string_tuple(capabilities, "capabilities") if capabilities is not None else profile.capabilities,
+            relationship_posture=normalized_required(relationship_posture, "relationship_posture")
+            if relationship_posture is not None
+            else profile.relationship_posture,
+            approval_required_for=clean_string_tuple(approval_required_for, "approval_required_for")
+            if approval_required_for is not None
+            else profile.approval_required_for,
+            allowed_use_terms=clean_string_tuple(allowed_use_terms, "allowed_use_terms")
+            if allowed_use_terms is not None
+            else profile.allowed_use_terms,
+            contact_explanation=clean_optional(contact_explanation)
+            if contact_explanation is not None
+            else profile.contact_explanation,
             updated_at=self._clock(),
         )
         self._repository.put_agent_profile(updated)
@@ -189,6 +214,8 @@ class SocialApiService:
                 if lowered_query in profile.handle.lower()
                 or (profile.display_name is not None and lowered_query in profile.display_name.lower())
                 or any(lowered_query in capability.lower() for capability in profile.capabilities)
+                or lowered_query in profile.relationship_posture.lower()
+                or any(lowered_query in term.lower() for term in profile.allowed_use_terms)
             )
         if normalized_status is not None:
             profiles = tuple(profile for profile in profiles if profile.status == normalized_status)
@@ -256,6 +283,10 @@ class SocialApiService:
         display_name: str | None = None,
         bio: str | None = None,
         capabilities: Sequence[str] = (),
+        relationship_posture: str = "needs_approval",
+        approval_required_for: Sequence[str] = DEFAULT_APPROVAL_REQUIRED_FOR,
+        allowed_use_terms: Sequence[str] = (),
+        contact_explanation: str | None = None,
         protocols: Sequence[str] = ("seagull",),
         delivery_mode: str = "pull",
     ) -> AgentProfileRecord:
@@ -271,6 +302,10 @@ class SocialApiService:
             display_name=display_name,
             bio=bio,
             capabilities=capabilities,
+            relationship_posture=relationship_posture,
+            approval_required_for=approval_required_for,
+            allowed_use_terms=allowed_use_terms,
+            contact_explanation=contact_explanation,
             protocols=protocols,
             node_id=node.node_id,
             delivery_mode=delivery_mode,

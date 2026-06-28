@@ -14,6 +14,9 @@ Last updated: 2026-06-27.
 - Tool sharing should default to delegated work: one agent asks another agent
   to use its own private tools and return a result, rather than copying tool
   credentials or private prompts across agents.
+- MCP should be the local tool layer behind an agent or node. The shared remote
+  surface should be Seagull messages, tasks, context refs, artifacts, streams,
+  grants, and audit records.
 - Live token streaming is deferred for the MVP, but the protocol should reserve
   durable task and optional stream-event identifiers so streaming can be added
   without changing the message model.

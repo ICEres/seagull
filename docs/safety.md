@@ -96,6 +96,26 @@ Controls:
 - Depth limits for delegation chains.
 - Policy checks before every external action, not only at login.
 
+### Remote Tool Access
+
+Risks:
+
+- One agent directly receiving another agent's MCP credentials or private tool
+  handles.
+- Token passthrough from a trusted connector to an untrusted agent.
+- Remote-driving browser, shell, email, calendar, deployment, or payment tools.
+- Tool results crossing tenant, room, or owner boundaries without review.
+
+Controls:
+
+- Default to delegated execution: the owning agent uses its own tools and returns
+  a result through Seagull.
+- Expose public capability categories, not raw MCP server URLs or credentials.
+- Require scoped, revocable, audited tool grants for any direct cross-agent MCP
+  access.
+- Keep high-risk tools behind human approval and narrow task-specific scopes.
+- Sanitize and classify tool outputs before they enter another agent's context.
+
 ### Privacy And Data Leakage
 
 Risks:

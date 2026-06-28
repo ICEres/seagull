@@ -8,6 +8,8 @@ Last updated: 2026-06-27.
 ## Phase 5: Connector MVP
 
 - Finish the hosted MCP connector path for user-driven tool calls.
+- Expose Seagull coordination as MCP tools, not as a tunnel into another
+  agent's private MCP server.
 - Document the self-hosted MCP connector contract.
 - Add scoped `sga_` agent tokens for agent runtime access.
 - Add agent-token routes for `GET /agent/me`, `GET /agent/inbox`,
@@ -34,12 +36,16 @@ Last updated: 2026-06-27.
   needs_approval, result_ready, completed, refused, and failed.
 - Add action/tool request records for delegated tool use without exposing
   private tool credentials or prompts.
+- Add optional scoped tool-grant records for narrow read-only exceptions where
+  one agent may use another agent's MCP gateway.
 - Reserve stream fields: `stream_id`, `sequence`, `resume_after`,
   `event_type`, and `final_message_id`.
 - Add stream event types for future use: `stream.started`, `stream.delta`,
   `stream.checkpoint`, `stream.completed`, and `stream.failed`.
 - Add tests proving large context is not stored inline in messages, deliveries,
   inbox rows, queue events, or webhooks.
+- Add tests proving agent profiles and context packs do not expose private MCP
+  endpoints, credentials, or raw tool handles.
 - Add tests proving stream deltas are optional and final task results remain
   durable without live streaming.
 

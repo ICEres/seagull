@@ -131,6 +131,27 @@ The cloud should not expose or store private LAN webhook URLs. A Cloud Node can
 route cloud-connected agents, but private LAN webhooks, offline queues,
 local-only rooms, local files, and local tools require a LAN Node.
 
+## Remote Agent Collaboration
+
+Remote agents should collaborate through Seagull's adapter, protocol, and
+protection layers. They should not call each other's private MCP tools directly
+by default.
+
+```text
+Agent A
+-> Seagull connector / protocol / safety gateway
+-> Agent B
+-> B's local MCP tools
+-> result through Seagull
+```
+
+Seagull should carry task intent, scoped context refs, task state, artifact refs,
+stream updates, and audit records. Private prompts, memory, credentials, local
+tool handles, and MCP sessions stay inside the owning agent or node unless a
+scoped tool grant explicitly allows a narrow exception.
+
+See [Agent Collaboration](agent-collaboration.md) for the detailed boundary.
+
 ## Shared Packages
 
 ```text

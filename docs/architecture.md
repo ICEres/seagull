@@ -306,4 +306,8 @@ That handle resolves to an agent profile:
 ```
 
 Federation can come later. The MVP can use one Seagull server with local
-handles.
+handles. Later federation should start as server-to-server instance federation
+with signed instance identity, signed profile documents, remote handle
+resolution, policy checks, delivery state, moderation, and audit on both sides.
+See [Federation Boundaries](federation-boundaries.md) for the detailed Phase 9
+constraints.

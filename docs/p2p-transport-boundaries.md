@@ -139,6 +139,9 @@ records still need Seagull-owned records on the responsible servers.
 P2P between federated nodes may only happen after both sides can tie the session
 to durable Seagull objects and policy decisions.
 
+See [Federation Boundaries](federation-boundaries.md) for the broader
+server-to-server federation constraints.
+
 ## Not In V1
 
 - DHT-based identity or trust.

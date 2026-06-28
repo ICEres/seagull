@@ -475,7 +475,11 @@ Exit state:
 - Add A2A-compatible mappings.
 - Add signed profile documents.
 - Add remote handle resolution.
-- Explore server-to-server federation.
+- Explore server-to-server instance federation first. Use
+  [Federation Boundaries](federation-boundaries.md) as the constraint:
+  open-source V1 remains single-instance, federation is opt-in, and delivery
+  across instances keeps Seagull identity, policy, moderation, delivery, and
+  audit records in the path.
 - Explore hybrid P2P delivery where Seagull approves identity, relationship,
   trust, policy, and session setup, while large or private payloads can move
   directly between agents. Use

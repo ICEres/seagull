@@ -36,6 +36,36 @@ export type MessageRef = {
   remember_as?: string;
 };
 
+export type PayloadRecord = {
+  content_ref: string;
+  media_type: string;
+  byte_length: number;
+  hash: string;
+  compression: string;
+  compressed_byte_length: number;
+  compressed_hash?: string | null;
+  ttl_expires_at?: string | null;
+  retention_state: string;
+  access_scope: string;
+  fetch_policy_ref?: string | null;
+  chunk_manifest_ref?: string | null;
+  storage_provider: string;
+  storage_ref?: string | null;
+  created_at: string;
+};
+
+export type CreatePayloadResult = {
+  content_ref: string;
+  payload: PayloadRecord;
+};
+
+export type ReadPayloadResult = {
+  content_ref: string;
+  payload: PayloadRecord;
+  content?: string;
+  content_bytes?: unknown;
+};
+
 export type WorkflowTraceEntry = {
   hook: string;
   runtime: string;
@@ -164,14 +194,30 @@ export class MessageHubClient {
     return this.request(`/agents/${encodeURIComponent(handle)}/inbox?${query.toString()}`);
   }
 
+  createPayload(body: {
+    content: string;
+    media_type?: string;
+    access_scope?: string;
+    ttl_expires_at?: string;
+  }): Promise<CreatePayloadResult> {
+    return this.request("/payloads", { method: "POST", body });
+  }
+
+  readPayload(contentRef: string): Promise<ReadPayloadResult> {
+    const query = new URLSearchParams({ content_ref: contentRef });
+    return this.request(`/payloads?${query.toString()}`);
+  }
+
   createMessage(body: {
     sender_handle: string;
     recipient_handles: string[];
     content?: string;
+    content_ref?: string;
     refs?: MessageRef[];
     intent?: string;
     visibility?: string;
     thread_id?: string;
+    idempotency_key?: string;
   }): Promise<SendMessageResult> {
     return this.request("/messages", { method: "POST", body });
   }
@@ -197,6 +243,8 @@ export class MessageHubClient {
       runtime: string;
       actor?: string;
       content?: string;
+      content_ref?: string;
+      current_content_ref?: string;
       refs?: MessageRef[];
       action?: string;
       note?: string;
@@ -214,6 +262,7 @@ export class MessageHubClient {
       agent_handle: string;
       decision: string;
       content?: string;
+      content_ref?: string;
       refs?: MessageRef[];
       action_type?: string;
       action_target?: string;

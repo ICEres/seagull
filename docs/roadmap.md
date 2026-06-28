@@ -260,13 +260,16 @@ Completed so far:
 - Extended the shared payload manifest schema with compressed byte/hash
   metadata, optional chunk metadata, access/fetch policy metadata, and
   local-node/cloud-object storage hints.
+- Added client support for `content_ref` payload flows across the Python SDK
+  helper, connector HTTP client, MCP send-message tool, and web message-hub
+  client types.
 
 Remaining:
 
 - Harden the protocol boundary between durable messages, task lifecycle records,
   optional stream events, and large payload references.
-- Wire `content_ref` and payload manifest types through future HTTP/cloud
-  storage adapters instead of only local APIs.
+- Wire payload storage through future HTTP/cloud storage adapters instead of
+  only local APIs.
 - Wire scoped tool-grant records into policy and audit for narrow, explicit
   cross-agent MCP exceptions.
 - Keep token streaming out of the MVP. Store final results, artifacts, task
@@ -296,6 +299,8 @@ Exit state:
 - The Python SDK helper can hide inline-vs-payload branching from local callers.
 - The shared payload manifest schema covers local-node payloads now and future
   cloud object storage without requiring large content in message envelopes.
+- SDK and connector clients can submit small inline messages, ref-only messages,
+  and locally stored large payloads without callers copying storage details.
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.

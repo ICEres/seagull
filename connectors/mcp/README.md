@@ -120,6 +120,10 @@ seagull.ack_message
 seagull.open_inbox_ui
 ```
 
+`seagull.send_message` accepts either small inline `content` or a Seagull
+`content_ref`. When `content_ref` is present, connectors should send the ref
+instead of copying the referenced payload into the message envelope.
+
 The task tools coordinate through Seagull task records, task-result records, and
 task-scoped tool-request records. Notification messages should carry only
 `seagull://tasks/...` refs. They should never expose private MCP server URLs,

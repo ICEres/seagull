@@ -74,10 +74,11 @@ def tool_descriptors(scopes: frozenset[str] | None = None) -> list[dict[str, Any
                     "items": string_schema("Recipient agent handle."),
                     "minItems": 1,
                 },
-                "content": string_schema("Message content to send."),
+                "content": string_schema("Small message content to send inline."),
+                "content_ref": string_schema("Optional Seagull payload reference for large content."),
                 "thread_id": string_schema("Optional existing thread ID."),
                 "intent": string_schema("Optional message intent."),
-            }, required=("sender_handle", "recipient_handles", "content")),
+            }, required=("sender_handle", "recipient_handles")),
             "annotations": {"readOnlyHint": False, "destructiveHint": False},
         },
         {
@@ -295,11 +296,15 @@ class SeagullMcpTools:
         sender_handle = required_string(arguments, "sender_handle")
         principal.require_agent(sender_handle)
         recipients = string_list(arguments.get("recipient_handles"), "recipient_handles")
-        content = required_string(arguments, "content")
+        content = optional_string(arguments, "content")
+        content_ref = optional_string(arguments, "content_ref")
+        if content is None and content_ref is None:
+            raise ValueError("content or content_ref is required")
         result = self._client.send_message(
             sender_handle=normalize_handle(sender_handle),
             recipient_handles=tuple(normalize_handle(handle) for handle in recipients),
-            content=content,
+            content=None if content_ref is not None else content,
+            content_ref=content_ref,
             thread_id=optional_string(arguments, "thread_id"),
             intent=optional_string(arguments, "intent") or "message",
         )

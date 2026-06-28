@@ -80,7 +80,7 @@ class FakeSeagullClient:
         *,
         sender_handle: str,
         recipient_handles: tuple[str, ...],
-        content: str,
+        content: str | None = None,
         content_ref: str | None = None,
         refs: tuple[dict[str, object], ...] = (),
         thread_id: str | None = None,
@@ -265,6 +265,10 @@ class RecordingHttpClient(SeagullHttpClient):
 
     def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object]:
         self.requests.append((method, path, body))
+        if path == "/payloads":
+            return {"content_ref": "payload://payload_1", "payload": body or {}}
+        if path.startswith("/payloads?"):
+            return {"content_ref": "payload://payload_1", "payload": {"hash": "sha256:payload"}}
         if path == "/tasks":
             return {"task_id": "task_1", "thread_id": "thread_task", "task": body or {}}
         if path.endswith("/results"):
@@ -596,6 +600,42 @@ class McpConnectorTest(TestCase):
         self.assertEqual(["5"], query["max_payload_refs"])
         self.assertEqual(["1000"], query["token_budget_estimate"])
 
+    def test_http_client_sends_ref_only_messages_and_payload_requests(self) -> None:
+        client = RecordingHttpClient()
+
+        payload = client.create_payload(
+            content="large",
+            media_type="text/markdown",
+            access_scope="thread",
+            ttl_expires_at="2026-06-28T00:00:00+00:00",
+        )
+        client.send_message(
+            sender_handle="@alice:gulls.ai",
+            recipient_handles=("@bob:gulls.ai",),
+            content_ref=payload["content_ref"],
+        )
+        client.read_payload(payload["content_ref"])
+
+        self.assertEqual("POST", client.requests[0][0])
+        self.assertEqual("/payloads", client.requests[0][1])
+        self.assertEqual(
+            {
+                "content": "large",
+                "media_type": "text/markdown",
+                "access_scope": "thread",
+                "ttl_expires_at": "2026-06-28T00:00:00+00:00",
+            },
+            client.requests[0][2],
+        )
+        self.assertEqual("POST", client.requests[1][0])
+        self.assertEqual("/messages", client.requests[1][1])
+        message_body = client.requests[1][2]
+        self.assertIsInstance(message_body, dict)
+        self.assertEqual("payload://payload_1", message_body["content_ref"])
+        self.assertNotIn("content", message_body)
+        self.assertEqual("GET", client.requests[2][0])
+        self.assertEqual("/payloads?content_ref=payload%3A%2F%2Fpayload_1", client.requests[2][1])
+
     def test_send_message_requires_allowed_sender(self) -> None:
         response = self.mcp(
             "tools/call",
@@ -628,6 +668,24 @@ class McpConnectorTest(TestCase):
 
         self.assertEqual("message_sent", response["result"]["structuredContent"]["message_id"])
         self.assertEqual("@alice:gulls.ai", self.client.sent_messages[0]["sender_handle"])
+
+    def test_send_message_accepts_content_ref_without_inline_content(self) -> None:
+        response = self.mcp(
+            "tools/call",
+            {
+                "name": "seagull.send_message",
+                "arguments": {
+                    "sender_handle": "@alice:gulls.ai",
+                    "recipient_handles": ["@bob:gulls.ai"],
+                    "content_ref": "payload://payload_1",
+                    "thread_id": "thread_1",
+                },
+            },
+        )
+
+        self.assertEqual("message_sent", response["result"]["structuredContent"]["message_id"])
+        self.assertIsNone(self.client.sent_messages[0]["content"])
+        self.assertEqual("payload://payload_1", self.client.sent_messages[0]["content_ref"])
 
     def test_ack_message_calls_seagull_for_allowed_recipient(self) -> None:
         response = self.mcp(

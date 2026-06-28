@@ -57,6 +57,76 @@ describe("message hub client", () => {
     ]);
   });
 
+  it("submits payload refs without inline message content", async () => {
+    const calls: Array<{ path: string; search: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        calls.push({ path: url.pathname, search: url.search, body });
+        const responseBody = url.pathname === "/payloads"
+          ? {
+              content_ref: "payload://payload_1",
+              payload: {
+                content_ref: "payload://payload_1",
+                media_type: "text/markdown",
+                byte_length: 9000,
+                hash: "sha256:plain",
+                compression: "gzip",
+                compressed_byte_length: 3000,
+                compressed_hash: "sha256:gzip",
+                retention_state: "ready",
+                access_scope: "thread",
+                storage_provider: "local_node",
+                storage_ref: "payload://payload_1",
+                created_at: "2026-06-28T00:00:00+00:00",
+              },
+            }
+          : { message: { message_id: "message_1", content_ref: "payload://payload_1" }, deliveries: [] };
+        return new Response(JSON.stringify(responseBody), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const client = new MessageHubClient("https://message.example.test/");
+    const payload = await client.createPayload({
+      content: "large",
+      media_type: "text/markdown",
+      access_scope: "thread",
+    });
+    await client.createMessage({
+      sender_handle: "@agent:seagull.local",
+      recipient_handles: ["@reviewer:seagull.local"],
+      content_ref: payload.content_ref,
+    });
+    await client.readPayload(payload.content_ref);
+
+    expect(calls).toEqual([
+      {
+        path: "/payloads",
+        search: "",
+        body: { content: "large", media_type: "text/markdown", access_scope: "thread" },
+      },
+      {
+        path: "/messages",
+        search: "",
+        body: {
+          sender_handle: "@agent:seagull.local",
+          recipient_handles: ["@reviewer:seagull.local"],
+          content_ref: "payload://payload_1",
+        },
+      },
+      {
+        path: "/payloads",
+        search: "?content_ref=payload%3A%2F%2Fpayload_1",
+        body: undefined,
+      },
+    ]);
+  });
+
   it("raises typed API errors", async () => {
     vi.stubGlobal(
       "fetch",

@@ -32,7 +32,7 @@ class SeagullClient(Protocol):
         *,
         sender_handle: str,
         recipient_handles: tuple[str, ...],
-        content: str,
+        content: str | None = None,
         content_ref: str | None = None,
         refs: tuple[dict[str, Any], ...] = (),
         thread_id: str | None = None,
@@ -40,6 +40,19 @@ class SeagullClient(Protocol):
         visibility: str = "direct",
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def create_payload(
+        self,
+        *,
+        content: str,
+        media_type: str = "text/plain; charset=utf-8",
+        access_scope: str = "recipients",
+        ttl_expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def read_payload(self, content_ref: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def ack_message(self, *, message_id: str, recipient_handle: str) -> dict[str, Any]:
@@ -164,7 +177,7 @@ class SeagullHttpClient:
         *,
         sender_handle: str,
         recipient_handles: tuple[str, ...],
-        content: str,
+        content: str | None = None,
         content_ref: str | None = None,
         refs: tuple[dict[str, Any], ...] = (),
         thread_id: str | None = None,
@@ -175,10 +188,11 @@ class SeagullHttpClient:
         body: dict[str, Any] = {
             "sender_handle": sender_handle,
             "recipient_handles": list(recipient_handles),
-            "content": content,
             "intent": intent,
             "visibility": visibility,
         }
+        if content is not None:
+            body["content"] = content
         if content_ref is not None:
             body["content_ref"] = content_ref
         if refs:
@@ -188,6 +202,29 @@ class SeagullHttpClient:
         if idempotency_key is not None:
             body["idempotency_key"] = idempotency_key
         return self._request("POST", "/messages", body)
+
+    def create_payload(
+        self,
+        *,
+        content: str,
+        media_type: str = "text/plain; charset=utf-8",
+        access_scope: str = "recipients",
+        ttl_expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/payloads",
+            without_none({
+                "content": content,
+                "media_type": media_type,
+                "access_scope": access_scope,
+                "ttl_expires_at": ttl_expires_at,
+            }),
+        )
+
+    def read_payload(self, content_ref: str) -> dict[str, Any]:
+        query = parse.urlencode({"content_ref": content_ref})
+        return self._request("GET", f"/payloads?{query}")
 
     def ack_message(self, *, message_id: str, recipient_handle: str) -> dict[str, Any]:
         encoded = parse.quote(message_id, safe="")

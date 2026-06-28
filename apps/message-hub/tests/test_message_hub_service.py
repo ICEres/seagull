@@ -229,6 +229,89 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual("deleted", deleted.retention_state)
         self.assertEqual(payload.record.hash, deleted.hash)
 
+    def test_payload_retention_worker_compacts_ready_payloads(self) -> None:
+        content = ("Worker compaction keeps a selected chunk.\n" * 200).encode("utf-8")
+        payload = self.service.create_payload(
+            content=content,
+            media_type="text/plain",
+            access_scope="thread",
+        )
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+
+        worker_result = self.service.run_payload_retention_worker(
+            compact_ready_before=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=100),
+            compact_summary_chars=48,
+            compact_chunk_bytes=32,
+        )
+
+        stored = self.service.get_payload(payload.record.content_ref)
+        context_pack = self.service.get_context_pack(
+            result.thread.thread_id,
+            requester_handle="@reviewer:gulls.ai",
+        )
+        self.assertEqual(1, worker_result.scanned_count)
+        self.assertEqual((payload.record.content_ref,), worker_result.compacted_refs)
+        self.assertEqual((), worker_result.deleted_refs)
+        self.assertEqual("compacted", stored.record.retention_state)
+        self.assertIsNone(stored.compressed_content)
+        self.assertIsNotNone(stored.compaction)
+        assert stored.compaction is not None
+        self.assertEqual(f"{payload.record.content_ref}/manifest/compact", stored.record.chunk_manifest_ref)
+        self.assertEqual(stored.record.chunk_manifest_ref, stored.compaction.manifest_ref)
+        self.assertEqual(payload.record.hash, stored.record.hash)
+        self.assertEqual(payload.record.compressed_hash, stored.record.compressed_hash)
+        self.assertLess(sum(len(chunk) for chunk in stored.compaction.selected_chunks), len(content))
+        self.assertTrue(stored.compaction.summary.startswith("Worker compaction"))
+        self.assertEqual([payload.record.content_ref], [ref.content_ref for ref in context_pack.payload_refs])
+        with self.assertRaises(PayloadUnavailableError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@reviewer:gulls.ai",
+            )
+
+    def test_payload_retention_worker_deletes_expired_payloads(self) -> None:
+        content = b"payload that should expire and delete"
+        payload = self.service.create_payload(
+            content=content,
+            media_type="text/plain",
+            ttl_expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=1),
+        )
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content_ref=payload.record.content_ref,
+        )
+
+        worker_result = self.service.run_payload_retention_worker(
+            delete_expired_before=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=100),
+        )
+
+        stored = self.service.get_payload(payload.record.content_ref)
+        context_pack = self.service.get_context_pack(
+            result.thread.thread_id,
+            requester_handle="@reviewer:gulls.ai",
+        )
+        self.assertEqual(1, worker_result.scanned_count)
+        self.assertEqual((payload.record.content_ref,), worker_result.expired_refs)
+        self.assertEqual((payload.record.content_ref,), worker_result.deleted_refs)
+        self.assertEqual("deleted", stored.record.retention_state)
+        self.assertIsNone(stored.compressed_content)
+        self.assertIsNone(stored.compaction)
+        self.assertEqual(payload.record.content_ref, stored.record.content_ref)
+        self.assertEqual(payload.record.hash, stored.record.hash)
+        self.assertEqual(payload.record.compressed_hash, stored.record.compressed_hash)
+        self.assertEqual(payload.record.storage_ref, stored.record.storage_ref)
+        self.assertEqual([payload.record.content_ref], [ref.content_ref for ref in context_pack.payload_refs])
+        with self.assertRaises(PayloadUnavailableError):
+            self.service.read_payload_content(
+                payload.record.content_ref,
+                requester_handle="@reviewer:gulls.ai",
+            )
+
     def test_context_pack_applies_budget_and_redacts_private_refs(self) -> None:
         result = self.service.send_message(
             sender_handle="@researcher:gulls.ai",

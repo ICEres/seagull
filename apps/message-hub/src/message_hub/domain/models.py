@@ -69,9 +69,27 @@ class PayloadRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PayloadCompaction:
+    manifest_ref: str
+    summary: str | None = None
+    selected_chunk_refs: tuple[str, ...] = ()
+    selected_chunks: tuple[bytes, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class StoredPayload:
     record: PayloadRecord
     compressed_content: bytes | None
+    compaction: PayloadCompaction | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PayloadRetentionWorkerResult:
+    scanned_count: int = 0
+    expired_refs: tuple[str, ...] = ()
+    compacted_refs: tuple[str, ...] = ()
+    deleted_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

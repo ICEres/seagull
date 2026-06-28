@@ -128,6 +128,15 @@ class InMemoryMessageHubRepository:
         with self._lock:
             return self._payloads_by_ref.get(content_ref)
 
+    def list_payloads(self, *, limit: int | None = None) -> tuple[StoredPayload, ...]:
+        with self._lock:
+            payloads = list(self._payloads_by_ref.values())
+
+        payloads.sort(key=lambda payload: (payload.record.created_at, payload.record.content_ref))
+        if limit is not None:
+            payloads = payloads[:limit]
+        return tuple(payloads)
+
     def update_payload(self, payload: StoredPayload) -> None:
         with self._lock:
             content_ref = payload.record.content_ref

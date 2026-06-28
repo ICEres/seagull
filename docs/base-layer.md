@@ -146,6 +146,8 @@ records can resolve the manifest when they need hashes, compression metadata,
 chunks, retention state, or storage-provider details. Content fetches must
 respect TTL and access scope; non-ready payloads keep envelope, hash, manifest,
 thread, and audit metadata without retaining full payload bytes forever.
+Retention workers may compact ready payloads into summaries or selected chunks
+for medium-term use, then delete expired retained bytes according to policy.
 
 ### Delivery State
 

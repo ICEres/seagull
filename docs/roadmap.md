@@ -257,6 +257,9 @@ Completed so far:
 - Added payload lifecycle enforcement for `ready`, `expired`, `compacted`, and
   `deleted` states, with requester-aware fetches and metadata preservation after
   content bytes are no longer retained.
+- Added a local retention worker that compacts ready payloads into summaries and
+  selected chunks, deletes expired retained bytes, and preserves payload/thread
+  audit metadata.
 - Added a dependency-free Python SDK helper that chooses inline message content
   at or below 4,000 characters and stores larger content as a payload before
   sending only the `content_ref`.

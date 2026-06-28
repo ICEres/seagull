@@ -12,6 +12,7 @@ Storage should support:
 - Thread message lists.
 - Messages by sender.
 - Compressed payloads by content reference.
+- Payload lists for retention workers.
 - Inbox items by recipient.
 - Outbox items by sender.
 - Delivery state.

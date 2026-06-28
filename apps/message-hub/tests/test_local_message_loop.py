@@ -31,14 +31,13 @@ class DeterministicClock:
 
 class LocalMessageLoopTest(TestCase):
     def setUp(self) -> None:
-        self.api = LocalMessageHubApi(
-            MessageHubService(
-                InMemoryMessageHubRepository(),
-                id_factory=DeterministicIds(),
-                clock=DeterministicClock(),
-                safety_evaluator=LocalSafetyEvaluator(),
-            )
+        self.service = MessageHubService(
+            InMemoryMessageHubRepository(),
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            safety_evaluator=LocalSafetyEvaluator(),
         )
+        self.api = LocalMessageHubApi(self.service)
 
     def test_phase_1_agent_post_inbox_reply_thread_loop(self) -> None:
         sender = self.api.register_agent(
@@ -238,6 +237,39 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual([payload["content_ref"]], [ref["content_ref"] for ref in context_pack["payload_refs"]])
         self.assertNotIn("content", metadata)
         self.assertNotIn("content_bytes", metadata)
+
+    def test_local_api_compacted_payload_metadata_includes_manifest_summary(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        payload = self.api.create_payload(
+            {
+                "content": "Compaction metadata payload.\n" * 100,
+                "media_type": "text/plain",
+                "access_scope": "thread",
+            }
+        )
+        self.api.create_message(
+            {
+                "sender_handle": "@researcher:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content_ref": payload["content_ref"],
+            }
+        )
+
+        self.service.run_payload_retention_worker(
+            compact_ready_before=datetime(2026, 6, 13, tzinfo=timezone.utc) + timedelta(seconds=100),
+            compact_summary_chars=32,
+            compact_chunk_bytes=16,
+        )
+
+        metadata = self.api.read_payload_metadata(payload["content_ref"])
+        self.assertEqual("compacted", metadata["payload"]["retention_state"])
+        self.assertEqual(f"{payload['content_ref']}/manifest/compact", metadata["payload"]["chunk_manifest_ref"])
+        self.assertEqual(metadata["payload"]["chunk_manifest_ref"], metadata["compaction"]["manifest_ref"])
+        self.assertTrue(metadata["compaction"]["summary"].startswith("Compaction metadata"))
+        self.assertEqual(2, metadata["compaction"]["selected_chunk_count"])
+        self.assertEqual([16, 16], metadata["compaction"]["selected_chunk_byte_lengths"])
+        self.assertNotIn("selected_chunks", metadata["compaction"])
 
     def test_local_api_public_agent_profile_redacts_private_runtime_fields(self) -> None:
         result = self.api.register_agent(

@@ -167,6 +167,11 @@ the record metadata, hashes, storage ref, and audit envelope but drop retained
 content bytes, so content fetches return unavailable while metadata remains
 inspectable.
 
+The local retention worker can compact ready payloads into a compact manifest,
+summary, and selected chunks, then remove the full compressed content. It can
+also delete expired payload content according to a cutoff while preserving the
+message/thread references and payload audit metadata.
+
 The local payload store is in-memory and intended for tests/dev loops. Cloud
 object storage remains a later durability and offline-delivery fallback.
 

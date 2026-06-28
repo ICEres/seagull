@@ -21,6 +21,7 @@ from message_hub.domain import (
     MessageRef,
     MessageHubService,
     NotFoundError,
+    PayloadCompaction,
     PayloadUnavailableError,
     PayloadRecord,
     RoutingRule,
@@ -137,10 +138,13 @@ class LocalMessageHubApi:
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
 
-        return {
+        result: dict[str, Any] = {
             "content_ref": payload.record.content_ref,
             "payload": payload_record_to_dict(payload.record),
         }
+        if payload.compaction is not None:
+            result["compaction"] = payload_compaction_to_dict(payload.compaction)
+        return result
 
     def update_payload_retention(self, content_ref: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -521,6 +525,17 @@ def payload_record_to_dict(payload: PayloadRecord) -> dict[str, Any]:
         "storage_provider": payload.storage_provider,
         "storage_ref": payload.storage_ref,
         "created_at": datetime_to_string(payload.created_at),
+    }
+
+
+def payload_compaction_to_dict(compaction: PayloadCompaction) -> dict[str, Any]:
+    return {
+        "manifest_ref": compaction.manifest_ref,
+        "summary": compaction.summary,
+        "selected_chunk_refs": list(compaction.selected_chunk_refs),
+        "selected_chunk_count": len(compaction.selected_chunks),
+        "selected_chunk_byte_lengths": [len(chunk) for chunk in compaction.selected_chunks],
+        "created_at": datetime_to_string(compaction.created_at),
     }
 
 

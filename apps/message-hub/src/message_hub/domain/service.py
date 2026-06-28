@@ -21,7 +21,9 @@ from message_hub.domain.models import (
     InboxItem,
     Message,
     MessageRef,
+    PayloadCompaction,
     PayloadRecord,
+    PayloadRetentionWorkerResult,
     RoutingRule,
     RoutingRuleMode,
     SendMessageResult,
@@ -283,6 +285,66 @@ class MessageHubService:
         if payload.compressed_content is None:
             raise PayloadUnavailableError(f"payload content is unavailable: {payload.record.content_ref}")
         return payload.record, gzip.decompress(payload.compressed_content)
+
+    def run_payload_retention_worker(
+        self,
+        *,
+        compact_ready_before: datetime | None = None,
+        delete_expired_before: datetime | None = None,
+        compact_summary_chars: int = 512,
+        compact_chunk_bytes: int = 1024,
+        limit: int | None = None,
+    ) -> PayloadRetentionWorkerResult:
+        normalized_compact_ready_before = normalize_payload_policy_cutoff(
+            compact_ready_before,
+            "compact_ready_before",
+        )
+        normalized_delete_expired_before = normalize_payload_policy_cutoff(
+            delete_expired_before,
+            "delete_expired_before",
+        )
+        validate_payload_compaction_limits(
+            compact_summary_chars=compact_summary_chars,
+            compact_chunk_bytes=compact_chunk_bytes,
+        )
+        if limit is not None and limit < 0:
+            raise InvalidMessageError("limit must be non-negative")
+
+        scanned_count = 0
+        expired_refs: list[str] = []
+        compacted_refs: list[str] = []
+        deleted_refs: list[str] = []
+
+        for stored_payload in self._repository.list_payloads(limit=limit):
+            scanned_count += 1
+            payload = self._refresh_payload_retention(stored_payload)
+            if (
+                stored_payload.record.retention_state == PAYLOAD_RETENTION_READY
+                and payload.record.retention_state == PAYLOAD_RETENTION_EXPIRED
+            ):
+                expired_refs.append(payload.record.content_ref)
+
+            if should_delete_expired_payload(payload.record, normalized_delete_expired_before):
+                self._delete_retained_payload(payload)
+                deleted_refs.append(payload.record.content_ref)
+                continue
+
+            if should_compact_ready_payload(payload.record, normalized_compact_ready_before):
+                if payload.compressed_content is None:
+                    continue
+                self._compact_payload(
+                    payload,
+                    summary_chars=compact_summary_chars,
+                    chunk_bytes=compact_chunk_bytes,
+                )
+                compacted_refs.append(payload.record.content_ref)
+
+        return PayloadRetentionWorkerResult(
+            scanned_count=scanned_count,
+            expired_refs=tuple(expired_refs),
+            compacted_refs=tuple(compacted_refs),
+            deleted_refs=tuple(deleted_refs),
+        )
 
     def send_message(
         self,
@@ -1385,6 +1447,56 @@ class MessageHubService:
 
         return False
 
+    def _compact_payload(
+        self,
+        payload: StoredPayload,
+        *,
+        summary_chars: int,
+        chunk_bytes: int,
+    ) -> None:
+        if payload.compressed_content is None:
+            return
+
+        content = gzip.decompress(payload.compressed_content)
+        now = self._clock()
+        manifest_ref = f"{payload.record.content_ref}/manifest/compact"
+        chunks = selected_payload_chunks(content, chunk_bytes)
+        compaction = PayloadCompaction(
+            manifest_ref=manifest_ref,
+            summary=payload_summary(content, summary_chars),
+            selected_chunk_refs=tuple(
+                f"{payload.record.content_ref}/chunk/{index}"
+                for index, _chunk in enumerate(chunks)
+            ),
+            selected_chunks=chunks,
+            created_at=now,
+        )
+        updated_record = replace(
+            payload.record,
+            retention_state=PAYLOAD_RETENTION_COMPACTED,
+            chunk_manifest_ref=manifest_ref,
+            storage_ref=manifest_ref,
+        )
+        self._repository.update_payload(
+            StoredPayload(
+                record=updated_record,
+                compressed_content=None,
+                compaction=compaction,
+            )
+        )
+
+    def _delete_retained_payload(self, payload: StoredPayload) -> None:
+        updated_record = replace(
+            payload.record,
+            retention_state=PAYLOAD_RETENTION_DELETED,
+        )
+        self._repository.update_payload(
+            StoredPayload(
+                record=updated_record,
+                compressed_content=None,
+            )
+        )
+
     def _new_id(self, prefix: str) -> str:
         return self._id_factory(prefix)
 
@@ -1448,6 +1560,62 @@ def normalize_payload_ttl_expires_at(ttl_expires_at: datetime | None) -> datetim
     if ttl_expires_at.tzinfo is None or ttl_expires_at.utcoffset() is None:
         raise InvalidMessageError("ttl_expires_at must include a timezone")
     return ttl_expires_at
+
+
+def normalize_payload_policy_cutoff(value: datetime | None, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise InvalidMessageError(f"{field_name} must include a timezone")
+    return value
+
+
+def validate_payload_compaction_limits(
+    *,
+    compact_summary_chars: int,
+    compact_chunk_bytes: int,
+) -> None:
+    if not isinstance(compact_summary_chars, int) or compact_summary_chars < 0:
+        raise InvalidMessageError("compact_summary_chars must be non-negative")
+    if not isinstance(compact_chunk_bytes, int) or compact_chunk_bytes < 0:
+        raise InvalidMessageError("compact_chunk_bytes must be non-negative")
+    if compact_summary_chars == 0 and compact_chunk_bytes == 0:
+        raise InvalidMessageError("compaction requires a summary or selected chunks")
+
+
+def should_compact_ready_payload(payload: PayloadRecord, compact_ready_before: datetime | None) -> bool:
+    if compact_ready_before is None:
+        return False
+    return payload.retention_state == PAYLOAD_RETENTION_READY and payload.created_at <= compact_ready_before
+
+
+def should_delete_expired_payload(payload: PayloadRecord, delete_expired_before: datetime | None) -> bool:
+    if delete_expired_before is None:
+        return False
+    if payload.retention_state != PAYLOAD_RETENTION_EXPIRED:
+        return False
+    expired_at = payload.ttl_expires_at or payload.created_at
+    return expired_at <= delete_expired_before
+
+
+def payload_summary(content: bytes, summary_chars: int) -> str | None:
+    if summary_chars == 0:
+        return None
+    text = content.decode("utf-8", errors="replace")
+    if len(text) <= summary_chars:
+        return text
+    summary = text[:summary_chars].rstrip()
+    return f"{summary}..."
+
+
+def selected_payload_chunks(content: bytes, chunk_bytes: int) -> tuple[bytes, ...]:
+    if chunk_bytes == 0 or not content:
+        return ()
+    if len(content) <= chunk_bytes:
+        return (content,)
+    if len(content) <= chunk_bytes * 2:
+        return (content[:chunk_bytes],)
+    return (content[:chunk_bytes], content[-chunk_bytes:])
 
 
 def payload_hash(content: bytes) -> str:

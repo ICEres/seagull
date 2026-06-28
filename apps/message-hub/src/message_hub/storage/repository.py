@@ -48,6 +48,9 @@ class MessageHubRepository(Protocol):
     def get_payload(self, content_ref: str) -> StoredPayload | None:
         """Return a compressed payload by content reference."""
 
+    def list_payloads(self, *, limit: int | None = None) -> tuple[StoredPayload, ...]:
+        """Return payloads in creation order."""
+
     def update_payload(self, payload: StoredPayload) -> None:
         """Replace a payload blob and metadata."""
 

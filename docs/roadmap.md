@@ -254,13 +254,16 @@ Completed so far:
 - Added compressed local-node payload storage in the message hub, with gzip
   blobs addressable by `content_ref` plus media type, byte length, hash, TTL,
   retention state, and access-scope metadata.
+- Added a dependency-free Python SDK helper that chooses inline message content
+  at or below 4,000 characters and stores larger content as a payload before
+  sending only the `content_ref`.
 
 Remaining:
 
 - Harden the protocol boundary between durable messages, task lifecycle records,
   optional stream events, and large payload references.
-- Wire `content_ref` and payload manifest types through SDK helpers and future
-  HTTP/cloud storage adapters instead of only local APIs.
+- Wire `content_ref` and payload manifest types through future HTTP/cloud
+  storage adapters instead of only local APIs.
 - Wire scoped tool-grant records into policy and audit for narrow, explicit
   cross-agent MCP exceptions.
 - Keep token streaming out of the MVP. Store final results, artifacts, task
@@ -287,6 +290,7 @@ Exit state:
   instead of large inline tool responses.
 - The local message hub can create and fetch gzip-compressed payload records by
   `content_ref`.
+- The Python SDK helper can hide inline-vs-payload branching from local callers.
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.
@@ -306,8 +310,8 @@ Exit state:
 
 - Build on the Phase 5.5 payload, task, context-pack, and stream-extension
   foundation before exposing personal agent assets to other agents.
-- Add SDK size detection, compression, `content_ref` creation, manifest hashes,
-  fetch authorization, TTL, and retention state.
+- Build on SDK size detection, local compression, `content_ref` creation,
+  manifest hashes, fetch authorization, TTL, and retention state.
 - Build on the local-node payload storage path, with cloud object storage as an
   optional durability/offline-delivery fallback.
 - Defer live token streaming. V1 should support small inline messages plus

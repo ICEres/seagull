@@ -1,4 +1,4 @@
-.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test safety-gateway-test phase2-test social-api-test phase3-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build mcp-connector-build local-agent-build message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
+.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build mcp-connector-build local-agent-build message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
 
 setup:
 	./scripts/setup-local.sh
@@ -21,6 +21,9 @@ check-local-env:
 phase0-test:
 	PYTHONPATH=packages/protocol/src:packages/policy/src python3 -m unittest discover -s packages/protocol/tests
 	PYTHONPATH=packages/protocol/src:packages/policy/src python3 -m unittest discover -s packages/policy/tests
+
+sdk-test:
+	PYTHONPATH=packages/sdk/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s packages/sdk/tests
 
 safety-gateway-test:
 	PYTHONPATH=apps/safety-gateway/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s apps/safety-gateway/tests

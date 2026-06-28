@@ -32,6 +32,7 @@ from message_hub.domain.models import (
     TaskResultRecord,
     TaskState,
     TaskToolRequest,
+    ToolGrant,
     ThreadContext,
     ThreadRecord,
     ThreadSummary,
@@ -759,6 +760,72 @@ class MessageHubService:
         normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
         return self._repository.list_tasks_by_thread(thread_id, limit=normalized_limit)
 
+    def create_tool_grant(
+        self,
+        task_id: str,
+        *,
+        issuer_handle: str,
+        subject_handle: str,
+        audience: str,
+        scopes: Sequence[str],
+        purpose: str,
+        ttl_expires_at: datetime | None = None,
+        max_calls: int | None = None,
+        budget_ref: str | None = None,
+        allowed_resource_selectors: Sequence[str] = (),
+        read_only: bool = True,
+        approval_id: str | None = None,
+        policy_decision_id: str | None = None,
+    ) -> ToolGrant:
+        task = self._require_task(task_id)
+        issuer = self._require_agent_by_handle(issuer_handle)
+        subject = self._require_agent_by_handle(subject_handle)
+        if issuer.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can issue a tool grant")
+        if subject.agent_id != task.recipient_agent_id:
+            raise ForbiddenDeliveryError("tool grant subject must be the task recipient")
+
+        normalized_scopes = normalize_non_empty_strings(scopes, "scope")
+        now = self._clock()
+        grant = ToolGrant(
+            grant_id=self._new_id("tool_grant"),
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            issuer_agent_id=issuer.agent_id,
+            subject_agent_id=subject.agent_id,
+            audience=normalize_required(audience, "audience"),
+            scopes=normalized_scopes,
+            purpose=normalize_required(purpose, "purpose"),
+            ttl_expires_at=normalize_payload_ttl_expires_at(ttl_expires_at),
+            max_calls=normalize_optional_non_negative_int(max_calls, "max_calls"),
+            budget_ref=normalized_optional_string(budget_ref),
+            allowed_resource_selectors=tuple(
+                normalize_required(selector, "allowed_resource_selector")
+                for selector in allowed_resource_selectors
+            ),
+            read_only=read_only,
+            approval_id=normalized_optional_string(approval_id),
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_tool_grant(grant)
+        self._repository.update_task(
+            replace(
+                task,
+                tool_grant_ids=(*task.tool_grant_ids, grant.grant_id),
+                updated_at=now,
+            )
+        )
+        return grant
+
+    def get_tool_grant(self, grant_id: str) -> ToolGrant:
+        return self._require_tool_grant(grant_id)
+
+    def list_task_tool_grants(self, task_id: str) -> tuple[ToolGrant, ...]:
+        task = self._require_task(task_id)
+        return self._repository.list_tool_grants_by_task(task.task_id)
+
     def accept_task(
         self,
         task_id: str,
@@ -911,6 +978,7 @@ class MessageHubService:
         requires_approval: bool = True,
         approval_id: str | None = None,
         policy_decision_id: str | None = None,
+        tool_grant_id: str | None = None,
     ) -> TaskToolRequest:
         task = self._require_task(task_id)
         requester = self._require_agent_by_handle(requester_handle)
@@ -919,6 +987,21 @@ class MessageHubService:
             raise ForbiddenDeliveryError("only the task requester can request delegated tool use")
         if worker.agent_id != task.recipient_agent_id:
             raise ForbiddenDeliveryError("tool request worker must be the task recipient")
+        normalized_tool_name = normalize_required(tool_name, "tool_name")
+        normalized_purpose = normalize_required(purpose, "purpose")
+        if task.allowed_tool_names and normalized_tool_name not in task.allowed_tool_names:
+            raise InvalidMessageError("tool_name is not allowed for this task")
+        normalized_tool_grant_id = normalized_optional_string(tool_grant_id)
+        if not requires_approval and normalized_tool_grant_id is None:
+            raise InvalidMessageError("tool_grant_id is required when requires_approval is false")
+        if normalized_tool_grant_id is not None:
+            self._consume_tool_grant_for_request(
+                task=task,
+                requester=requester,
+                worker=worker,
+                tool_name=normalized_tool_name,
+                grant_id=normalized_tool_grant_id,
+            )
 
         now = self._clock()
         tool_request = TaskToolRequest(
@@ -927,13 +1010,14 @@ class MessageHubService:
             thread_id=task.thread_id,
             requester_agent_id=requester.agent_id,
             worker_agent_id=worker.agent_id,
-            tool_name=normalize_required(tool_name, "tool_name"),
-            purpose=normalize_required(purpose, "purpose"),
+            tool_name=normalized_tool_name,
+            purpose=normalized_purpose,
             input_ref=normalized_optional_string(input_ref),
             requires_approval=requires_approval,
             status=TaskState.NEEDS_APPROVAL if requires_approval else TaskState.REQUESTED,
             approval_id=normalized_optional_string(approval_id),
             policy_decision_id=normalized_optional_string(policy_decision_id),
+            tool_grant_id=normalized_tool_grant_id,
             created_at=now,
             updated_at=now,
         )
@@ -974,6 +1058,8 @@ class MessageHubService:
         if actor.agent_id != tool_request.worker_agent_id:
             raise ForbiddenDeliveryError("only the worker agent can complete this tool request")
         tool_state = normalize_task_state(state)
+        if tool_request.tool_grant_id is not None:
+            self._require_tool_request_grant_active(tool_request)
         normalized_artifact_refs = tuple(normalize_required(ref, "artifact_ref") for ref in artifact_refs)
         now = self._clock()
         updated = replace(
@@ -1311,6 +1397,13 @@ class MessageHubService:
             raise NotFoundError(f"task not found: {task_id}")
         return task
 
+    def _require_tool_grant(self, grant_id: str) -> ToolGrant:
+        normalized_grant_id = normalize_required(grant_id, "tool_grant_id")
+        grant = self._repository.get_tool_grant(normalized_grant_id)
+        if grant is None:
+            raise NotFoundError(f"tool grant not found: {normalized_grant_id}")
+        return grant
+
     def _require_tool_request(self, tool_request_id: str) -> TaskToolRequest:
         tool_request = self._repository.get_tool_request(tool_request_id)
         if tool_request is None:
@@ -1328,6 +1421,70 @@ class MessageHubService:
         if actor.agent_id not in allowed_agent_ids:
             raise ForbiddenDeliveryError("agent cannot update this task")
         return actor
+
+    def _consume_tool_grant_for_request(
+        self,
+        *,
+        task: TaskRecord,
+        requester: Agent,
+        worker: Agent,
+        tool_name: str,
+        grant_id: str,
+    ) -> ToolGrant:
+        grant = self._require_active_tool_grant(
+            task=task,
+            requester=requester,
+            worker=worker,
+            tool_name=tool_name,
+            grant_id=grant_id,
+        )
+        if grant.max_calls is not None and grant.used_count >= grant.max_calls:
+            raise ForbiddenDeliveryError("tool grant call limit exceeded")
+
+        updated = replace(
+            grant,
+            used_count=grant.used_count + 1,
+            updated_at=self._clock(),
+        )
+        self._repository.update_tool_grant(updated)
+        return updated
+
+    def _require_active_tool_grant(
+        self,
+        *,
+        task: TaskRecord,
+        requester: Agent,
+        worker: Agent,
+        tool_name: str,
+        grant_id: str,
+    ) -> ToolGrant:
+        grant = self._require_tool_grant(grant_id)
+        if grant.task_id != task.task_id or grant.thread_id != task.thread_id:
+            raise ForbiddenDeliveryError("tool grant is not scoped to this task")
+        if grant.issuer_agent_id != requester.agent_id:
+            raise ForbiddenDeliveryError("tool grant issuer does not match requester")
+        if grant.subject_agent_id != worker.agent_id:
+            raise ForbiddenDeliveryError("tool grant subject does not match worker")
+        if tool_name not in grant.scopes:
+            raise ForbiddenDeliveryError("tool grant does not allow this tool")
+        if grant.revoked_at is not None:
+            raise ForbiddenDeliveryError("tool grant is revoked")
+        if grant.ttl_expires_at is not None and grant.ttl_expires_at <= self._clock():
+            raise ForbiddenDeliveryError("tool grant is expired")
+        return grant
+
+    def _require_tool_request_grant_active(self, tool_request: TaskToolRequest) -> ToolGrant:
+        task = self._require_task(tool_request.task_id)
+        requester = self._require_agent(tool_request.requester_agent_id)
+        worker = self._require_agent(tool_request.worker_agent_id)
+        assert tool_request.tool_grant_id is not None
+        return self._require_active_tool_grant(
+            task=task,
+            requester=requester,
+            worker=worker,
+            tool_name=tool_request.tool_name,
+            grant_id=tool_request.tool_grant_id,
+        )
 
     def _send_task_notification(
         self,
@@ -1538,6 +1695,21 @@ def normalized_optional_string(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def normalize_non_empty_strings(values: Sequence[str], field_name: str) -> tuple[str, ...]:
+    normalized = tuple(normalize_required(value, field_name) for value in values)
+    if not normalized:
+        raise InvalidMessageError(f"{field_name}s are required")
+    return normalized
+
+
+def normalize_optional_non_negative_int(value: int | None, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise InvalidMessageError(f"{field_name} must be non-negative")
+    return value
 
 
 def normalize_payload_access_scope(access_scope: str) -> str:

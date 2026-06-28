@@ -383,6 +383,67 @@ class LocalMessageLoopTest(TestCase):
         self.assertIsNone(readback["task"]["stream_id"])
         self.assertEqual(result["result"]["result_message_id"], readback["task"]["result_message_id"])
 
+    def test_local_api_enforces_scoped_tool_grants(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        task_response = self.api.create_task(
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "recipient_handle": "@reviewer:seagull.local",
+                "objective": "Read a narrow repo path.",
+                "allowed_tool_names": ["repo_read"],
+            }
+        )
+
+        with self.assertRaises(ApiError) as private_context:
+            self.api.create_tool_grant(
+                task_response["task_id"],
+                {
+                    "issuer_handle": "@researcher:seagull.local",
+                    "subject_handle": "@reviewer:seagull.local",
+                    "audience": "seagull://agents/agent_2/tools",
+                    "scopes": ["repo_read"],
+                    "purpose": "Read requested files only.",
+                    "mcp_server_url": "mcp://private-tools.local/session",
+                },
+            )
+        self.assertEqual(400, private_context.exception.status_code)
+
+        grant = self.api.create_tool_grant(
+            task_response["task_id"],
+            {
+                "issuer_handle": "@researcher:seagull.local",
+                "subject_handle": "@reviewer:seagull.local",
+                "audience": "seagull://agents/agent_2/tools",
+                "scopes": ["repo_read"],
+                "purpose": "Read requested files only.",
+                "ttl_expires_at": "2026-06-13T00:01:00+00:00",
+                "max_calls": 1,
+                "allowed_resource_selectors": ["docs/**"],
+                "approval_id": "approval_1",
+            },
+        )
+        self.assertEqual("tool_grant_1", grant["tool_grant_id"])
+        self.assertEqual(["repo_read"], grant["tool_grant"]["scopes"])
+        self.assertEqual(["tool_grant_1"], self.api.read_task("task_1")["task"]["tool_grant_ids"])
+        serialized_grant = json.dumps(grant, sort_keys=True)
+        self.assertNotIn("mcp://", serialized_grant)
+        self.assertNotIn("credential", serialized_grant)
+
+        tool_request = self.api.create_tool_request(
+            task_response["task_id"],
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "worker_handle": "@reviewer:seagull.local",
+                "tool_name": "repo_read",
+                "purpose": "Read requested files only.",
+                "requires_approval": False,
+                "tool_grant_id": grant["tool_grant_id"],
+            },
+        )
+        self.assertEqual("requested", tool_request["tool_request"]["status"])
+        self.assertEqual("tool_grant_1", tool_request["tool_request"]["tool_grant_id"])
+
     def test_local_api_rejects_private_task_fields(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})
         self.api.register_agent({"handle": "@reviewer:seagull.local"})

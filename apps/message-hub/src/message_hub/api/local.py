@@ -30,6 +30,7 @@ from message_hub.domain import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    ToolGrant,
     ThreadContext,
     ThreadRecord,
     WorkflowTraceEntry,
@@ -400,6 +401,7 @@ class LocalMessageHubApi:
                 requires_approval=optional_bool(body, "requires_approval", default=True),
                 approval_id=optional_string(body, "approval_id"),
                 policy_decision_id=optional_string(body, "policy_decision_id"),
+                tool_grant_id=optional_string(body, "tool_grant_id"),
             )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
@@ -414,6 +416,40 @@ class LocalMessageHubApi:
             "tool_request": tool_request_to_dict(tool_request),
             "tool_request_id": tool_request.tool_request_id,
             "task_id": tool_request.task_id,
+        }
+
+    def create_tool_grant(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            reject_private_task_fields(body)
+            grant = self._service.create_tool_grant(
+                task_id,
+                issuer_handle=required_string(body, "issuer_handle"),
+                subject_handle=required_string(body, "subject_handle"),
+                audience=required_string(body, "audience"),
+                scopes=string_list(body.get("scopes", ()), "scopes"),
+                purpose=required_string(body, "purpose"),
+                ttl_expires_at=optional_datetime(body, "ttl_expires_at"),
+                max_calls=optional_int(body, "max_calls"),
+                budget_ref=optional_string(body, "budget_ref"),
+                allowed_resource_selectors=string_list(
+                    body.get("allowed_resource_selectors", ()),
+                    "allowed_resource_selectors",
+                ),
+                read_only=optional_bool(body, "read_only", default=True),
+                approval_id=optional_string(body, "approval_id"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "tool_grant": tool_grant_to_dict(grant),
+            "tool_grant_id": grant.grant_id,
+            "task_id": grant.task_id,
         }
 
     def complete_tool_request(self, tool_request_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -791,6 +827,7 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "stream_id": task.stream_id,
         "allowed_tool_names": list(task.allowed_tool_names),
         "allowed_use_terms": list(task.allowed_use_terms),
+        "tool_grant_ids": list(task.tool_grant_ids),
         "state": task.state.value,
         "policy_decision_id": task.policy_decision_id,
         "accepted_by_agent_id": task.accepted_by_agent_id,
@@ -817,12 +854,37 @@ def tool_request_to_dict(tool_request: TaskToolRequest) -> dict[str, Any]:
         "status": tool_request.status.value,
         "approval_id": tool_request.approval_id,
         "policy_decision_id": tool_request.policy_decision_id,
+        "tool_grant_id": tool_request.tool_grant_id,
         "accepted_by_agent_id": tool_request.accepted_by_agent_id,
         "result_ref": tool_request.result_ref,
         "artifact_refs": list(tool_request.artifact_refs),
         "tool_use_summary_ref": tool_request.tool_use_summary_ref,
         "created_at": datetime_to_string(tool_request.created_at),
         "updated_at": datetime_to_string(tool_request.updated_at),
+    }
+
+
+def tool_grant_to_dict(grant: ToolGrant) -> dict[str, Any]:
+    return {
+        "grant_id": grant.grant_id,
+        "task_id": grant.task_id,
+        "thread_id": grant.thread_id,
+        "issuer_agent_id": grant.issuer_agent_id,
+        "subject_agent_id": grant.subject_agent_id,
+        "audience": grant.audience,
+        "scopes": list(grant.scopes),
+        "purpose": grant.purpose,
+        "ttl_expires_at": datetime_to_string(grant.ttl_expires_at),
+        "max_calls": grant.max_calls,
+        "used_count": grant.used_count,
+        "budget_ref": grant.budget_ref,
+        "allowed_resource_selectors": list(grant.allowed_resource_selectors),
+        "read_only": grant.read_only,
+        "approval_id": grant.approval_id,
+        "policy_decision_id": grant.policy_decision_id,
+        "revoked_at": datetime_to_string(grant.revoked_at),
+        "created_at": datetime_to_string(grant.created_at),
+        "updated_at": datetime_to_string(grant.updated_at),
     }
 
 
@@ -894,6 +956,15 @@ def string_list(value: Any, field_name: str) -> tuple[str, ...]:
     if not all(isinstance(item, str) for item in value):
         raise ApiError(400, "bad_request", f"{field_name} must contain only strings")
     return tuple(value)
+
+
+def optional_int(body: dict[str, Any], field_name: str) -> int | None:
+    value = body.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ApiError(400, "bad_request", f"{field_name} must be an integer")
+    return value
 
 
 def response_rules_object(value: Any) -> dict[str, Any] | None:

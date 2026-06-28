@@ -17,6 +17,7 @@ Storage should support:
 - Outbox items by sender.
 - Delivery state.
 - Thread summaries.
+- Task-scoped tool grants and tool requests.
 
 Keep storage behind interfaces so domain tests do not depend on AWS.
 

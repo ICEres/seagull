@@ -12,6 +12,7 @@ from message_hub.domain.models import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    ToolGrant,
     ThreadRecord,
     ThreadSummary,
 )
@@ -124,6 +125,18 @@ class MessageHubRepository(Protocol):
 
     def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
         """Return tasks scoped to a thread in chronological order."""
+
+    def put_tool_grant(self, grant: ToolGrant) -> None:
+        """Persist a task-scoped tool grant."""
+
+    def get_tool_grant(self, grant_id: str) -> ToolGrant | None:
+        """Return a tool grant by ID."""
+
+    def update_tool_grant(self, grant: ToolGrant) -> None:
+        """Replace a task-scoped tool grant."""
+
+    def list_tool_grants_by_task(self, task_id: str) -> tuple[ToolGrant, ...]:
+        """Return tool grants scoped to a task in chronological order."""
 
     def put_tool_request(self, tool_request: TaskToolRequest) -> None:
         """Persist a task-scoped tool request."""

@@ -260,6 +260,9 @@ Completed so far:
 - Added a local retention worker that compacts ready payloads into summaries and
   selected chunks, deletes expired retained bytes, and preserves payload/thread
   audit metadata.
+- Added scoped tool-grant records and local enforcement for pre-approved
+  delegated tool requests, so narrow cross-agent tool exceptions are audited by
+  task, thread, requester, worker, tool, purpose, and expiry.
 - Added a dependency-free Python SDK helper that chooses inline message content
   at or below 4,000 characters and stores larger content as a payload before
   sending only the `content_ref`.
@@ -276,8 +279,8 @@ Remaining:
   optional stream events, and large payload references.
 - Wire payload storage through future HTTP/cloud storage adapters instead of
   only local APIs.
-- Wire scoped tool-grant records into policy and audit for narrow, explicit
-  cross-agent MCP exceptions.
+- Wire scoped tool-grant records into hosted policy decisions and future
+  cross-agent MCP gateway adapters.
 - Keep token streaming out of the MVP. Store final results, artifacts, task
   states, and audit records as the source of truth.
 
@@ -300,6 +303,8 @@ Exit state:
   `content_ref`.
 - The connector and MCP surfaces can expose context and artifacts as references
   instead of large inline tool responses.
+- The message hub persists scoped tool grants and enforces them for no-approval
+  delegated tool requests without exposing private MCP handles.
 - The local message hub can create and fetch gzip-compressed payload records by
   `content_ref`.
 - The Python SDK helper can hide inline-vs-payload branching from local callers.

@@ -229,7 +229,8 @@ Minimal task-scoped tool request:
   "tool_name": "repo.read",
   "purpose": "Inspect the referenced diff only.",
   "input_ref": "payload://task_123/tool_input",
-  "requires_approval": true,
+  "requires_approval": false,
+  "tool_grant_id": "tool_grant_123",
   "policy_decision_id": "policy_789",
   "result_ref": "payload://task_123/tool_result",
   "artifact_refs": ["artifact://tool_summary_789"]

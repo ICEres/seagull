@@ -353,6 +353,7 @@ class ProtocolModelsTest(TestCase):
             input_ref="payload://task_1/tool_request/input",
             approval_id="approval_1",
             policy_decision_id="policy_1",
+            tool_grant_id=grant.grant_id,
             result_ref="payload://task_1/tool_request/result",
             artifact_refs=("artifact_tool_summary_1",),
             tool_use_summary_ref="payload://task_1/tool_summary",
@@ -369,6 +370,7 @@ class ProtocolModelsTest(TestCase):
         self.assertTrue(grant.read_only)
         self.assertEqual(("repo.read",), grant.scopes)
         self.assertEqual(("docs/**",), grant.allowed_resource_selectors)
+        self.assertEqual("grant_1", tool_request.tool_grant_id)
         self.assertEqual(TaskState.NEEDS_APPROVAL, tool_request.state)
         self.assertEqual("policy_1", tool_request.policy_decision_id)
         self.assertEqual("payload://task_1/tool_request/result", tool_request.result_ref)

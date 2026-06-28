@@ -23,8 +23,8 @@ Last updated: 2026-06-28.
   `TaskToolRequest`, `ToolGrant`, and `StreamEvent`.
 - Align `packages/protocol` with the message hub's existing `content_ref`
   behavior.
-- Add optional scoped tool-grant records for narrow read-only exceptions where
-  one agent may use another agent's MCP gateway.
+- Wire scoped tool-grant records into hosted policy decisions and future
+  cross-agent MCP gateway adapters.
 
 ## Phase 6: Personal Agent Asset MVP
 

@@ -159,6 +159,7 @@ class TaskToolRequest:
     state: TaskState = TaskState.NEEDS_APPROVAL
     approval_id: str | None = None
     policy_decision_id: str | None = None
+    tool_grant_id: str | None = None
     accepted_by: Handle | None = None
     result_ref: str | None = None
     artifact_refs: tuple[str, ...] = ()
@@ -179,6 +180,7 @@ class TaskToolRequest:
             "input_ref",
             "approval_id",
             "policy_decision_id",
+            "tool_grant_id",
             "result_ref",
             "tool_use_summary_ref",
         ):

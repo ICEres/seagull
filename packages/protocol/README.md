@@ -65,5 +65,8 @@ Initial schema candidates:
 
 Keep the base protocol small. Work/task behavior should use extension models
 instead of forcing every Seagull interaction to look like a task.
+Task-scoped tool grants are audit records for narrow exceptions; tool requests
+may reference a `tool_grant_id`, but they still must not expose private MCP
+server URLs, credentials, memory, or raw tool handles.
 Task stream IDs are optional links to future live projections; task results are
 durable records without requiring stream events.

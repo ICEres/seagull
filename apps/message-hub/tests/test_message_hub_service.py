@@ -648,6 +648,138 @@ class MessageHubServiceTest(TestCase):
             tuple(ref.url for ref in result_message.refs),
         )
 
+    def test_preapproved_tool_request_requires_active_tool_grant(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Read task-scoped repository files.",
+            allowed_tool_names=("repo_read",),
+        )
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_tool_request(
+                task.task_id,
+                requester_handle="@researcher:gulls.ai",
+                worker_handle="@reviewer:gulls.ai",
+                tool_name="repo_read",
+                purpose="Read requested files only.",
+                requires_approval=False,
+            )
+
+        grant = self.service.create_tool_grant(
+            task.task_id,
+            issuer_handle="@researcher:gulls.ai",
+            subject_handle="@reviewer:gulls.ai",
+            audience="seagull://agents/agent_2/tools",
+            scopes=("repo_read",),
+            purpose="Allow read-only repo access for this task.",
+            ttl_expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=100),
+            max_calls=2,
+            allowed_resource_selectors=("docs/**",),
+            approval_id="approval_1",
+            policy_decision_id="policy_1",
+        )
+        self.assertEqual("tool_grant_1", grant.grant_id)
+        self.assertEqual(("repo_read",), grant.scopes)
+        self.assertEqual(("tool_grant_1",), self.service.get_task(task.task_id).tool_grant_ids)
+
+        tool_request = self.service.create_tool_request(
+            task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            worker_handle="@reviewer:gulls.ai",
+            tool_name="repo_read",
+            purpose="Read requested files only.",
+            requires_approval=False,
+            tool_grant_id=grant.grant_id,
+        )
+        used_grant = self.service.get_tool_grant(grant.grant_id)
+        self.assertEqual(TaskState.REQUESTED, tool_request.status)
+        self.assertEqual(grant.grant_id, tool_request.tool_grant_id)
+        self.assertEqual(1, used_grant.used_count)
+
+        completed = self.service.complete_tool_request(
+            tool_request.tool_request_id,
+            actor_handle="@reviewer:gulls.ai",
+            state="completed",
+            result_ref="payload://task_1/tool_result",
+        )
+        self.assertEqual(TaskState.COMPLETED, completed.status)
+
+    def test_tool_grant_enforces_expiry_tool_scope_and_agent_scope(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Use one narrow private tool.",
+            allowed_tool_names=("repo_read",),
+        )
+        expired_grant = self.service.create_tool_grant(
+            task.task_id,
+            issuer_handle="@researcher:gulls.ai",
+            subject_handle="@reviewer:gulls.ai",
+            audience="seagull://agents/agent_2/tools",
+            scopes=("repo_read",),
+            purpose="Expired grant.",
+            ttl_expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=1),
+        )
+        wrong_tool_grant = self.service.create_tool_grant(
+            task.task_id,
+            issuer_handle="@researcher:gulls.ai",
+            subject_handle="@reviewer:gulls.ai",
+            audience="seagull://agents/agent_2/tools",
+            scopes=("repo_write",),
+            purpose="Wrong tool grant.",
+            ttl_expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=100),
+        )
+
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.create_tool_request(
+                task.task_id,
+                requester_handle="@researcher:gulls.ai",
+                worker_handle="@reviewer:gulls.ai",
+                tool_name="repo_read",
+                purpose="Read requested files only.",
+                requires_approval=False,
+                tool_grant_id=expired_grant.grant_id,
+            )
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_tool_request(
+                task.task_id,
+                requester_handle="@researcher:gulls.ai",
+                worker_handle="@reviewer:gulls.ai",
+                tool_name="repo_write",
+                purpose="Write requested files.",
+                requires_approval=False,
+                tool_grant_id=wrong_tool_grant.grant_id,
+            )
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.create_tool_request(
+                task.task_id,
+                requester_handle="@researcher:gulls.ai",
+                worker_handle="@reviewer:gulls.ai",
+                tool_name="repo_read",
+                purpose="Read requested files only.",
+                requires_approval=False,
+                tool_grant_id=wrong_tool_grant.grant_id,
+            )
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.create_tool_grant(
+                task.task_id,
+                issuer_handle="@map-reader:gulls.ai",
+                subject_handle="@reviewer:gulls.ai",
+                audience="seagull://agents/agent_2/tools",
+                scopes=("repo_read",),
+                purpose="Wrong issuer.",
+            )
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.create_tool_grant(
+                task.task_id,
+                issuer_handle="@researcher:gulls.ai",
+                subject_handle="@map-reader:gulls.ai",
+                audience="seagull://agents/agent_3/tools",
+                scopes=("repo_read",),
+                purpose="Wrong subject.",
+            )
+
     def test_reply_updates_existing_thread(self) -> None:
         first = self.service.send_message(
             sender_handle="@researcher:gulls.ai",

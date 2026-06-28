@@ -224,6 +224,29 @@ class AgentDecisionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolGrant:
+    grant_id: str
+    task_id: str
+    thread_id: str
+    issuer_agent_id: str
+    subject_agent_id: str
+    audience: str
+    scopes: tuple[str, ...]
+    purpose: str
+    ttl_expires_at: datetime | None = None
+    max_calls: int | None = None
+    used_count: int = 0
+    budget_ref: str | None = None
+    allowed_resource_selectors: tuple[str, ...] = ()
+    read_only: bool = True
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRecord:
     task_id: str
     thread_id: str
@@ -238,6 +261,7 @@ class TaskRecord:
     stream_id: str | None = None
     allowed_tool_names: tuple[str, ...] = ()
     allowed_use_terms: tuple[str, ...] = ()
+    tool_grant_ids: tuple[str, ...] = ()
     state: TaskState = TaskState.REQUESTED
     policy_decision_id: str | None = None
     accepted_by_agent_id: str | None = None
@@ -264,6 +288,7 @@ class TaskToolRequest:
     approval_id: str | None = None
     policy_decision_id: str | None = None
     accepted_by_agent_id: str | None = None
+    tool_grant_id: str | None = None
     result_ref: str | None = None
     artifact_refs: tuple[str, ...] = ()
     tool_use_summary_ref: str | None = None

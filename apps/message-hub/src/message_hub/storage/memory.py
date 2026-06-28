@@ -13,6 +13,7 @@ from message_hub.domain.models import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    ToolGrant,
     ThreadRecord,
     ThreadSummary,
     utc_now,
@@ -42,6 +43,8 @@ class InMemoryMessageHubRepository:
         self._summaries_by_thread: dict[str, list[ThreadSummary]] = defaultdict(list)
         self._tasks_by_id: dict[str, TaskRecord] = {}
         self._task_ids_by_thread: dict[str, list[str]] = defaultdict(list)
+        self._tool_grants_by_id: dict[str, ToolGrant] = {}
+        self._tool_grant_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
         self._tool_request_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_results_by_task: dict[str, list[TaskResultRecord]] = defaultdict(list)
@@ -273,6 +276,34 @@ class InMemoryMessageHubRepository:
         if limit is not None:
             tasks = tasks[-limit:]
         return tuple(tasks)
+
+    def put_tool_grant(self, grant: ToolGrant) -> None:
+        with self._lock:
+            if grant.grant_id in self._tool_grants_by_id:
+                raise ValueError(f"tool grant already exists: {grant.grant_id}")
+            self._tool_grants_by_id[grant.grant_id] = grant
+            self._tool_grant_ids_by_task[grant.task_id].append(grant.grant_id)
+
+    def get_tool_grant(self, grant_id: str) -> ToolGrant | None:
+        with self._lock:
+            return self._tool_grants_by_id.get(grant_id)
+
+    def update_tool_grant(self, grant: ToolGrant) -> None:
+        with self._lock:
+            if grant.grant_id not in self._tool_grants_by_id:
+                raise ValueError(f"tool grant does not exist: {grant.grant_id}")
+            self._tool_grants_by_id[grant.grant_id] = grant
+
+    def list_tool_grants_by_task(self, task_id: str) -> tuple[ToolGrant, ...]:
+        with self._lock:
+            grants = [
+                self._tool_grants_by_id[grant_id]
+                for grant_id in self._tool_grant_ids_by_task.get(task_id, [])
+                if grant_id in self._tool_grants_by_id
+            ]
+
+        grants.sort(key=lambda grant: (grant.created_at, grant.grant_id))
+        return tuple(grants)
 
     def put_tool_request(self, tool_request: TaskToolRequest) -> None:
         with self._lock:

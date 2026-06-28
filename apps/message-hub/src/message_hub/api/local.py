@@ -28,6 +28,8 @@ from message_hub.domain import (
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
+    TaskCreditBalance,
+    TaskCreditLedgerEntry,
     TaskEscrowRecord,
     TaskQuoteRecord,
     TaskRecord,
@@ -357,6 +359,57 @@ class LocalMessageHubApi:
 
         return {"thread_id": thread_id, "tasks": [task_to_dict(task) for task in tasks]}
 
+    def grant_task_credits(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            entry = self._service.grant_task_credits(
+                agent_handle=required_string(body, "agent_handle"),
+                amount=required_int(body, "amount"),
+                reason=required_string(body, "reason"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+                limits_ref=optional_string(body, "limits_ref"),
+                abuse_policy_ref=optional_string(body, "abuse_policy_ref"),
+                audit_refs=string_list(body.get("audit_refs", ()), "audit_refs"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "entry_id": entry.entry_id,
+            "entry": task_credit_ledger_entry_to_dict(entry),
+        }
+
+    def read_task_credit_balance(self, agent_handle: str) -> dict[str, Any]:
+        try:
+            balance = self._service.get_task_credit_balance(agent_handle)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"balance": task_credit_balance_to_dict(balance)}
+
+    def read_agent_task_credit_ledger(self, agent_handle: str) -> dict[str, Any]:
+        try:
+            entries = self._service.list_task_credit_ledger_for_agent(agent_handle)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "agent_handle": agent_handle,
+            "entries": [task_credit_ledger_entry_to_dict(entry) for entry in entries],
+        }
+
+    def read_task_credit_ledger(self, task_id: str) -> dict[str, Any]:
+        try:
+            entries = self._service.list_task_credit_ledger_for_task(task_id)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": task_id,
+            "entries": [task_credit_ledger_entry_to_dict(entry) for entry in entries],
+        }
+
     def create_task_quote(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
             reject_private_task_fields(body)
@@ -445,6 +498,50 @@ class LocalMessageHubApi:
                 escrow_id,
                 releaser_handle=required_string(body, "releaser_handle"),
                 note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": escrow.task_id,
+            "thread_id": escrow.thread_id,
+            "escrow_id": escrow.escrow_id,
+            "state": escrow.state.value,
+            "escrow": task_escrow_to_dict(escrow),
+        }
+
+    def cancel_task_escrow(self, escrow_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            escrow = self._service.cancel_task_escrow(
+                escrow_id,
+                actor_handle=required_string(body, "actor_handle"),
+                note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": escrow.task_id,
+            "thread_id": escrow.thread_id,
+            "escrow_id": escrow.escrow_id,
+            "state": escrow.state.value,
+            "escrow": task_escrow_to_dict(escrow),
+        }
+
+    def dispute_task_escrow(self, escrow_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            escrow = self._service.dispute_task_escrow(
+                escrow_id,
+                actor_handle=required_string(body, "actor_handle"),
+                reason=required_string(body, "reason"),
             )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
@@ -1009,6 +1106,39 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "tool_request_ids": list(task.tool_request_ids),
         "created_at": datetime_to_string(task.created_at),
         "updated_at": datetime_to_string(task.updated_at),
+    }
+
+
+def task_credit_ledger_entry_to_dict(entry: TaskCreditLedgerEntry) -> dict[str, Any]:
+    return {
+        "entry_id": entry.entry_id,
+        "account_agent_id": entry.account_agent_id,
+        "entry_type": entry.entry_type.value,
+        "credit_amount": entry.credit_amount,
+        "available_delta": entry.available_delta,
+        "escrow_delta": entry.escrow_delta,
+        "task_id": entry.task_id,
+        "thread_id": entry.thread_id,
+        "quote_id": entry.quote_id,
+        "escrow_id": entry.escrow_id,
+        "counterparty_agent_id": entry.counterparty_agent_id,
+        "reason": entry.reason,
+        "settlement_scope": entry.settlement_scope,
+        "policy_decision_id": entry.policy_decision_id,
+        "limits_ref": entry.limits_ref,
+        "abuse_policy_ref": entry.abuse_policy_ref,
+        "audit_refs": list(entry.audit_refs),
+        "created_at": datetime_to_string(entry.created_at),
+    }
+
+
+def task_credit_balance_to_dict(balance: TaskCreditBalance) -> dict[str, Any]:
+    return {
+        "account_agent_id": balance.account_agent_id,
+        "available_balance": balance.available_balance,
+        "escrow_balance": balance.escrow_balance,
+        "total_balance": balance.total_balance,
+        "settlement_scope": balance.settlement_scope,
     }
 
 

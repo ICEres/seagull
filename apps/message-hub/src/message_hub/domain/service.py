@@ -29,7 +29,11 @@ from message_hub.domain.models import (
     RoutingRuleMode,
     SendMessageResult,
     StoredPayload,
+    TASK_CREDIT_SETTLEMENT_SCOPE,
     TASK_INACTIVE_STATES,
+    TaskCreditBalance,
+    TaskCreditLedgerEntry,
+    TaskCreditLedgerEntryType,
     TaskEscrowRecord,
     TaskQuoteRecord,
     TaskRecord,
@@ -806,6 +810,53 @@ class MessageHubService:
         normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
         return self._repository.list_tasks_by_thread(thread_id, limit=normalized_limit)
 
+    def grant_task_credits(
+        self,
+        *,
+        agent_handle: str,
+        amount: int,
+        reason: str,
+        policy_decision_id: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskCreditLedgerEntry:
+        agent = self._require_agent_by_handle(agent_handle)
+        normalized_amount = require_bounded_int(
+            amount,
+            "amount",
+            minimum=0,
+            maximum=MAX_TASK_CREDIT_QUOTE,
+        )
+        normalized_reason = normalize_required(reason, "reason")
+        require_small_inline(normalized_reason, "reason")
+        return self._append_task_credit_ledger_entry(
+            account_agent_id=agent.agent_id,
+            entry_type=TaskCreditLedgerEntryType.CREDIT_GRANT,
+            credit_amount=normalized_amount,
+            available_delta=normalized_amount,
+            reason=normalized_reason,
+            policy_decision_id=policy_decision_id,
+            limits_ref=limits_ref,
+            abuse_policy_ref=abuse_policy_ref,
+            audit_refs=audit_refs,
+        )
+
+    def get_task_credit_balance(self, agent_handle: str) -> TaskCreditBalance:
+        agent = self._require_agent_by_handle(agent_handle)
+        return self._task_credit_balance_for_agent_id(agent.agent_id)
+
+    def list_task_credit_ledger_for_agent(
+        self,
+        agent_handle: str,
+    ) -> tuple[TaskCreditLedgerEntry, ...]:
+        agent = self._require_agent_by_handle(agent_handle)
+        return self._repository.list_task_credit_ledger_entries_by_agent(agent.agent_id)
+
+    def list_task_credit_ledger_for_task(self, task_id: str) -> tuple[TaskCreditLedgerEntry, ...]:
+        task = self._require_task(task_id)
+        return self._repository.list_task_credit_ledger_entries_by_task(task.task_id)
+
     def create_task_quote(
         self,
         task_id: str,
@@ -964,6 +1015,9 @@ class MessageHubService:
         for existing in self._repository.list_task_escrows_by_task(task.task_id):
             if existing.quote_id == quote.quote_id and existing.state in {TaskState.ESCROWED, TaskState.RELEASED}:
                 raise InvalidMessageError("escrow already exists for this quote")
+        balance = self._task_credit_balance_for_agent_id(requester.agent_id)
+        if balance.available_balance < quote.expected_credit_cost:
+            raise ForbiddenDeliveryError("insufficient task credit balance")
 
         escrow_id = self._new_id("task_escrow")
         normalized_audit_refs = tuple(
@@ -996,6 +1050,22 @@ class MessageHubService:
             updated_at=now,
         )
         self._repository.update_task(updated_task)
+        self._append_task_credit_ledger_entry(
+            account_agent_id=requester.agent_id,
+            entry_type=TaskCreditLedgerEntryType.ESCROW_HOLD,
+            credit_amount=escrow.credit_amount,
+            available_delta=-escrow.credit_amount,
+            escrow_delta=escrow.credit_amount,
+            task=updated_task,
+            quote=quote,
+            escrow=escrow,
+            counterparty_agent_id=quote.worker_agent_id,
+            reason="Escrowed task credits.",
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+            audit_refs=escrow.audit_refs,
+        )
         self._send_task_notification(
             task=updated_task,
             sender=requester,
@@ -1022,10 +1092,10 @@ class MessageHubService:
         releaser = self._require_agent_by_handle(releaser_handle)
         if releaser.agent_id != task.requester_agent_id:
             raise ForbiddenDeliveryError("only the task requester can release escrow")
-        if escrow.state != TaskState.ESCROWED:
-            raise InvalidMessageError("only escrowed credits can be released")
-        if task.state != TaskState.RESULT_ACCEPTED:
-            raise InvalidMessageError("task result must be accepted before releasing escrow")
+        if escrow.state not in {TaskState.ESCROWED, TaskState.DISPUTED}:
+            raise InvalidMessageError("only escrowed or disputed credits can be released")
+        if task.state not in {TaskState.RESULT_ACCEPTED, TaskState.DISPUTED}:
+            raise InvalidMessageError("task result must be accepted or disputed before releasing escrow")
 
         now = self._clock()
         released = replace(
@@ -1037,6 +1107,35 @@ class MessageHubService:
         self._repository.update_task_escrow(released)
         updated_task = replace(task, state=TaskState.RELEASED, updated_at=now)
         self._repository.update_task(updated_task)
+        self._append_task_credit_ledger_entry(
+            account_agent_id=escrow.requester_agent_id,
+            entry_type=TaskCreditLedgerEntryType.ESCROW_RELEASE,
+            credit_amount=escrow.credit_amount,
+            available_delta=0,
+            escrow_delta=-escrow.credit_amount,
+            task=updated_task,
+            escrow=released,
+            counterparty_agent_id=escrow.worker_agent_id,
+            reason="Released escrowed task credits.",
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+            audit_refs=escrow.audit_refs,
+        )
+        self._append_task_credit_ledger_entry(
+            account_agent_id=escrow.worker_agent_id,
+            entry_type=TaskCreditLedgerEntryType.ESCROW_RELEASE,
+            credit_amount=escrow.credit_amount,
+            available_delta=escrow.credit_amount,
+            task=updated_task,
+            escrow=released,
+            counterparty_agent_id=escrow.requester_agent_id,
+            reason="Received released task credits.",
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+            audit_refs=escrow.audit_refs,
+        )
         self._send_task_notification(
             task=updated_task,
             sender=releaser,
@@ -1051,6 +1150,110 @@ class MessageHubService:
             ),
         )
         return released
+
+    def cancel_task_escrow(
+        self,
+        escrow_id: str,
+        *,
+        actor_handle: str,
+        note: str | None = None,
+    ) -> TaskEscrowRecord:
+        escrow = self._require_task_escrow(escrow_id)
+        task = self._require_task(escrow.task_id)
+        actor = self._require_agent_by_handle(actor_handle)
+        if actor.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can cancel escrow")
+        if escrow.state not in {TaskState.ESCROWED, TaskState.DISPUTED}:
+            raise InvalidMessageError("only escrowed or disputed credits can be canceled")
+
+        now = self._clock()
+        canceled = replace(escrow, state=TaskState.CANCELED, updated_at=now)
+        self._repository.update_task_escrow(canceled)
+        updated_task = replace(task, state=TaskState.CANCELED, updated_at=now)
+        self._repository.update_task(updated_task)
+        self._append_task_credit_ledger_entry(
+            account_agent_id=escrow.requester_agent_id,
+            entry_type=TaskCreditLedgerEntryType.ESCROW_CANCEL,
+            credit_amount=escrow.credit_amount,
+            available_delta=escrow.credit_amount,
+            escrow_delta=-escrow.credit_amount,
+            task=updated_task,
+            escrow=canceled,
+            counterparty_agent_id=escrow.worker_agent_id,
+            reason="Canceled escrowed task credits.",
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+            audit_refs=escrow.audit_refs,
+        )
+        self._send_task_notification(
+            task=updated_task,
+            sender=actor,
+            recipient_agent_id=escrow.worker_agent_id,
+            intent="task_escrow_canceled",
+            label="task escrow canceled",
+            note=note,
+            ref=MessageRef(
+                type="task_escrow",
+                url=f"seagull://tasks/{task.task_id}/escrows/{escrow.escrow_id}",
+                remember_as="canceled task escrow",
+            ),
+        )
+        return canceled
+
+    def dispute_task_escrow(
+        self,
+        escrow_id: str,
+        *,
+        actor_handle: str,
+        reason: str,
+    ) -> TaskEscrowRecord:
+        escrow = self._require_task_escrow(escrow_id)
+        task = self._require_task(escrow.task_id)
+        actor = self._require_task_actor(task, actor_handle)
+        if escrow.state != TaskState.ESCROWED:
+            raise InvalidMessageError("only escrowed credits can be disputed")
+        normalized_reason = normalize_required(reason, "reason")
+        require_small_inline(normalized_reason, "reason")
+        counterparty_agent_id = (
+            escrow.worker_agent_id
+            if actor.agent_id == escrow.requester_agent_id
+            else escrow.requester_agent_id
+        )
+
+        now = self._clock()
+        disputed = replace(escrow, state=TaskState.DISPUTED, updated_at=now)
+        self._repository.update_task_escrow(disputed)
+        updated_task = replace(task, state=TaskState.DISPUTED, updated_at=now)
+        self._repository.update_task(updated_task)
+        self._append_task_credit_ledger_entry(
+            account_agent_id=actor.agent_id,
+            entry_type=TaskCreditLedgerEntryType.DISPUTE_OPEN,
+            credit_amount=escrow.credit_amount,
+            available_delta=0,
+            task=updated_task,
+            escrow=disputed,
+            counterparty_agent_id=counterparty_agent_id,
+            reason=normalized_reason,
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+            audit_refs=escrow.audit_refs,
+        )
+        self._send_task_notification(
+            task=updated_task,
+            sender=actor,
+            recipient_agent_id=counterparty_agent_id,
+            intent="task_escrow_disputed",
+            label="task escrow disputed",
+            note=normalized_reason,
+            ref=MessageRef(
+                type="task_escrow",
+                url=f"seagull://tasks/{task.task_id}/escrows/{escrow.escrow_id}",
+                remember_as="disputed task escrow",
+            ),
+        )
+        return disputed
 
     def create_tool_grant(
         self,
@@ -1709,6 +1912,73 @@ class MessageHubService:
             raise NotFoundError(f"task escrow not found: {normalized_escrow_id}")
         return escrow
 
+    def _append_task_credit_ledger_entry(
+        self,
+        *,
+        account_agent_id: str,
+        entry_type: TaskCreditLedgerEntryType,
+        credit_amount: int,
+        available_delta: int,
+        escrow_delta: int = 0,
+        task: TaskRecord | None = None,
+        quote: TaskQuoteRecord | None = None,
+        escrow: TaskEscrowRecord | None = None,
+        counterparty_agent_id: str | None = None,
+        reason: str | None = None,
+        policy_decision_id: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskCreditLedgerEntry:
+        normalized_amount = require_bounded_int(
+            credit_amount,
+            "credit_amount",
+            minimum=0,
+            maximum=MAX_TASK_CREDIT_QUOTE,
+        )
+        require_int_delta(available_delta, "available_delta")
+        require_int_delta(escrow_delta, "escrow_delta")
+        normalized_reason = normalized_optional_string(reason)
+        if normalized_reason is not None:
+            require_small_inline(normalized_reason, "reason")
+        entry_id = self._new_id("task_credit_entry")
+        normalized_audit_refs = tuple(
+            normalize_required(ref, "audit_ref")
+            for ref in audit_refs
+        ) or (f"seagull://task-credit-ledger/{entry_id}/audit",)
+        entry = TaskCreditLedgerEntry(
+            entry_id=entry_id,
+            account_agent_id=normalize_required(account_agent_id, "account_agent_id"),
+            entry_type=entry_type,
+            credit_amount=normalized_amount,
+            available_delta=available_delta,
+            escrow_delta=escrow_delta,
+            task_id=task.task_id if task is not None else None,
+            thread_id=task.thread_id if task is not None else None,
+            quote_id=quote.quote_id if quote is not None else (escrow.quote_id if escrow is not None else None),
+            escrow_id=escrow.escrow_id if escrow is not None else None,
+            counterparty_agent_id=normalized_optional_string(counterparty_agent_id),
+            reason=normalized_reason,
+            settlement_scope=TASK_CREDIT_SETTLEMENT_SCOPE,
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            limits_ref=normalized_optional_string(limits_ref),
+            abuse_policy_ref=normalized_optional_string(abuse_policy_ref),
+            audit_refs=normalized_audit_refs,
+            created_at=self._clock(),
+        )
+        self._repository.put_task_credit_ledger_entry(entry)
+        return entry
+
+    def _task_credit_balance_for_agent_id(self, account_agent_id: str) -> TaskCreditBalance:
+        entries = self._repository.list_task_credit_ledger_entries_by_agent(account_agent_id)
+        available_balance = sum(entry.available_delta for entry in entries)
+        escrow_balance = sum(entry.escrow_delta for entry in entries)
+        return TaskCreditBalance(
+            account_agent_id=account_agent_id,
+            available_balance=available_balance,
+            escrow_balance=escrow_balance,
+        )
+
     def _require_tool_grant(self, grant_id: str) -> ToolGrant:
         normalized_grant_id = normalize_required(grant_id, "tool_grant_id")
         grant = self._repository.get_tool_grant(normalized_grant_id)
@@ -2361,6 +2631,11 @@ def require_bounded_int(value: int, field_name: str, *, minimum: int, maximum: i
     if value > maximum:
         return maximum
     return value
+
+
+def require_int_delta(value: int, field_name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise InvalidMessageError(f"{field_name} must be an integer")
 
 
 def is_private_context_ref(ref: MessageRef) -> bool:

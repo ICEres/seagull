@@ -428,6 +428,13 @@ class LocalMessageLoopTest(TestCase):
                 "approval_id": "approval_1",
             },
         )
+        grant = self.api.grant_task_credits(
+            {
+                "agent_handle": "@researcher:seagull.local",
+                "amount": 10,
+                "reason": "Internal test allocation.",
+            }
+        )
         escrow = self.api.create_task_escrow(
             task_response["task_id"],
             {
@@ -437,10 +444,19 @@ class LocalMessageLoopTest(TestCase):
         )
 
         self.assertEqual("approval_1", approved["quote"]["approval_id"])
+        self.assertEqual("task_credit_entry_1", grant["entry_id"])
+        self.assertEqual("internal_product_credit", grant["entry"]["settlement_scope"])
         self.assertEqual("task_escrow_1", escrow["escrow_id"])
         self.assertEqual("escrowed", escrow["state"])
         self.assertEqual(3, escrow["escrow"]["credit_amount"])
         self.assertEqual("approval_1", escrow["escrow"]["approval_id"])
+        balance = self.api.read_task_credit_balance("@researcher:seagull.local")
+        ledger = self.api.read_task_credit_ledger(task_response["task_id"])
+        self.assertEqual(7, balance["balance"]["available_balance"])
+        self.assertEqual(3, balance["balance"]["escrow_balance"])
+        self.assertEqual("escrow_hold", ledger["entries"][0]["entry_type"])
+        self.assertEqual(-3, ledger["entries"][0]["available_delta"])
+        self.assertEqual(3, ledger["entries"][0]["escrow_delta"])
         readback = self.api.read_task(task_response["task_id"])
         self.assertEqual(["task_quote_1"], readback["task"]["quote_ids"])
         self.assertEqual(["task_escrow_1"], readback["task"]["escrow_ids"])

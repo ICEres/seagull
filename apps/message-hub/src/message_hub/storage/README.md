@@ -36,6 +36,7 @@ thread_summaries
 tasks
 task_quotes
 task_escrows
+task_credit_ledger
 tool_requests
 task_results
 ```

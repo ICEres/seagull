@@ -10,6 +10,7 @@ from message_hub.domain.models import (
     Message,
     RoutingRule,
     StoredPayload,
+    TaskCreditLedgerEntry,
     TaskEscrowRecord,
     TaskQuoteRecord,
     TaskRecord,
@@ -49,6 +50,9 @@ class InMemoryMessageHubRepository:
         self._task_quote_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_escrows_by_id: dict[str, TaskEscrowRecord] = {}
         self._task_escrow_ids_by_task: dict[str, list[str]] = defaultdict(list)
+        self._task_credit_ledger_entries_by_id: dict[str, TaskCreditLedgerEntry] = {}
+        self._task_credit_ledger_entry_ids_by_agent: dict[str, list[str]] = defaultdict(list)
+        self._task_credit_ledger_entry_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_grants_by_id: dict[str, ToolGrant] = {}
         self._tool_grant_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
@@ -338,6 +342,44 @@ class InMemoryMessageHubRepository:
 
         escrows.sort(key=lambda escrow: (escrow.created_at, escrow.escrow_id))
         return tuple(escrows)
+
+    def put_task_credit_ledger_entry(self, entry: TaskCreditLedgerEntry) -> None:
+        with self._lock:
+            if entry.entry_id in self._task_credit_ledger_entries_by_id:
+                raise ValueError(f"task credit ledger entry already exists: {entry.entry_id}")
+            self._task_credit_ledger_entries_by_id[entry.entry_id] = entry
+            self._task_credit_ledger_entry_ids_by_agent[entry.account_agent_id].append(entry.entry_id)
+            if entry.task_id is not None:
+                self._task_credit_ledger_entry_ids_by_task[entry.task_id].append(entry.entry_id)
+
+    def get_task_credit_ledger_entry(self, entry_id: str) -> TaskCreditLedgerEntry | None:
+        with self._lock:
+            return self._task_credit_ledger_entries_by_id.get(entry_id)
+
+    def list_task_credit_ledger_entries_by_agent(
+        self,
+        account_agent_id: str,
+    ) -> tuple[TaskCreditLedgerEntry, ...]:
+        with self._lock:
+            entries = [
+                self._task_credit_ledger_entries_by_id[entry_id]
+                for entry_id in self._task_credit_ledger_entry_ids_by_agent.get(account_agent_id, [])
+                if entry_id in self._task_credit_ledger_entries_by_id
+            ]
+
+        entries.sort(key=lambda entry: (entry.created_at, entry.entry_id))
+        return tuple(entries)
+
+    def list_task_credit_ledger_entries_by_task(self, task_id: str) -> tuple[TaskCreditLedgerEntry, ...]:
+        with self._lock:
+            entries = [
+                self._task_credit_ledger_entries_by_id[entry_id]
+                for entry_id in self._task_credit_ledger_entry_ids_by_task.get(task_id, [])
+                if entry_id in self._task_credit_ledger_entries_by_id
+            ]
+
+        entries.sort(key=lambda entry: (entry.created_at, entry.entry_id))
+        return tuple(entries)
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         with self._lock:

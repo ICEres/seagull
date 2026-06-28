@@ -29,6 +29,8 @@ from seagull_protocol import (
     StreamEvent,
     StreamEventType,
     TASK_LIFECYCLE_TRANSITIONS,
+    TaskCreditLedgerEntry,
+    TaskCreditLedgerEntryType,
     TaskEscrow,
     TaskQuote,
     TaskRequest,
@@ -459,6 +461,24 @@ class ProtocolModelsTest(TestCase):
             abuse_policy_ref=quote.abuse_policy_ref,
             audit_refs=("seagull://tasks/task_1/escrows/escrow_1/audit",),
         )
+        ledger_entry = TaskCreditLedgerEntry(
+            entry_id="task_credit_entry_1",
+            account=request.requester,
+            entry_type=TaskCreditLedgerEntryType.ESCROW_HOLD,
+            credit_amount=quote.expected_credit_cost,
+            available_delta=-quote.expected_credit_cost,
+            escrow_delta=quote.expected_credit_cost,
+            task_id=request.task_id,
+            thread_id=request.thread_id,
+            quote_id=quote.quote_id,
+            escrow_id=escrow.escrow_id,
+            counterparty=request.recipient,
+            reason="Escrowed task credits.",
+            policy_decision_id="policy_1",
+            limits_ref=quote.limits_ref,
+            abuse_policy_ref=quote.abuse_policy_ref,
+            audit_refs=("seagull://tasks/task_1/escrows/escrow_1/audit",),
+        )
 
         self.assertEqual(TaskState.REQUESTED, request.state)
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
@@ -482,6 +502,10 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(quote.expected_credit_cost, escrow.credit_amount)
         self.assertEqual(quote.limits_ref, escrow.limits_ref)
         self.assertEqual(quote.abuse_policy_ref, escrow.abuse_policy_ref)
+        self.assertEqual(TaskCreditLedgerEntryType.ESCROW_HOLD, ledger_entry.entry_type)
+        self.assertEqual(-3, ledger_entry.available_delta)
+        self.assertEqual(3, ledger_entry.escrow_delta)
+        self.assertEqual("internal_product_credit", ledger_entry.settlement_scope)
 
     def test_task_lifecycle_defines_credit_state_transitions(self) -> None:
         expected_states = {

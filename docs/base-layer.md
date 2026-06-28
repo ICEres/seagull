@@ -313,6 +313,10 @@ The current protocol package should keep this boundary explicit:
   expected credit cost, shared context refs, and task reason. Escrows are created
   only after approval when approval is required, and carry Seagull-owned limits,
   abuse-control, and audit refs.
+- Represent task credits with append-only ledger entries in the work/task
+  extension. Ledger entries use internal product-credit settlement only and
+  carry available/escrow deltas plus task, quote, escrow, limits, abuse-control,
+  and audit refs.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
 - Use optional `stream_id` links on task records/results only as live-projection

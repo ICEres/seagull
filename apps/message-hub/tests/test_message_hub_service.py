@@ -17,6 +17,7 @@ from message_hub.domain import (
     NotFoundError,
     PayloadUnavailableError,
     TASK_LIFECYCLE_TRANSITIONS,
+    TaskCreditLedgerEntryType,
     TaskState,
     task_lifecycle_allows,
     task_lifecycle_next_states,
@@ -794,12 +795,24 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual("policy_approval_1", approved.policy_decision_id)
         self.assertEqual(TaskState.APPROVED, self.service.get_task(task.task_id).state)
 
+        grant = self.service.grant_task_credits(
+            agent_handle="@researcher:gulls.ai",
+            amount=10,
+            reason="Internal test allocation.",
+            limits_ref="seagull://task-credits/limits",
+            abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
+        )
+        self.assertEqual(TaskCreditLedgerEntryType.CREDIT_GRANT, grant.entry_type)
+        self.assertEqual(10, self.service.get_task_credit_balance("@researcher:gulls.ai").available_balance)
+
         escrow = self.service.create_task_escrow(
             task.task_id,
             requester_handle="@researcher:gulls.ai",
             quote_id=quote.quote_id,
         )
         escrowed_task = self.service.get_task(task.task_id)
+        requester_balance = self.service.get_task_credit_balance("@researcher:gulls.ai")
+        task_ledger = self.service.list_task_credit_ledger_for_task(task.task_id)
         self.assertEqual("task_escrow_1", escrow.escrow_id)
         self.assertEqual(TaskState.ESCROWED, escrow.state)
         self.assertEqual(quote.expected_credit_cost, escrow.credit_amount)
@@ -809,6 +822,11 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual(("seagull://tasks/task_1/escrows/task_escrow_1/audit",), escrow.audit_refs)
         self.assertEqual(TaskState.ESCROWED, escrowed_task.state)
         self.assertEqual(("task_escrow_1",), escrowed_task.escrow_ids)
+        self.assertEqual(7, requester_balance.available_balance)
+        self.assertEqual(3, requester_balance.escrow_balance)
+        self.assertEqual(TaskCreditLedgerEntryType.ESCROW_HOLD, task_ledger[-1].entry_type)
+        self.assertEqual(-3, task_ledger[-1].available_delta)
+        self.assertEqual(3, task_ledger[-1].escrow_delta)
 
         self.service.update_task_state(
             task.task_id,
@@ -835,6 +853,18 @@ class MessageHubServiceTest(TestCase):
         self.assertEqual(TaskState.RELEASED, released.state)
         self.assertIsNotNone(released.released_at)
         self.assertEqual(TaskState.RELEASED, self.service.get_task(task.task_id).state)
+        self.assertEqual(7, self.service.get_task_credit_balance("@researcher:gulls.ai").available_balance)
+        self.assertEqual(0, self.service.get_task_credit_balance("@researcher:gulls.ai").escrow_balance)
+        self.assertEqual(3, self.service.get_task_credit_balance("@reviewer:gulls.ai").available_balance)
+        task_ledger = self.service.list_task_credit_ledger_for_task(task.task_id)
+        self.assertEqual(
+            (
+                TaskCreditLedgerEntryType.ESCROW_HOLD,
+                TaskCreditLedgerEntryType.ESCROW_RELEASE,
+                TaskCreditLedgerEntryType.ESCROW_RELEASE,
+            ),
+            tuple(entry.entry_type for entry in task_ledger),
+        )
 
     def test_task_escrow_without_required_approval_can_be_created_after_quote(self) -> None:
         task = self.service.create_task(
@@ -850,6 +880,11 @@ class MessageHubServiceTest(TestCase):
             task_reason="Small preapproved review.",
             requires_approval=False,
         )
+        self.service.grant_task_credits(
+            agent_handle="@researcher:gulls.ai",
+            amount=1,
+            reason="Internal test allocation.",
+        )
 
         escrow = self.service.create_task_escrow(
             task.task_id,
@@ -859,6 +894,65 @@ class MessageHubServiceTest(TestCase):
 
         self.assertIsNone(escrow.approval_id)
         self.assertEqual(TaskState.ESCROWED, escrow.state)
+
+    def test_task_credit_ledger_handles_dispute_and_cancel(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Use reviewer capacity for a disputable task.",
+        )
+        quote = self.service.create_task_quote(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=4,
+            task_reason="Disputable review.",
+            requires_approval=False,
+        )
+        self.service.grant_task_credits(
+            agent_handle="@researcher:gulls.ai",
+            amount=4,
+            reason="Internal test allocation.",
+        )
+        escrow = self.service.create_task_escrow(
+            task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            quote_id=quote.quote_id,
+        )
+
+        disputed = self.service.dispute_task_escrow(
+            escrow.escrow_id,
+            actor_handle="@reviewer:gulls.ai",
+            reason="Result acceptance is blocked.",
+        )
+        requester_balance = self.service.get_task_credit_balance("@researcher:gulls.ai")
+        self.assertEqual(TaskState.DISPUTED, disputed.state)
+        self.assertEqual(TaskState.DISPUTED, self.service.get_task(task.task_id).state)
+        self.assertEqual(0, requester_balance.available_balance)
+        self.assertEqual(4, requester_balance.escrow_balance)
+
+        canceled = self.service.cancel_task_escrow(
+            escrow.escrow_id,
+            actor_handle="@researcher:gulls.ai",
+            note="Refund after dispute.",
+        )
+        requester_balance = self.service.get_task_credit_balance("@researcher:gulls.ai")
+        task_ledger = self.service.list_task_credit_ledger_for_task(task.task_id)
+
+        self.assertEqual(TaskState.CANCELED, canceled.state)
+        self.assertEqual(TaskState.CANCELED, self.service.get_task(task.task_id).state)
+        self.assertEqual(4, requester_balance.available_balance)
+        self.assertEqual(0, requester_balance.escrow_balance)
+        self.assertEqual(
+            (
+                TaskCreditLedgerEntryType.ESCROW_HOLD,
+                TaskCreditLedgerEntryType.DISPUTE_OPEN,
+                TaskCreditLedgerEntryType.ESCROW_CANCEL,
+            ),
+            tuple(entry.entry_type for entry in task_ledger),
+        )
+        self.assertEqual("Result acceptance is blocked.", task_ledger[1].reason)
+        self.assertEqual(4, task_ledger[2].available_delta)
+        self.assertEqual(-4, task_ledger[2].escrow_delta)
 
     def test_preapproved_tool_request_requires_active_tool_grant(self) -> None:
         task = self.service.create_task(

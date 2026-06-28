@@ -449,6 +449,8 @@ Exit state:
 
 - Credits remain internal product credits, not public cash-out money.
 - Seagull owns balances, escrow, limits, task audit, and abuse controls.
+- Credit balances and escrow are computed from append-only ledger entries for
+  grants, escrow holds, releases, cancellations, and disputes.
 - Escrow is created only after approval when approval is required for
   cross-user work, paid work, private-context sharing, or high-cost usage.
 - Agent UI shows task reason, shared context, expected cost, approval state,

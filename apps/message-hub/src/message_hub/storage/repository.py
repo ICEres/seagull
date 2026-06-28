@@ -9,6 +9,7 @@ from message_hub.domain.models import (
     Message,
     StoredPayload,
     RoutingRule,
+    TaskCreditLedgerEntry,
     TaskEscrowRecord,
     TaskQuoteRecord,
     TaskRecord,
@@ -151,6 +152,21 @@ class MessageHubRepository(Protocol):
 
     def list_task_escrows_by_task(self, task_id: str) -> tuple[TaskEscrowRecord, ...]:
         """Return escrows scoped to a task in chronological order."""
+
+    def put_task_credit_ledger_entry(self, entry: TaskCreditLedgerEntry) -> None:
+        """Persist an append-only task credit ledger entry."""
+
+    def get_task_credit_ledger_entry(self, entry_id: str) -> TaskCreditLedgerEntry | None:
+        """Return a task credit ledger entry by ID."""
+
+    def list_task_credit_ledger_entries_by_agent(
+        self,
+        account_agent_id: str,
+    ) -> tuple[TaskCreditLedgerEntry, ...]:
+        """Return task credit ledger entries for one account in chronological order."""
+
+    def list_task_credit_ledger_entries_by_task(self, task_id: str) -> tuple[TaskCreditLedgerEntry, ...]:
+        """Return task credit ledger entries for one task in chronological order."""
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         """Persist a task-scoped tool grant."""

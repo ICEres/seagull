@@ -35,6 +35,17 @@ class TaskState(str, Enum):
     FAILED = "failed"
 
 
+class TaskCreditLedgerEntryType(str, Enum):
+    CREDIT_GRANT = "credit_grant"
+    ESCROW_HOLD = "escrow_hold"
+    ESCROW_RELEASE = "escrow_release"
+    ESCROW_CANCEL = "escrow_cancel"
+    DISPUTE_OPEN = "dispute_open"
+
+
+TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
+
+
 TASK_LIFECYCLE_TRANSITIONS: dict[TaskState, tuple[TaskState, ...]] = {
     TaskState.REQUESTED: (
         TaskState.QUOTED,
@@ -119,6 +130,11 @@ def task_lifecycle_next_states(state: TaskState | str) -> tuple[TaskState, ...]:
 
 def task_lifecycle_allows(current: TaskState | str, next_state: TaskState | str) -> bool:
     return normalize_task_state(next_state) in task_lifecycle_next_states(current)
+
+
+def require_int(value: int, field_name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolError(f"{field_name} must be an integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +449,60 @@ class TaskEscrow:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskCreditLedgerEntry:
+    entry_id: str
+    account: Handle
+    entry_type: TaskCreditLedgerEntryType
+    credit_amount: int
+    available_delta: int
+    escrow_delta: int = 0
+    task_id: str | None = None
+    thread_id: str | None = None
+    quote_id: str | None = None
+    escrow_id: str | None = None
+    counterparty: Handle | None = None
+    reason: str | None = None
+    settlement_scope: str = TASK_CREDIT_SETTLEMENT_SCOPE
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entry_id", required_string(self.entry_id, "entry_id"))
+        require_non_negative_int(self.credit_amount, "credit_amount")
+        require_int(self.available_delta, "available_delta")
+        require_int(self.escrow_delta, "escrow_delta")
+        if self.settlement_scope != TASK_CREDIT_SETTLEMENT_SCOPE:
+            raise ProtocolError("task credits must remain internal product credits")
+        if not isinstance(self.entry_type, TaskCreditLedgerEntryType):
+            try:
+                object.__setattr__(self, "entry_type", TaskCreditLedgerEntryType(self.entry_type))
+            except ValueError as exc:
+                allowed = ", ".join(entry_type.value for entry_type in TaskCreditLedgerEntryType)
+                raise ProtocolError(f"entry_type must be one of: {allowed}") from exc
+        for field_name in (
+            "task_id",
+            "thread_id",
+            "quote_id",
+            "escrow_id",
+            "reason",
+            "policy_decision_id",
+            "limits_ref",
+            "abuse_policy_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TaskResult:
     task_id: str
     responder: Handle
@@ -472,6 +542,9 @@ __all__ = [
     "ContextBudget",
     "ContextPack",
     "TASK_LIFECYCLE_TRANSITIONS",
+    "TASK_CREDIT_SETTLEMENT_SCOPE",
+    "TaskCreditLedgerEntry",
+    "TaskCreditLedgerEntryType",
     "TaskEscrow",
     "TaskQuote",
     "TaskRequest",

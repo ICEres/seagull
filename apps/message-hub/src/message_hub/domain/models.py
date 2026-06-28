@@ -48,6 +48,17 @@ class TaskState(str, Enum):
     FAILED = "failed"
 
 
+class TaskCreditLedgerEntryType(str, Enum):
+    CREDIT_GRANT = "credit_grant"
+    ESCROW_HOLD = "escrow_hold"
+    ESCROW_RELEASE = "escrow_release"
+    ESCROW_CANCEL = "escrow_cancel"
+    DISPUTE_OPEN = "dispute_open"
+
+
+TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
+
+
 TASK_LIFECYCLE_TRANSITIONS: dict[TaskState, tuple[TaskState, ...]] = {
     TaskState.REQUESTED: (
         TaskState.QUOTED,
@@ -436,6 +447,40 @@ class TaskEscrowRecord:
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     released_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCreditLedgerEntry:
+    entry_id: str
+    account_agent_id: str
+    entry_type: TaskCreditLedgerEntryType
+    credit_amount: int
+    available_delta: int
+    escrow_delta: int = 0
+    task_id: str | None = None
+    thread_id: str | None = None
+    quote_id: str | None = None
+    escrow_id: str | None = None
+    counterparty_agent_id: str | None = None
+    reason: str | None = None
+    settlement_scope: str = TASK_CREDIT_SETTLEMENT_SCOPE
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCreditBalance:
+    account_agent_id: str
+    available_balance: int
+    escrow_balance: int
+    settlement_scope: str = TASK_CREDIT_SETTLEMENT_SCOPE
+
+    @property
+    def total_balance(self) -> int:
+        return self.available_balance + self.escrow_balance
 
 
 @dataclass(frozen=True, slots=True)

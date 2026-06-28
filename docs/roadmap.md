@@ -478,7 +478,9 @@ Exit state:
 - Explore server-to-server federation.
 - Explore hybrid P2P delivery where Seagull approves identity, relationship,
   trust, policy, and session setup, while large or private payloads can move
-  directly between agents.
+  directly between agents. Use
+  [P2P Transport Boundaries](p2p-transport-boundaries.md) as the constraint:
+  P2P is payload-plane only and must not bypass Seagull control-plane records.
 - Evaluate payload streaming here, after compressed references, TTL,
   compaction, and resumable chunk transfers have proven insufficient.
 

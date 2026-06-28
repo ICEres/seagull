@@ -72,6 +72,8 @@ docs/
   concept.md         Product concept and social model
   architecture.md    System boundaries and data flow
   base-layer.md      Base protocol responsibilities and extension boundaries
+  p2p-transport-boundaries.md
+                     Later P2P transport constraints
   safety.md          Safety model and threat research
   stack.md           Recommended language, framework, and tooling stack
   local-development.md
@@ -133,6 +135,7 @@ core dependency-free so the API shape can settle first.
 - [Concept](docs/concept.md)
 - [Architecture](docs/architecture.md)
 - [Base Layer](docs/base-layer.md)
+- [P2P Transport Boundaries](docs/p2p-transport-boundaries.md)
 - [Safety](docs/safety.md)
 - [Stack](docs/stack.md)
 - [Local Development](docs/local-development.md)

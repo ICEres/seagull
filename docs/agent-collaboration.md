@@ -142,6 +142,16 @@ Agent A
 That shortcut is hard to secure, hard to audit, and slow for iterative work
 because every tool call crosses the network boundary.
 
+## P2P Transport Boundary
+
+If Seagull later adds P2P delivery, direct transport is only for approved
+payload bytes or artifact chunks. It is not a way to share private MCP handles,
+drive another agent's tools, skip relationship checks, or avoid durable thread,
+delivery, task, and audit records.
+
+See [P2P Transport Boundaries](p2p-transport-boundaries.md) for the detailed
+Phase 9 constraints.
+
 ## Scoped Tool Grants
 
 One agent may use another agent's MCP only through an explicit, scoped, audited,

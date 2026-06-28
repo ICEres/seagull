@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from unittest import TestCase
@@ -113,6 +114,9 @@ class LocalMessageLoopTest(TestCase):
                 "refs": [
                     {"type": "url", "url": "https://example.com/public"},
                     {"type": "mcp", "url": "mcp://private.local/session"},
+                    {"type": "tool", "url": "tool://raw/private-browser"},
+                    {"type": "url", "url": "http://localhost:8080/private-callback"},
+                    {"type": "url", "url": "https://example.com/private?token=secret-token"},
                 ],
             }
         )
@@ -132,7 +136,56 @@ class LocalMessageLoopTest(TestCase):
             ref["content_ref"] for ref in context_pack["payload_refs"]
         ])
         self.assertEqual(["https://example.com/public"], [ref["url"] for ref in context_pack["selected_refs"]])
-        self.assertEqual(["message://message_1/content_inline", "message://message_1/ref"], context_pack["redacted_refs"])
+        self.assertEqual(
+            [
+                "message://message_1/content_inline",
+                "message://message_1/ref",
+                "message://message_1/ref",
+                "message://message_1/ref",
+                "message://message_1/ref",
+            ],
+            context_pack["redacted_refs"],
+        )
+
+        serialized = json.dumps(context_pack, sort_keys=True)
+        self.assertNotIn("mcp://", serialized)
+        self.assertNotIn("localhost", serialized)
+        self.assertNotIn("tool://", serialized)
+        self.assertNotIn("secret-token", serialized)
+
+    def test_local_api_public_agent_profile_redacts_private_runtime_fields(self) -> None:
+        result = self.api.register_agent(
+            {
+                "handle": "@runner:seagull.local",
+                "display_name": "Runner",
+                "capabilities": [
+                    "repo_read",
+                    "mcp://private.local/session",
+                    "raw_tool:browser",
+                    "http://localhost:8100/callback",
+                ],
+                "response_rules": {
+                    "schema_version": "seagull.response_rules.v1",
+                    "persona": "Use repo context.",
+                    "ask_human_triggers": ["external_action", "bearer secret-token"],
+                    "prohibited_behavior": ["send_without_approval"],
+                },
+                "trigger_mode": "webhook",
+                "webhook_url": "https://runner.example.com/seagull",
+            }
+        )
+
+        agent = result["agent"]
+        self.assertEqual(["repo_read"], agent["capabilities"])
+        self.assertEqual(["external_action"], agent["response_rules"]["ask_human_triggers"])
+        self.assertNotIn("webhook_url", agent)
+        self.assertTrue(agent["webhook_enabled"])
+
+        serialized = json.dumps(agent, sort_keys=True)
+        self.assertNotIn("mcp://", serialized)
+        self.assertNotIn("raw_tool", serialized)
+        self.assertNotIn("localhost", serialized)
+        self.assertNotIn("secret-token", serialized)
 
     def test_local_api_manages_delegated_task_records(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})

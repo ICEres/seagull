@@ -75,6 +75,22 @@ PRIVATE_CONTEXT_REF_MARKERS = (
     "127.0.0.1",
     "::1",
     ".sock",
+    "tool://",
+    "raw_tool",
+    "raw-tool",
+    "tool_handle",
+    "tool-handle",
+    "mcp_server",
+    "mcp-server",
+    "credential",
+    "credentials",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "authorization",
+    "bearer ",
 )
 
 
@@ -404,14 +420,18 @@ class MessageHubService:
                     truncated = True
                     redacted_refs.append(f"message://{message.message_id}/content_inline")
 
-            if message.content_ref and len(payload_refs) < normalized_max_payload_refs:
-                payload_refs.append(
-                    ContextPayloadRef(
-                        content_ref=message.content_ref,
-                        source_type="message",
-                        source_id=message.message_id,
+            if message.content_ref:
+                if has_private_context_marker(message.content_ref):
+                    budgeted_message = replace(budgeted_message, content_ref=None)
+                    redacted_refs.append(f"message://{message.message_id}/content_ref")
+                elif len(payload_refs) < normalized_max_payload_refs:
+                    payload_refs.append(
+                        ContextPayloadRef(
+                            content_ref=message.content_ref,
+                            source_type="message",
+                            source_id=message.message_id,
+                        )
                     )
-                )
 
             for ref in message.refs:
                 if is_private_context_ref(ref):
@@ -420,17 +440,22 @@ class MessageHubService:
                 if len(selected_refs) < normalized_max_payload_refs:
                     selected_refs.append(ref)
 
-            budgeted_messages.append(budgeted_message)
+            budgeted_messages.append(replace(budgeted_message, refs=()))
 
         summary = self._repository.get_latest_thread_summary(thread_id)
-        if summary is not None and summary.content_ref and len(payload_refs) < normalized_max_payload_refs:
-            payload_refs.append(
-                ContextPayloadRef(
-                    content_ref=summary.content_ref,
-                    source_type="thread_summary",
-                    source_id=summary.summary_id,
+        context_summary = summary
+        if summary is not None and summary.content_ref:
+            if has_private_context_marker(summary.content_ref):
+                context_summary = replace(summary, content_ref=None)
+                redacted_refs.append(f"summary://{summary.summary_id}/content_ref")
+            elif len(payload_refs) < normalized_max_payload_refs:
+                payload_refs.append(
+                    ContextPayloadRef(
+                        content_ref=summary.content_ref,
+                        source_type="thread_summary",
+                        source_id=summary.summary_id,
+                    )
                 )
-            )
 
         allowed_recipients = tuple(
             sorted(
@@ -454,7 +479,7 @@ class MessageHubService:
             context_pack_id=f"context_pack_{thread.thread_id}_{requester.agent_id}",
             thread=thread,
             requester_handle=requester.handle,
-            summary=summary,
+            summary=context_summary,
             recent_messages=tuple(budgeted_messages),
             selected_refs=tuple(selected_refs),
             payload_refs=tuple(payload_refs),
@@ -1291,7 +1316,11 @@ def require_bounded_int(value: int, field_name: str, *, minimum: int, maximum: i
 
 def is_private_context_ref(ref: MessageRef) -> bool:
     haystacks = (ref.type, ref.url or "", ref.find or "", ref.remember_as or "")
-    normalized = " ".join(haystacks).lower()
+    return has_private_context_marker(*haystacks)
+
+
+def has_private_context_marker(*values: str) -> bool:
+    normalized = " ".join(values).lower()
     return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
 
 

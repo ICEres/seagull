@@ -78,6 +78,9 @@ class MessageHubServiceTest(TestCase):
             refs=(
                 MessageRef(type="url", url="https://example.com/context", remember_as="public link"),
                 MessageRef(type="mcp", url="mcp://private-tools.local/session"),
+                MessageRef(type="tool", url="tool://raw/private-browser", remember_as="raw_tool_handle"),
+                MessageRef(type="url", url="http://localhost:9000/callback"),
+                MessageRef(type="url", url="https://example.com/private?token=secret-token"),
             ),
         )
         self.service.save_thread_summary(
@@ -104,7 +107,8 @@ class MessageHubServiceTest(TestCase):
             ref.content_ref for ref in context_pack.payload_refs
         ))
         self.assertEqual(("https://example.com/context",), tuple(ref.url for ref in context_pack.selected_refs))
-        self.assertIn("message://message_1/ref", context_pack.redacted_refs)
+        self.assertEqual("message://message_1/content_inline", context_pack.redacted_refs[0])
+        self.assertEqual(("message://message_1/ref",) * 4, context_pack.redacted_refs[1:])
         self.assertEqual(("@researcher:gulls.ai", "@reviewer:gulls.ai"), context_pack.allowed_recipients)
 
     def test_context_pack_requires_thread_participant(self) -> None:
@@ -119,6 +123,32 @@ class MessageHubServiceTest(TestCase):
                 result.thread.thread_id,
                 requester_handle="@map-reader:gulls.ai",
             )
+
+    def test_context_pack_redacts_private_content_refs(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Referenced private payload.",
+            content_ref="file:///Users/alice/private-plan.md",
+        )
+        self.service.save_thread_summary(
+            result.thread.thread_id,
+            "Private summary ref.",
+            content_ref="mcp://private-summary/session",
+        )
+
+        context_pack = self.service.get_context_pack(
+            result.thread.thread_id,
+            requester_handle="@reviewer:gulls.ai",
+        )
+
+        self.assertIsNone(context_pack.recent_messages[0].content_ref)
+        self.assertIsNotNone(context_pack.summary)
+        assert context_pack.summary is not None
+        self.assertIsNone(context_pack.summary.content_ref)
+        self.assertEqual((), context_pack.payload_refs)
+        self.assertIn("message://message_1/content_ref", context_pack.redacted_refs)
+        self.assertIn("summary://summary_1/content_ref", context_pack.redacted_refs)
 
     def test_delegated_task_records_lifecycle_without_inline_task_payload_messages(self) -> None:
         task = self.service.create_task(

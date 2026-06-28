@@ -30,7 +30,24 @@ PRIVATE_CONTEXT_REF_MARKERS = (
     "127.0.0.1",
     "::1",
     ".sock",
+    "tool://",
+    "raw_tool",
+    "raw-tool",
+    "tool_handle",
+    "tool-handle",
+    "mcp_server",
+    "mcp-server",
+    "credential",
+    "credentials",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "authorization",
+    "bearer ",
 )
+PRIVATE_PROFILE_MARKERS = PRIVATE_CONTEXT_REF_MARKERS
 
 AGENTS_TABLE = os.environ["AGENTS_TABLE"]
 MESSAGES_TABLE = os.environ["MESSAGES_TABLE"]
@@ -816,14 +833,19 @@ def read_context_pack(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
                 truncated = True
                 redacted_refs.append(f"message://{message['message_id']}/content_inline")
 
-        if budgeted_message.get("content_ref") and len(payload_refs) < max_payload_refs:
-            payload_refs.append(
-                {
-                    "content_ref": budgeted_message["content_ref"],
-                    "source_type": "message",
-                    "source_id": budgeted_message["message_id"],
-                }
-            )
+        content_ref = budgeted_message.get("content_ref")
+        if isinstance(content_ref, str) and content_ref:
+            if private_context_value(content_ref):
+                budgeted_message.pop("content_ref", None)
+                redacted_refs.append(f"message://{message['message_id']}/content_ref")
+            elif len(payload_refs) < max_payload_refs:
+                payload_refs.append(
+                    {
+                        "content_ref": content_ref,
+                        "source_type": "message",
+                        "source_id": budgeted_message["message_id"],
+                    }
+                )
 
         for ref in message.get("refs", []):
             if private_context_ref(ref):
@@ -832,17 +854,24 @@ def read_context_pack(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
             if len(selected_refs) < max_payload_refs:
                 selected_refs.append(ref)
 
+        budgeted_message["refs"] = []
         budgeted_messages.append(budgeted_message)
 
     summary = latest_thread_summary(thread_id)
-    if summary and summary.get("content_ref") and len(payload_refs) < max_payload_refs:
-        payload_refs.append(
-            {
-                "content_ref": summary["content_ref"],
-                "source_type": "thread_summary",
-                "source_id": summary.get("summary_id", "latest"),
-            }
-        )
+    context_summary = dict(summary) if summary else None
+    if context_summary and isinstance(context_summary.get("content_ref"), str):
+        summary_content_ref = context_summary["content_ref"]
+        if private_context_value(summary_content_ref):
+            context_summary.pop("content_ref", None)
+            redacted_refs.append(f"summary://{context_summary.get('summary_id', 'latest')}/content_ref")
+        elif len(payload_refs) < max_payload_refs:
+            payload_refs.append(
+                {
+                    "content_ref": summary_content_ref,
+                    "source_type": "thread_summary",
+                    "source_id": context_summary.get("summary_id", "latest"),
+                }
+            )
 
     allowed_recipients = sorted(
         agent["handle"]
@@ -856,7 +885,7 @@ def read_context_pack(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
             "context_pack_id": f"context_pack_{thread_id}_{requester['agent_id']}",
             "thread": clean_item(thread),
             "requester_handle": requester["handle"],
-            "summary": clean_item(summary),
+            "summary": clean_item(context_summary),
             "recent_messages": clean_item(budgeted_messages),
             "selected_refs": clean_item(selected_refs),
             "payload_refs": clean_item(payload_refs),
@@ -1364,8 +1393,8 @@ def public_agent(agent: dict[str, Any]) -> dict[str, Any]:
             "agent_id": agent.get("agent_id"),
             "handle": agent.get("handle"),
             "display_name": agent.get("display_name"),
-            "capabilities": agent.get("capabilities", []),
-            "response_rules": agent.get("response_rules"),
+            "capabilities": public_capabilities(agent.get("capabilities", [])),
+            "response_rules": public_response_rules(agent.get("response_rules")),
             "status": agent.get("status"),
             "trigger_mode": trigger_mode,
             "webhook_enabled": trigger_mode == "webhook" and bool(agent.get("webhook_url")),
@@ -1373,6 +1402,52 @@ def public_agent(agent: dict[str, Any]) -> dict[str, Any]:
             "updated_at": agent.get("updated_at"),
         }
     )
+
+
+def public_capabilities(capabilities: Any) -> list[str]:
+    if isinstance(capabilities, str):
+        values = [capabilities]
+    elif isinstance(capabilities, set):
+        values = sorted(item for item in capabilities if isinstance(item, str))
+    elif isinstance(capabilities, (list, tuple)):
+        values = [item for item in capabilities if isinstance(item, str)]
+    else:
+        values = []
+    return [capability for capability in values if not has_private_profile_marker(capability)]
+
+
+def public_response_rules(response_rules: Any) -> dict[str, Any] | None:
+    sanitized = sanitize_public_profile_value(response_rules)
+    return sanitized if isinstance(sanitized, dict) else None
+
+
+def sanitize_public_profile_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return None if has_private_profile_marker(value) else value
+    if isinstance(value, (list, tuple, set)):
+        sanitized_items = []
+        for item in value:
+            sanitized = sanitize_public_profile_value(item)
+            if sanitized is not None:
+                sanitized_items.append(sanitized)
+        return sanitized_items
+    if isinstance(value, dict):
+        sanitized_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            if has_private_profile_marker(str(key)):
+                continue
+            sanitized = sanitize_public_profile_value(item)
+            if sanitized is not None:
+                sanitized_dict[str(key)] = sanitized
+        return sanitized_dict
+    if value is None or isinstance(value, (bool, int, float, Decimal)):
+        return value
+    return None
+
+
+def has_private_profile_marker(value: str) -> bool:
+    normalized = value.lower()
+    return any(marker in normalized for marker in PRIVATE_PROFILE_MARKERS)
 
 
 def trigger_config(body: dict[str, Any]) -> tuple[str, str | None]:
@@ -1727,7 +1802,11 @@ def private_context_ref(ref: dict[str, Any]) -> bool:
         str(ref.get("find") or ""),
         str(ref.get("remember_as") or ""),
     )
-    normalized = " ".join(haystacks).lower()
+    return private_context_value(*haystacks)
+
+
+def private_context_value(*values: str) -> bool:
+    normalized = " ".join(values).lower()
     return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
 
 

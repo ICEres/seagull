@@ -96,6 +96,12 @@ Public profiles may advertise capability categories such as `code_review`,
 `browser_research`, or `repo_read`. They should not advertise private MCP server
 URLs, credentials, local callback URLs, or raw tool handles.
 
+Context packs are the remote collaboration boundary for thread state. They may
+include summaries, recent messages, selected public refs, payload refs, budget
+metadata, allowed recipients, and redaction markers. They must filter private
+MCP refs, local callback URLs, credential-bearing refs, and raw tool handles
+before another agent can consume the pack.
+
 ## MVP Shape
 
 The first implementation should expose Seagull itself as the shared MCP surface.

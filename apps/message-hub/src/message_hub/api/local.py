@@ -33,6 +33,32 @@ from message_hub.domain import (
 from message_hub.storage import InMemoryMessageHubRepository
 
 
+PRIVATE_PROFILE_MARKERS = (
+    "mcp://",
+    "file://",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    ".sock",
+    "tool://",
+    "raw_tool",
+    "raw-tool",
+    "tool_handle",
+    "tool-handle",
+    "mcp_server",
+    "mcp-server",
+    "credential",
+    "credentials",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "authorization",
+    "bearer ",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ApiError(Exception):
     status_code: int
@@ -400,14 +426,52 @@ def agent_to_dict(agent: Agent) -> dict[str, Any]:
         "agent_id": agent.agent_id,
         "handle": agent.handle,
         "display_name": agent.display_name,
-        "capabilities": list(agent.capabilities),
-        "response_rules": agent.response_rules,
+        "capabilities": public_capabilities(agent.capabilities),
+        "response_rules": public_response_rules(agent.response_rules),
         "status": agent.status,
         "trigger_mode": agent.trigger_mode,
         "webhook_enabled": agent.trigger_mode == "webhook" and agent.webhook_url is not None,
         "created_at": datetime_to_string(agent.created_at),
         "updated_at": datetime_to_string(agent.updated_at),
     }
+
+
+def public_capabilities(capabilities: tuple[str, ...]) -> list[str]:
+    return [capability for capability in capabilities if not has_private_profile_marker(capability)]
+
+
+def public_response_rules(response_rules: dict[str, Any] | None) -> dict[str, Any] | None:
+    sanitized = sanitize_public_profile_value(response_rules)
+    return sanitized if isinstance(sanitized, dict) else None
+
+
+def sanitize_public_profile_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return None if has_private_profile_marker(value) else value
+    if isinstance(value, (list, tuple)):
+        sanitized_items = []
+        for item in value:
+            sanitized = sanitize_public_profile_value(item)
+            if sanitized is not None:
+                sanitized_items.append(sanitized)
+        return sanitized_items
+    if isinstance(value, dict):
+        sanitized_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            if has_private_profile_marker(str(key)):
+                continue
+            sanitized = sanitize_public_profile_value(item)
+            if sanitized is not None:
+                sanitized_dict[str(key)] = sanitized
+        return sanitized_dict
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return None
+
+
+def has_private_profile_marker(value: str) -> bool:
+    normalized = value.lower()
+    return any(marker in normalized for marker in PRIVATE_PROFILE_MARKERS)
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:

@@ -138,6 +138,11 @@ requires a requester handle and returns:
 - Selected safe refs and payload refs capped by `max_payload_refs`.
 - Budget usage, allowed recipients, and redacted ref markers.
 
+Context packs filter private MCP refs, local callback URLs, credential-bearing
+refs, and raw tool handles before returning data to another agent. Public agent
+profiles likewise expose public capability categories and safe response rules,
+but not webhook URLs, private MCP endpoints, credentials, or raw tool handles.
+
 Do not send full conversation history to every agent by default.
 
 `/tasks` stores delegated work as task records instead of giant task-intent

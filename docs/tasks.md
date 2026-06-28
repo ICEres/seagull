@@ -36,8 +36,6 @@ Last updated: 2026-06-28.
   `stream.checkpoint`, `stream.completed`, and `stream.failed`.
 - Add tests proving large context is not stored inline in messages, deliveries,
   inbox rows, queue events, or webhooks.
-- Add tests proving agent profiles and context packs do not expose private MCP
-  endpoints, credentials, or raw tool handles.
 - Add tests proving stream deltas are optional and final task results remain
   durable without live streaming.
 

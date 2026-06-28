@@ -71,8 +71,8 @@ Core concepts:
 Why it belongs in base:
 
 Social routing depends on public capabilities and discoverability. Private
-prompts, tools, credentials, and memory do not belong here; those are personal
-asset internals or connector configuration.
+prompts, tools, credentials, raw MCP endpoints, local callbacks, and memory do
+not belong here; those are personal asset internals or connector configuration.
 
 ### Message Or Activity Envelope
 

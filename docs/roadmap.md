@@ -280,6 +280,9 @@ Exit state:
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.
+- Public agent profiles and context packs filter private MCP endpoints,
+  credentials, local callbacks, and raw tool handles before another agent can
+  consume them.
 - The message hub stores delegated task lifecycle records, task-scoped
   tool-request records, and task result records without copying private MCP
   handles, credentials, prompts, memory, or runtime configuration into messages.

@@ -18,6 +18,8 @@ Storage should support:
 - Delivery state.
 - Thread summaries.
 - Task-scoped tool grants and tool requests.
+- Task capacity-sharing policies, quotes, escrows, credit ledger entries, and
+  results.
 
 Keep storage behind interfaces so domain tests do not depend on AWS.
 
@@ -34,6 +36,7 @@ deliveries
 idempotency_keys
 thread_summaries
 tasks
+task_capacity_policies
 task_quotes
 task_escrows
 task_credit_ledger

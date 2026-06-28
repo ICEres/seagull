@@ -313,6 +313,10 @@ The current protocol package should keep this boundary explicit:
   expected credit cost, shared context refs, and task reason. Escrows are created
   only after approval when approval is required, and carry Seagull-owned limits,
   abuse-control, and audit refs.
+- Represent capacity sharing as explicit work/task policy records. A
+  token-poor requester and token-rich worker must be named before credits can be
+  spent across users, with max credit cost, auto-escrow budget, private-context
+  sharing rules, approval gates, limits refs, abuse-control refs, and audit refs.
 - Represent task credits with append-only ledger entries in the work/task
   extension. Ledger entries use internal product-credit settlement only and
   carry available/escrow deltas plus task, quote, escrow, limits, abuse-control,

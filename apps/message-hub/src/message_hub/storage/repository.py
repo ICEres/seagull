@@ -9,6 +9,7 @@ from message_hub.domain.models import (
     Message,
     StoredPayload,
     RoutingRule,
+    TaskCapacitySharingPolicyRecord,
     TaskCreditLedgerEntry,
     TaskEscrowRecord,
     TaskQuoteRecord,
@@ -152,6 +153,18 @@ class MessageHubRepository(Protocol):
 
     def list_task_escrows_by_task(self, task_id: str) -> tuple[TaskEscrowRecord, ...]:
         """Return escrows scoped to a task in chronological order."""
+
+    def put_task_capacity_policy(self, policy: TaskCapacitySharingPolicyRecord) -> None:
+        """Persist a task capacity-sharing policy."""
+
+    def get_task_capacity_policy(self, policy_id: str) -> TaskCapacitySharingPolicyRecord | None:
+        """Return a task capacity-sharing policy by ID."""
+
+    def list_task_capacity_policies_by_task(
+        self,
+        task_id: str,
+    ) -> tuple[TaskCapacitySharingPolicyRecord, ...]:
+        """Return capacity-sharing policies scoped to a task in chronological order."""
 
     def put_task_credit_ledger_entry(self, entry: TaskCreditLedgerEntry) -> None:
         """Persist an append-only task credit ledger entry."""

@@ -125,6 +125,8 @@ POST /personal-agents/{handle}/tasks/{task_id}/accept
 POST /personal-agents/{handle}/tasks/{task_id}/results
 POST /tasks
 GET  /tasks/{task_id}
+POST /tasks/{task_id}/capacity-policies
+GET  /tasks/{task_id}/capacity-policies
 POST /tasks/{task_id}/accept
 POST /tasks/{task_id}/status
 POST /tasks/{task_id}/results
@@ -204,14 +206,18 @@ messages. Task notification messages should carry only `seagull://tasks/...`
 refs. Task records capture requester, recipient, objective, context refs,
 allowed tool names, allowed-use terms, lifecycle state, policy decision ID,
 accepted worker, quote refs, escrow refs, optional `stream_id`, result refs,
-and artifact refs. Task quote records capture expected credit cost, shared
-context refs, task reason, approval requirement, limits ref, abuse policy ref,
-and audit refs. Task escrow records are created only from an approved quote when
-approval is required; they carry held credits, approval refs, limits refs, abuse
-policy refs, and audit refs. Task credit ledger entries are append-only internal
-product-credit events for grants, escrow holds, releases, cancellations, and
-disputes; balances are computed from available and escrow deltas rather than
-stored as mutable cash-out accounts. Task results may carry the same optional
+and artifact refs. Task capacity-sharing policy records make requester and
+worker roles explicit, set lower-to-higher capacity tiers, cap credit cost and
+auto-escrow, define private-context approval rules, and carry Seagull-owned
+limits, abuse-control, policy-decision, and audit refs. Task quote records
+capture expected credit cost, shared context refs, task reason, approval
+requirement, limits ref, abuse policy ref, and audit refs. Task escrow records
+are created only from an approved quote when approval is required; they carry
+held credits, approval refs, limits refs, abuse policy refs, and audit refs.
+Task credit ledger entries are append-only internal product-credit events for
+grants, escrow holds, releases, cancellations, and disputes; balances are
+computed from available and escrow deltas rather than stored as mutable cash-out
+accounts. Task results may carry the same optional
 `stream_id`, but durable result records and final task-result messages do not
 require live streaming. Task-scoped tool-request
 records capture requested tool name, purpose, approval requirement, policy
@@ -276,6 +282,7 @@ idempotency_keys  duplicate-send protection
 thread_summaries  compact context for long conversations
 payloads          compressed local payload blobs plus reference metadata
 tasks             delegated task lifecycle records
+task_capacity_policies requester/worker capacity-sharing limits and approvals
 task_quotes       expected cost, shared context, reason, approval, and audit
 task_escrows      held internal credits linked to approved/preapproved quotes
 task_credit_ledger append-only internal credit balance and escrow movements

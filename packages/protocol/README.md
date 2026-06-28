@@ -76,6 +76,11 @@ may reference a `tool_grant_id`, but they still must not expose private MCP
 server URLs, credentials, memory, or raw tool handles.
 Task stream IDs are optional links to future live projections; task results are
 durable records without requiring stream events.
+TaskCapacitySharingPolicy records make requester and worker roles explicit when
+a lower-capacity requester spends internal credits on a higher-capacity worker.
+They set max credit cost, auto-escrow budget, private-context sharing policy,
+approval gates, limits refs, abuse-control refs, and audit refs before quotes
+can silently exceed configured sharing limits.
 TaskQuote records expose the worker's expected credit cost, shared context refs,
 task reason, approval requirement, limits ref, abuse policy ref, and audit refs.
 TaskEscrow records point back to an approved or preapproved quote and carry the

@@ -56,6 +56,17 @@ class TaskCreditLedgerEntryType(str, Enum):
     DISPUTE_OPEN = "dispute_open"
 
 
+class TaskCapacityRole(str, Enum):
+    REQUESTER = "requester"
+    WORKER = "worker"
+
+
+class TaskCapacityTier(str, Enum):
+    LOW = "low"
+    STANDARD = "standard"
+    HIGH = "high"
+
+
 TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
 
 
@@ -396,6 +407,7 @@ class TaskRecord:
     tool_grant_ids: tuple[str, ...] = ()
     quote_ids: tuple[str, ...] = ()
     escrow_ids: tuple[str, ...] = ()
+    capacity_policy_ids: tuple[str, ...] = ()
     state: TaskState = TaskState.REQUESTED
     policy_decision_id: str | None = None
     accepted_by_agent_id: str | None = None
@@ -405,6 +417,30 @@ class TaskRecord:
     tool_request_ids: tuple[str, ...] = ()
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCapacitySharingPolicyRecord:
+    policy_id: str
+    task_id: str
+    thread_id: str
+    requester_agent_id: str
+    worker_agent_id: str
+    requester_role: TaskCapacityRole = TaskCapacityRole.REQUESTER
+    worker_role: TaskCapacityRole = TaskCapacityRole.WORKER
+    requester_capacity_tier: TaskCapacityTier = TaskCapacityTier.LOW
+    worker_capacity_tier: TaskCapacityTier = TaskCapacityTier.HIGH
+    max_credit_cost: int = 0
+    max_auto_escrow_credits: int = 0
+    allow_private_context: bool = False
+    private_context_requires_approval: bool = True
+    paid_work_requires_approval: bool = True
+    high_cost_requires_approval: bool = True
+    abuse_policy_ref: str | None = None
+    limits_ref: str | None = None
+    policy_decision_id: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)

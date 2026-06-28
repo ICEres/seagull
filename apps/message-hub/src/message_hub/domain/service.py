@@ -31,6 +31,9 @@ from message_hub.domain.models import (
     StoredPayload,
     TASK_CREDIT_SETTLEMENT_SCOPE,
     TASK_INACTIVE_STATES,
+    TaskCapacityRole,
+    TaskCapacitySharingPolicyRecord,
+    TaskCapacityTier,
     TaskCreditBalance,
     TaskCreditLedgerEntry,
     TaskCreditLedgerEntryType,
@@ -857,6 +860,96 @@ class MessageHubService:
         task = self._require_task(task_id)
         return self._repository.list_task_credit_ledger_entries_by_task(task.task_id)
 
+    def define_task_capacity_policy(
+        self,
+        task_id: str,
+        *,
+        actor_handle: str,
+        requester_capacity_tier: str = TaskCapacityTier.LOW.value,
+        worker_capacity_tier: str = TaskCapacityTier.HIGH.value,
+        max_credit_cost: int,
+        max_auto_escrow_credits: int = 0,
+        allow_private_context: bool = False,
+        private_context_requires_approval: bool = True,
+        paid_work_requires_approval: bool = True,
+        high_cost_requires_approval: bool = True,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        policy_decision_id: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskCapacitySharingPolicyRecord:
+        task = self._require_task(task_id)
+        actor = self._require_agent_by_handle(actor_handle)
+        if actor.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can define capacity sharing policy")
+        for field_name, value in (
+            ("allow_private_context", allow_private_context),
+            ("private_context_requires_approval", private_context_requires_approval),
+            ("paid_work_requires_approval", paid_work_requires_approval),
+            ("high_cost_requires_approval", high_cost_requires_approval),
+        ):
+            if not isinstance(value, bool):
+                raise InvalidMessageError(f"{field_name} must be a boolean")
+        normalized_max_credit_cost = require_bounded_int(
+            max_credit_cost,
+            "max_credit_cost",
+            minimum=0,
+            maximum=MAX_TASK_CREDIT_QUOTE,
+        )
+        normalized_max_auto_escrow_credits = require_bounded_int(
+            max_auto_escrow_credits,
+            "max_auto_escrow_credits",
+            minimum=0,
+            maximum=MAX_TASK_CREDIT_QUOTE,
+        )
+        if normalized_max_auto_escrow_credits > normalized_max_credit_cost:
+            raise InvalidMessageError("max_auto_escrow_credits cannot exceed max_credit_cost")
+
+        policy_id = self._new_id("capacity_policy")
+        normalized_audit_refs = tuple(
+            normalize_required(ref, "audit_ref")
+            for ref in audit_refs
+        ) or (f"seagull://tasks/{task.task_id}/capacity-policies/{policy_id}/audit",)
+        now = self._clock()
+        policy = TaskCapacitySharingPolicyRecord(
+            policy_id=policy_id,
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            requester_agent_id=task.requester_agent_id,
+            worker_agent_id=task.recipient_agent_id,
+            requester_role=TaskCapacityRole.REQUESTER,
+            worker_role=TaskCapacityRole.WORKER,
+            requester_capacity_tier=normalize_task_capacity_tier(requester_capacity_tier),
+            worker_capacity_tier=normalize_task_capacity_tier(worker_capacity_tier),
+            max_credit_cost=normalized_max_credit_cost,
+            max_auto_escrow_credits=normalized_max_auto_escrow_credits,
+            allow_private_context=allow_private_context,
+            private_context_requires_approval=private_context_requires_approval,
+            paid_work_requires_approval=paid_work_requires_approval,
+            high_cost_requires_approval=high_cost_requires_approval,
+            limits_ref=normalized_optional_string(limits_ref) or f"seagull://tasks/{task.task_id}/capacity-limits",
+            abuse_policy_ref=(
+                normalized_optional_string(abuse_policy_ref)
+                or "seagull://policies/task-credits/abuse-controls"
+            ),
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            audit_refs=normalized_audit_refs,
+            created_at=now,
+        )
+        self._repository.put_task_capacity_policy(policy)
+        self._repository.update_task(
+            replace(
+                task,
+                capacity_policy_ids=(*task.capacity_policy_ids, policy.policy_id),
+                updated_at=now,
+            )
+        )
+        return policy
+
+    def list_task_capacity_policies(self, task_id: str) -> tuple[TaskCapacitySharingPolicyRecord, ...]:
+        task = self._require_task(task_id)
+        return self._repository.list_task_capacity_policies_by_task(task.task_id)
+
     def create_task_quote(
         self,
         task_id: str,
@@ -894,14 +987,32 @@ class MessageHubService:
             normalize_required(ref, "shared_context_ref")
             for ref in shared_context_refs
         ) or task_shared_context_refs(task)
-        normalized_limits_ref = (
-            normalized_optional_string(limits_ref)
-            or f"seagull://tasks/{task.task_id}/limits"
+        policy = self._latest_task_capacity_policy(task)
+        requires_approval, policy_approval_reason = self._apply_task_capacity_policy_to_quote(
+            policy=policy,
+            expected_credit_cost=normalized_cost,
+            shared_context_refs=normalized_shared_context_refs,
+            requires_approval=requires_approval,
         )
-        normalized_abuse_policy_ref = (
-            normalized_optional_string(abuse_policy_ref)
-            or "seagull://policies/task-credits/abuse-controls"
-        )
+        if normalized_approval_reason is None:
+            normalized_approval_reason = policy_approval_reason
+        normalized_limits_ref = normalized_optional_string(limits_ref)
+        if normalized_limits_ref is None:
+            normalized_limits_ref = (
+                policy.limits_ref
+                if policy is not None
+                else f"seagull://tasks/{task.task_id}/limits"
+            )
+        normalized_abuse_policy_ref = normalized_optional_string(abuse_policy_ref)
+        if normalized_abuse_policy_ref is None:
+            normalized_abuse_policy_ref = (
+                policy.abuse_policy_ref
+                if policy is not None
+                else "seagull://policies/task-credits/abuse-controls"
+            )
+        normalized_policy_decision_id = normalized_optional_string(policy_decision_id)
+        if normalized_policy_decision_id is None and policy is not None:
+            normalized_policy_decision_id = policy.policy_decision_id
         audit_ref = f"seagull://tasks/{task.task_id}/quotes/{quote_id}/audit"
 
         now = self._clock()
@@ -916,7 +1027,7 @@ class MessageHubService:
             shared_context_refs=normalized_shared_context_refs,
             requires_approval=requires_approval,
             approval_reason=normalized_approval_reason,
-            policy_decision_id=normalized_optional_string(policy_decision_id),
+            policy_decision_id=normalized_policy_decision_id,
             limits_ref=normalized_limits_ref,
             abuse_policy_ref=normalized_abuse_policy_ref,
             audit_refs=(audit_ref,),
@@ -1979,6 +2090,42 @@ class MessageHubService:
             escrow_balance=escrow_balance,
         )
 
+    def _latest_task_capacity_policy(
+        self,
+        task: TaskRecord,
+    ) -> TaskCapacitySharingPolicyRecord | None:
+        policies = self._repository.list_task_capacity_policies_by_task(task.task_id)
+        if not policies:
+            return None
+        return policies[-1]
+
+    def _apply_task_capacity_policy_to_quote(
+        self,
+        *,
+        policy: TaskCapacitySharingPolicyRecord | None,
+        expected_credit_cost: int,
+        shared_context_refs: tuple[str, ...],
+        requires_approval: bool,
+    ) -> tuple[bool, str | None]:
+        if policy is None:
+            return requires_approval, None
+        if expected_credit_cost > policy.max_credit_cost:
+            raise InvalidMessageError("expected_credit_cost exceeds configured capacity sharing limit")
+        has_private_context = any(has_private_context_marker(ref) for ref in shared_context_refs)
+        if has_private_context and not policy.allow_private_context:
+            raise ForbiddenDeliveryError("capacity sharing policy does not allow private-context sharing")
+
+        approval_reasons: list[str] = []
+        if has_private_context and policy.private_context_requires_approval:
+            approval_reasons.append("private-context sharing requires approval")
+        if expected_credit_cost > 0 and policy.paid_work_requires_approval:
+            approval_reasons.append("paid capacity sharing requires approval")
+        if expected_credit_cost > policy.max_auto_escrow_credits and policy.high_cost_requires_approval:
+            approval_reasons.append("expected cost exceeds auto-escrow limit")
+        if approval_reasons:
+            return True, "; ".join(approval_reasons)
+        return requires_approval, None
+
     def _require_tool_grant(self, grant_id: str) -> ToolGrant:
         normalized_grant_id = normalize_required(grant_id, "tool_grant_id")
         grant = self._repository.get_tool_grant(normalized_grant_id)
@@ -2451,6 +2598,15 @@ def normalize_task_state(state: str) -> TaskState:
     except ValueError as exc:
         allowed = ", ".join(task_state.value for task_state in TaskState)
         raise InvalidMessageError(f"task state must be one of: {allowed}") from exc
+
+
+def normalize_task_capacity_tier(tier: str) -> TaskCapacityTier:
+    normalized = normalize_required(tier, "capacity_tier").lower()
+    try:
+        return TaskCapacityTier(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(capacity_tier.value for capacity_tier in TaskCapacityTier)
+        raise InvalidMessageError(f"capacity_tier must be one of: {allowed}") from exc
 
 
 def task_ref(task_id: str, label: str) -> MessageRef:

@@ -10,6 +10,7 @@ from message_hub.domain.models import (
     Message,
     RoutingRule,
     StoredPayload,
+    TaskCapacitySharingPolicyRecord,
     TaskCreditLedgerEntry,
     TaskEscrowRecord,
     TaskQuoteRecord,
@@ -50,6 +51,8 @@ class InMemoryMessageHubRepository:
         self._task_quote_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_escrows_by_id: dict[str, TaskEscrowRecord] = {}
         self._task_escrow_ids_by_task: dict[str, list[str]] = defaultdict(list)
+        self._task_capacity_policies_by_id: dict[str, TaskCapacitySharingPolicyRecord] = {}
+        self._task_capacity_policy_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_credit_ledger_entries_by_id: dict[str, TaskCreditLedgerEntry] = {}
         self._task_credit_ledger_entry_ids_by_agent: dict[str, list[str]] = defaultdict(list)
         self._task_credit_ledger_entry_ids_by_task: dict[str, list[str]] = defaultdict(list)
@@ -342,6 +345,31 @@ class InMemoryMessageHubRepository:
 
         escrows.sort(key=lambda escrow: (escrow.created_at, escrow.escrow_id))
         return tuple(escrows)
+
+    def put_task_capacity_policy(self, policy: TaskCapacitySharingPolicyRecord) -> None:
+        with self._lock:
+            if policy.policy_id in self._task_capacity_policies_by_id:
+                raise ValueError(f"task capacity policy already exists: {policy.policy_id}")
+            self._task_capacity_policies_by_id[policy.policy_id] = policy
+            self._task_capacity_policy_ids_by_task[policy.task_id].append(policy.policy_id)
+
+    def get_task_capacity_policy(self, policy_id: str) -> TaskCapacitySharingPolicyRecord | None:
+        with self._lock:
+            return self._task_capacity_policies_by_id.get(policy_id)
+
+    def list_task_capacity_policies_by_task(
+        self,
+        task_id: str,
+    ) -> tuple[TaskCapacitySharingPolicyRecord, ...]:
+        with self._lock:
+            policies = [
+                self._task_capacity_policies_by_id[policy_id]
+                for policy_id in self._task_capacity_policy_ids_by_task.get(task_id, [])
+                if policy_id in self._task_capacity_policies_by_id
+            ]
+
+        policies.sort(key=lambda policy: (policy.created_at, policy.policy_id))
+        return tuple(policies)
 
     def put_task_credit_ledger_entry(self, entry: TaskCreditLedgerEntry) -> None:
         with self._lock:

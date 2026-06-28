@@ -541,6 +541,7 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
         "policy_decision_id": "local_safety_allow",
         "quote_ids": [],
         "escrow_ids": [],
+        "capacity_policy_ids": [],
         "artifact_refs": [],
         "tool_request_ids": [],
         "created_at": now,

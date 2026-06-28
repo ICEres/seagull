@@ -43,6 +43,17 @@ class TaskCreditLedgerEntryType(str, Enum):
     DISPUTE_OPEN = "dispute_open"
 
 
+class TaskCapacityRole(str, Enum):
+    REQUESTER = "requester"
+    WORKER = "worker"
+
+
+class TaskCapacityTier(str, Enum):
+    LOW = "low"
+    STANDARD = "standard"
+    HIGH = "high"
+
+
 TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
 
 
@@ -135,6 +146,11 @@ def task_lifecycle_allows(current: TaskState | str, next_state: TaskState | str)
 def require_int(value: int, field_name: str) -> None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ProtocolError(f"{field_name} must be an integer")
+
+
+def require_bool(value: bool, field_name: str) -> None:
+    if not isinstance(value, bool):
+        raise ProtocolError(f"{field_name} must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,6 +465,83 @@ class TaskEscrow:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskCapacitySharingPolicy:
+    policy_id: str
+    task_id: str
+    thread_id: str
+    requester: Handle
+    worker: Handle
+    requester_role: TaskCapacityRole = TaskCapacityRole.REQUESTER
+    worker_role: TaskCapacityRole = TaskCapacityRole.WORKER
+    requester_capacity_tier: TaskCapacityTier = TaskCapacityTier.LOW
+    worker_capacity_tier: TaskCapacityTier = TaskCapacityTier.HIGH
+    max_credit_cost: int = 0
+    max_auto_escrow_credits: int = 0
+    allow_private_context: bool = False
+    private_context_requires_approval: bool = True
+    paid_work_requires_approval: bool = True
+    high_cost_requires_approval: bool = True
+    abuse_policy_ref: str | None = None
+    limits_ref: str | None = None
+    policy_decision_id: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "policy_id", required_string(self.policy_id, "policy_id"))
+        object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
+        object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
+        if self.requester_role != TaskCapacityRole.REQUESTER:
+            raise ProtocolError("requester_role must be requester")
+        if self.worker_role != TaskCapacityRole.WORKER:
+            raise ProtocolError("worker_role must be worker")
+        if not isinstance(self.requester_capacity_tier, TaskCapacityTier):
+            try:
+                object.__setattr__(
+                    self,
+                    "requester_capacity_tier",
+                    TaskCapacityTier(self.requester_capacity_tier),
+                )
+            except ValueError as exc:
+                allowed = ", ".join(tier.value for tier in TaskCapacityTier)
+                raise ProtocolError(f"requester_capacity_tier must be one of: {allowed}") from exc
+        if not isinstance(self.worker_capacity_tier, TaskCapacityTier):
+            try:
+                object.__setattr__(
+                    self,
+                    "worker_capacity_tier",
+                    TaskCapacityTier(self.worker_capacity_tier),
+                )
+            except ValueError as exc:
+                allowed = ", ".join(tier.value for tier in TaskCapacityTier)
+                raise ProtocolError(f"worker_capacity_tier must be one of: {allowed}") from exc
+        require_non_negative_int(self.max_credit_cost, "max_credit_cost")
+        require_non_negative_int(self.max_auto_escrow_credits, "max_auto_escrow_credits")
+        if self.max_auto_escrow_credits > self.max_credit_cost:
+            raise ProtocolError("max_auto_escrow_credits cannot exceed max_credit_cost")
+        for field_name in (
+            "allow_private_context",
+            "private_context_requires_approval",
+            "paid_work_requires_approval",
+            "high_cost_requires_approval",
+        ):
+            require_bool(getattr(self, field_name), field_name)
+        for field_name in (
+            "abuse_policy_ref",
+            "limits_ref",
+            "policy_decision_id",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TaskCreditLedgerEntry:
     entry_id: str
     account: Handle
@@ -543,6 +636,9 @@ __all__ = [
     "ContextPack",
     "TASK_LIFECYCLE_TRANSITIONS",
     "TASK_CREDIT_SETTLEMENT_SCOPE",
+    "TaskCapacityRole",
+    "TaskCapacitySharingPolicy",
+    "TaskCapacityTier",
     "TaskCreditLedgerEntry",
     "TaskCreditLedgerEntryType",
     "TaskEscrow",

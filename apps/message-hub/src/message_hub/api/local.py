@@ -28,6 +28,7 @@ from message_hub.domain import (
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
+    TaskCapacitySharingPolicyRecord,
     TaskCreditBalance,
     TaskCreditLedgerEntry,
     TaskEscrowRecord,
@@ -358,6 +359,61 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return {"thread_id": thread_id, "tasks": [task_to_dict(task) for task in tasks]}
+
+    def define_task_capacity_policy(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            policy = self._service.define_task_capacity_policy(
+                task_id,
+                actor_handle=required_string(body, "actor_handle"),
+                requester_capacity_tier=optional_string(body, "requester_capacity_tier") or "low",
+                worker_capacity_tier=optional_string(body, "worker_capacity_tier") or "high",
+                max_credit_cost=required_int(body, "max_credit_cost"),
+                max_auto_escrow_credits=optional_int(body, "max_auto_escrow_credits") or 0,
+                allow_private_context=optional_bool(body, "allow_private_context", default=False),
+                private_context_requires_approval=optional_bool(
+                    body,
+                    "private_context_requires_approval",
+                    default=True,
+                ),
+                paid_work_requires_approval=optional_bool(
+                    body,
+                    "paid_work_requires_approval",
+                    default=True,
+                ),
+                high_cost_requires_approval=optional_bool(
+                    body,
+                    "high_cost_requires_approval",
+                    default=True,
+                ),
+                limits_ref=optional_string(body, "limits_ref"),
+                abuse_policy_ref=optional_string(body, "abuse_policy_ref"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+                audit_refs=string_list(body.get("audit_refs", ()), "audit_refs"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": policy.task_id,
+            "thread_id": policy.thread_id,
+            "policy_id": policy.policy_id,
+            "policy": task_capacity_policy_to_dict(policy),
+        }
+
+    def read_task_capacity_policies(self, task_id: str) -> dict[str, Any]:
+        try:
+            policies = self._service.list_task_capacity_policies(task_id)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": task_id,
+            "policies": [task_capacity_policy_to_dict(policy) for policy in policies],
+        }
 
     def grant_task_credits(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -1097,6 +1153,7 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "tool_grant_ids": list(task.tool_grant_ids),
         "quote_ids": list(task.quote_ids),
         "escrow_ids": list(task.escrow_ids),
+        "capacity_policy_ids": list(task.capacity_policy_ids),
         "state": task.state.value,
         "policy_decision_id": task.policy_decision_id,
         "accepted_by_agent_id": task.accepted_by_agent_id,
@@ -1106,6 +1163,31 @@ def task_to_dict(task: TaskRecord) -> dict[str, Any]:
         "tool_request_ids": list(task.tool_request_ids),
         "created_at": datetime_to_string(task.created_at),
         "updated_at": datetime_to_string(task.updated_at),
+    }
+
+
+def task_capacity_policy_to_dict(policy: TaskCapacitySharingPolicyRecord) -> dict[str, Any]:
+    return {
+        "policy_id": policy.policy_id,
+        "task_id": policy.task_id,
+        "thread_id": policy.thread_id,
+        "requester_agent_id": policy.requester_agent_id,
+        "worker_agent_id": policy.worker_agent_id,
+        "requester_role": policy.requester_role.value,
+        "worker_role": policy.worker_role.value,
+        "requester_capacity_tier": policy.requester_capacity_tier.value,
+        "worker_capacity_tier": policy.worker_capacity_tier.value,
+        "max_credit_cost": policy.max_credit_cost,
+        "max_auto_escrow_credits": policy.max_auto_escrow_credits,
+        "allow_private_context": policy.allow_private_context,
+        "private_context_requires_approval": policy.private_context_requires_approval,
+        "paid_work_requires_approval": policy.paid_work_requires_approval,
+        "high_cost_requires_approval": policy.high_cost_requires_approval,
+        "limits_ref": policy.limits_ref,
+        "abuse_policy_ref": policy.abuse_policy_ref,
+        "policy_decision_id": policy.policy_decision_id,
+        "audit_refs": list(policy.audit_refs),
+        "created_at": datetime_to_string(policy.created_at),
     }
 
 

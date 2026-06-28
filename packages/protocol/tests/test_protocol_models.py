@@ -29,6 +29,9 @@ from seagull_protocol import (
     StreamEvent,
     StreamEventType,
     TASK_LIFECYCLE_TRANSITIONS,
+    TaskCapacityRole,
+    TaskCapacitySharingPolicy,
+    TaskCapacityTier,
     TaskCreditLedgerEntry,
     TaskCreditLedgerEntryType,
     TaskEscrow,
@@ -447,6 +450,21 @@ class ProtocolModelsTest(TestCase):
             abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
             audit_refs=("seagull://tasks/task_1/quotes/quote_1/audit",),
         )
+        capacity_policy = TaskCapacitySharingPolicy(
+            policy_id="capacity_policy_1",
+            task_id=request.task_id,
+            thread_id=request.thread_id,
+            requester=request.requester,
+            worker=request.recipient,
+            requester_capacity_tier=TaskCapacityTier.LOW,
+            worker_capacity_tier=TaskCapacityTier.HIGH,
+            max_credit_cost=5,
+            max_auto_escrow_credits=2,
+            allow_private_context=True,
+            limits_ref="seagull://tasks/task_1/capacity-limits",
+            abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
+            audit_refs=("seagull://tasks/task_1/capacity-policies/capacity_policy_1/audit",),
+        )
         escrow = TaskEscrow(
             escrow_id="escrow_1",
             task_id=request.task_id,
@@ -498,6 +516,15 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(3, quote.expected_credit_cost)
         self.assertEqual(("thread://thread_1", "payload://task_1/input"), quote.shared_context_refs)
         self.assertEqual("Paid private-context work requires owner approval.", quote.approval_reason)
+        self.assertEqual(TaskCapacityRole.REQUESTER, capacity_policy.requester_role)
+        self.assertEqual(TaskCapacityRole.WORKER, capacity_policy.worker_role)
+        self.assertEqual(TaskCapacityTier.LOW, capacity_policy.requester_capacity_tier)
+        self.assertEqual(TaskCapacityTier.HIGH, capacity_policy.worker_capacity_tier)
+        self.assertEqual(5, capacity_policy.max_credit_cost)
+        self.assertEqual(2, capacity_policy.max_auto_escrow_credits)
+        self.assertTrue(capacity_policy.allow_private_context)
+        self.assertEqual("seagull://tasks/task_1/capacity-limits", capacity_policy.limits_ref)
+        self.assertEqual("seagull://policies/task-credits/abuse-controls", capacity_policy.abuse_policy_ref)
         self.assertEqual(TaskState.ESCROWED, escrow.state)
         self.assertEqual(quote.expected_credit_cost, escrow.credit_amount)
         self.assertEqual(quote.limits_ref, escrow.limits_ref)

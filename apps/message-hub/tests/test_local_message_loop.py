@@ -395,6 +395,21 @@ class LocalMessageLoopTest(TestCase):
                 "context_pack_ref": "payload://context_pack_1",
             }
         )
+        policy = self.api.define_task_capacity_policy(
+            task_response["task_id"],
+            {
+                "actor_handle": "@researcher:seagull.local",
+                "requester_capacity_tier": "low",
+                "worker_capacity_tier": "high",
+                "max_credit_cost": 5,
+                "max_auto_escrow_credits": 2,
+                "allow_private_context": True,
+                "private_context_requires_approval": True,
+                "paid_work_requires_approval": False,
+                "high_cost_requires_approval": True,
+            },
+        )
+        policies = self.api.read_task_capacity_policies(task_response["task_id"])
 
         quote = self.api.create_task_quote(
             task_response["task_id"],
@@ -403,12 +418,19 @@ class LocalMessageLoopTest(TestCase):
                 "expected_credit_cost": 3,
                 "task_reason": "Review private context with independent capacity.",
                 "shared_context_refs": ["thread://thread_1", "payload://context_pack_1"],
-                "requires_approval": True,
-                "approval_reason": "Paid private-context work needs owner approval.",
+                "requires_approval": False,
             },
         )
+        self.assertEqual("capacity_policy_1", policy["policy_id"])
+        self.assertEqual("requester", policy["policy"]["requester_role"])
+        self.assertEqual("worker", policy["policy"]["worker_role"])
+        self.assertEqual("low", policy["policy"]["requester_capacity_tier"])
+        self.assertEqual("high", policy["policy"]["worker_capacity_tier"])
+        self.assertEqual(["capacity_policy_1"], [item["policy_id"] for item in policies["policies"]])
         self.assertEqual("task_quote_1", quote["quote_id"])
         self.assertEqual(3, quote["quote"]["expected_credit_cost"])
+        self.assertTrue(quote["quote"]["requires_approval"])
+        self.assertEqual("expected cost exceeds auto-escrow limit", quote["quote"]["approval_reason"])
         self.assertEqual(["thread://thread_1", "payload://context_pack_1"], quote["quote"]["shared_context_refs"])
 
         with self.assertRaises(ApiError) as unapproved:
@@ -460,6 +482,7 @@ class LocalMessageLoopTest(TestCase):
         readback = self.api.read_task(task_response["task_id"])
         self.assertEqual(["task_quote_1"], readback["task"]["quote_ids"])
         self.assertEqual(["task_escrow_1"], readback["task"]["escrow_ids"])
+        self.assertEqual(["capacity_policy_1"], readback["task"]["capacity_policy_ids"])
 
     def test_local_api_enforces_scoped_tool_grants(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})

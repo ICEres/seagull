@@ -17,6 +17,7 @@ from message_hub.domain import (
     NotFoundError,
     PayloadUnavailableError,
     TASK_LIFECYCLE_TRANSITIONS,
+    TaskCapacityTier,
     TaskCreditLedgerEntryType,
     TaskState,
     task_lifecycle_allows,
@@ -865,6 +866,81 @@ class MessageHubServiceTest(TestCase):
             ),
             tuple(entry.entry_type for entry in task_ledger),
         )
+
+    def test_capacity_policy_limits_and_gates_worker_quotes(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Use reviewer capacity under explicit sharing limits.",
+            context_refs=("thread://thread_1",),
+            context_pack_ref="payload://context_pack_1",
+        )
+        policy = self.service.define_task_capacity_policy(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            requester_capacity_tier="low",
+            worker_capacity_tier="high",
+            max_credit_cost=5,
+            max_auto_escrow_credits=2,
+            allow_private_context=True,
+            private_context_requires_approval=True,
+            paid_work_requires_approval=False,
+            high_cost_requires_approval=True,
+            limits_ref="seagull://tasks/task_1/capacity-limits",
+            abuse_policy_ref="seagull://policies/task-credits/abuse-controls",
+            policy_decision_id="policy_capacity_1",
+        )
+        stored_task = self.service.get_task(task.task_id)
+        self.assertEqual("capacity_policy_1", policy.policy_id)
+        self.assertEqual(TaskCapacityTier.LOW, policy.requester_capacity_tier)
+        self.assertEqual(TaskCapacityTier.HIGH, policy.worker_capacity_tier)
+        self.assertEqual(("capacity_policy_1",), stored_task.capacity_policy_ids)
+
+        quote = self.service.create_task_quote(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=3,
+            task_reason="Share higher-capacity reviewer work.",
+            shared_context_refs=("thread://thread_1", "file://private/context"),
+            requires_approval=False,
+        )
+
+        self.assertTrue(quote.requires_approval)
+        self.assertEqual(
+            "private-context sharing requires approval; expected cost exceeds auto-escrow limit",
+            quote.approval_reason,
+        )
+        self.assertEqual("seagull://tasks/task_1/capacity-limits", quote.limits_ref)
+        self.assertEqual("seagull://policies/task-credits/abuse-controls", quote.abuse_policy_ref)
+        self.assertEqual("policy_capacity_1", quote.policy_decision_id)
+
+        with self.assertRaises(InvalidMessageError):
+            self.service.create_task_quote(
+                task.task_id,
+                worker_handle="@reviewer:gulls.ai",
+                expected_credit_cost=6,
+                task_reason="Too much delegated capacity.",
+            )
+
+        private_blocked_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Block private context when policy forbids it.",
+        )
+        self.service.define_task_capacity_policy(
+            private_blocked_task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            max_credit_cost=5,
+            allow_private_context=False,
+        )
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.create_task_quote(
+                private_blocked_task.task_id,
+                worker_handle="@reviewer:gulls.ai",
+                expected_credit_cost=1,
+                task_reason="Private context should be refused.",
+                shared_context_refs=("file://private/context",),
+            )
 
     def test_task_escrow_without_required_approval_can_be_created_after_quote(self) -> None:
         task = self.service.create_task(

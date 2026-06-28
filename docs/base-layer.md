@@ -285,12 +285,13 @@ but they should not be required to send a message or share a reference.
 
 ## Practical Implications
 
-The current protocol direction should be adjusted:
+The current protocol package should keep this boundary explicit:
 
 - Keep `ContentRef` and `PayloadManifest` in the base protocol.
 - Keep or define `ContextPack` as a base/context contract if it remains generic
   thread context, not task-specific work state.
-- Move `TaskRequest`, `TaskResult`, and `TaskState` into a work/task extension.
+- Keep `TaskRequest`, `TaskResult`, `TaskState`, and `ToolGrant` in a work/task
+  extension.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
 - Treat message intent/type as extensible. The base can provide known constants,

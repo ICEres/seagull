@@ -27,10 +27,13 @@ from seagull_protocol import (
     TaskRequest,
     TaskResult,
     TaskState,
+    ToolGrant,
     Visibility,
     WorkflowTraceEntry,
     normalize_handle,
 )
+from seagull_protocol.events import StreamEvent as EventStreamEvent
+from seagull_protocol.work import TaskRequest as WorkTaskRequest
 
 
 class ProtocolModelsTest(TestCase):
@@ -53,6 +56,10 @@ class ProtocolModelsTest(TestCase):
             display_name="Reviewer",
             capabilities=("review",),
             protocols=("seagull", "a2a"),
+            owner_user_id="user_1",
+            node_id="node_1",
+            trust_label="trusted",
+            supported_extension_namespaces=("work.v1",),
         )
         message = Message(
             message_id="message_1",
@@ -66,7 +73,27 @@ class ProtocolModelsTest(TestCase):
 
         self.assertEqual("@reviewer:seagull.local", str(profile.handle))
         self.assertEqual(("seagull", "a2a"), profile.protocols)
+        self.assertEqual("user_1", profile.owner_user_id)
+        self.assertEqual("node_1", profile.node_id)
+        self.assertEqual("trusted", profile.trust_label)
+        self.assertEqual(("work.v1",), profile.supported_extension_namespaces)
+        self.assertFalse(hasattr(profile, "mcp_server_url"))
         self.assertEqual((recipient,), message.recipients)
+
+    def test_message_intent_supports_known_task_intents_and_extensions(self) -> None:
+        message = Message(
+            message_id="message_1",
+            thread_id="thread_1",
+            sender=Handle("@researcher:seagull.local"),
+            recipients=(Handle("@reviewer:seagull.local"),),
+            intent="vendor.custom_intent",
+            visibility=Visibility.DIRECT,
+            content="Custom extension event.",
+        )
+
+        self.assertEqual("task_request", MessageIntent.TASK_REQUEST.value)
+        self.assertEqual("task_result", MessageIntent.TASK_RESULT.value)
+        self.assertEqual("vendor.custom_intent", message.intent)
 
     def test_lifecycle_delivery_shape_keeps_current_copy_and_trace(self) -> None:
         sender = Handle("@researcher:seagull.local")
@@ -190,6 +217,9 @@ class ProtocolModelsTest(TestCase):
             recent_messages=(recent,),
             selected_refs=(MessageRef(type="payload", url=payload.content_ref),),
             payload_refs=(payload,),
+            allowed_recipients=(Handle("@researcher:seagull.local"),),
+            policy_decision_id="policy_1",
+            redacted_refs=("secret://token",),
             budget=ContextBudget(
                 max_inline_chars=2000,
                 max_recent_messages=10,
@@ -202,6 +232,10 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual((recent,), pack.recent_messages)
         self.assertEqual((payload,), pack.payload_refs)
         self.assertEqual(800, pack.budget.token_budget_estimate)
+        self.assertTrue(pack.allows(Handle("@reviewer:seagull.local")))
+        self.assertTrue(pack.allows(Handle("@researcher:seagull.local")))
+        self.assertFalse(pack.allows(Handle("@outsider:seagull.local")))
+        self.assertEqual(("secret://token",), pack.redacted_refs)
 
     def test_task_records_are_provider_neutral(self) -> None:
         request = TaskRequest(
@@ -212,6 +246,8 @@ class ProtocolModelsTest(TestCase):
             objective="Review the attached plan.",
             context_pack_id="context_pack_1",
             allowed_tool_names=("open_artifact",),
+            allowed_use_terms=("no_memory",),
+            tool_grant_ids=("grant_1",),
         )
         result = TaskResult(
             task_id=request.task_id,
@@ -220,26 +256,49 @@ class ProtocolModelsTest(TestCase):
             result_message_id="message_2",
             content_ref="payload://task_1/result",
             artifact_refs=("artifact_1",),
+            tool_use_summary_refs=("artifact_tool_summary_1",),
+        )
+        grant = ToolGrant(
+            grant_id="grant_1",
+            task_id=request.task_id,
+            issuer=request.requester,
+            subject=request.recipient,
+            audience="agent_a_mcp",
+            scopes=("repo.read",),
+            max_calls=10,
+            allowed_resource_selectors=("docs/**",),
+            approval_id="approval_1",
         )
 
         self.assertEqual(TaskState.REQUESTED, request.state)
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
+        self.assertEqual(("no_memory",), request.allowed_use_terms)
+        self.assertEqual(("grant_1",), request.tool_grant_ids)
         self.assertEqual("payload://task_1/result", result.content_ref)
+        self.assertEqual(("artifact_tool_summary_1",), result.tool_use_summary_refs)
+        self.assertTrue(grant.read_only)
+        self.assertEqual(("repo.read",), grant.scopes)
+        self.assertEqual(("docs/**",), grant.allowed_resource_selectors)
 
     def test_stream_event_reserves_future_resume_and_final_message_fields(self) -> None:
         event = StreamEvent(
             stream_id="stream_1",
             sequence=3,
             event_type=StreamEventType.COMPLETED,
-            task_id="task_1",
+            subject_type="task",
+            subject_id="task_1",
             resume_after=2,
             final_message_id="message_2",
             content_ref="payload://task_1/final",
         )
 
         self.assertEqual(StreamEventType.COMPLETED, event.event_type)
+        self.assertEqual("task", event.subject_type)
+        self.assertEqual("task_1", event.subject_id)
         self.assertEqual(2, event.resume_after)
         self.assertEqual("message_2", event.final_message_id)
+        self.assertIs(EventStreamEvent, StreamEvent)
+        self.assertIs(WorkTaskRequest, TaskRequest)
 
     def test_payload_and_stream_validation_rejects_invalid_values(self) -> None:
         with self.assertRaises(ProtocolError):
@@ -255,4 +314,16 @@ class ProtocolModelsTest(TestCase):
                 stream_id="stream_1",
                 sequence=-1,
                 event_type=StreamEventType.DELTA,
+                subject_type="task",
+                subject_id="task_1",
+            )
+
+        with self.assertRaises(ProtocolError):
+            ToolGrant(
+                grant_id="grant_1",
+                task_id="task_1",
+                issuer=Handle("@researcher:seagull.local"),
+                subject=Handle("@reviewer:seagull.local"),
+                audience="agent_a_mcp",
+                scopes=(),
             )

@@ -6,17 +6,20 @@ Current implementation:
 
 ```text
 src/seagull_protocol/
-  models.py    Dependency-free first sketches for handles, profiles, messages,
-               threads, artifacts, delivery state, payload refs, context packs,
-               delegated tasks, and reserved stream events.
+  base.py      Base social/control primitives: handles, profiles, messages,
+               delivery state, refs, payload manifests, and workflow traces.
+  work.py      Work extension primitives: context packs, delegated tasks, and
+               scoped tool grants.
+  events.py    Generic event primitives for streams and resumable projections.
+  models.py    Backward-compatible export barrel for existing imports.
 tests/
   test_protocol_models.py
 ```
 
-Recommended initial approach:
+Recommended approach:
 
-- Define the first schemas as Pydantic models.
-- Export JSON Schema/OpenAPI from the backend.
+- Keep the shared package dependency-free while the first protocol shape settles.
+- Let backend apps expose OpenAPI schemas at their API boundary.
 - Generate TypeScript API types for the frontend.
 - Move to explicit language-neutral schemas later if the protocol needs a
   formal compatibility process.
@@ -32,9 +35,10 @@ Initial schema candidates:
 - Artifact.
 - ContentRef and PayloadManifest.
 - ContextPack.
-- TaskRequest and TaskResult.
-- StreamEvent.
+- TaskRequest, TaskResult, and ToolGrant.
+- StreamEvent with generic subject fields.
 - Moderation event.
 - Delivery state.
 
-Keep the protocol small until the first local message loop works.
+Keep the base protocol small. Work/task behavior should use extension models
+instead of forcing every Seagull interaction to look like a task.

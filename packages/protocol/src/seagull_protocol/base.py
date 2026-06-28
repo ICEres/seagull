@@ -1,0 +1,394 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+
+
+HANDLE_RE = re.compile(r"^@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*$")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ProtocolError(ValueError):
+    """Raised when a protocol object is invalid."""
+
+
+class MessageIntent(str, Enum):
+    MESSAGE = "message"
+    POST = "post"
+    REPLY = "reply"
+    MENTION = "mention"
+    DIRECT_MESSAGE = "direct_message"
+    QUESTION = "question"
+    TASK_REQUEST = "task_request"
+    TASK_RESULT = "task_result"
+    HANDOFF = "handoff"
+    STATUS_UPDATE = "status_update"
+    ARTIFACT_SHARE = "artifact_share"
+    FOLLOW = "follow"
+    INVITE = "invite"
+    MODERATION_EVENT = "moderation_event"
+
+
+class Visibility(str, Enum):
+    DIRECT = "direct"
+    LIMITED = "limited"
+    PUBLIC = "public"
+
+
+class DeliveryState(str, Enum):
+    QUEUED = "queued"
+    DELIVERED = "delivered"
+    READ = "read"
+    ACKED = "acked"
+    FAILED = "failed"
+    REPLIED = "replied"
+    IGNORED = "ignored"
+    NEEDS_REVIEW = "needs_review"
+    PENDING_ACTION = "pending_action"
+
+
+class ArtifactKind(str, Enum):
+    INLINE = "inline"
+    URI = "uri"
+
+
+class PayloadCompression(str, Enum):
+    NONE = "none"
+    GZIP = "gzip"
+    ZSTD = "zstd"
+
+
+class PayloadRetentionState(str, Enum):
+    PENDING = "pending"
+    READY = "ready"
+    COMPACTED = "compacted"
+    EXPIRED = "expired"
+    DELETED = "deleted"
+
+
+class PayloadAccessScope(str, Enum):
+    OWNER = "owner"
+    THREAD = "thread"
+    RECIPIENTS = "recipients"
+    PUBLIC = "public"
+
+
+class HookType(str, Enum):
+    SEND_BEFORE = "send.before"
+    ROUTE_RESOLVE = "route.resolve"
+    DELIVERY_BEFORE = "delivery.before"
+    RECEIVE_BEFORE = "receive.before"
+    ACTION_BEFORE = "action.before"
+    REPLY_BEFORE = "reply.before"
+    AFTER = "after"
+
+
+class HookRuntime(str, Enum):
+    CLOUD = "cloud"
+    CLOUD_NODE = "cloud_node"
+    LAN_NODE = "lan_node"
+    AGENT_CLIENT = "agent_client"
+
+
+class RoutingRuleMode(str, Enum):
+    DIRECT = "direct"
+    COPY = "copy"
+    HANDOFF = "handoff"
+    REVIEW = "review"
+    BLOCK = "block"
+
+
+class AgentDecision(str, Enum):
+    REPLY = "reply"
+    ACTION = "action"
+    IGNORE = "ignore"
+    ASK_HUMAN = "ask_human"
+
+
+@dataclass(frozen=True, slots=True)
+class Handle:
+    value: str
+
+    def __post_init__(self) -> None:
+        normalized = normalize_handle(self.value)
+        object.__setattr__(self, "value", normalized)
+
+    @property
+    def local_part(self) -> str:
+        return self.value[1:].split(":", 1)[0]
+
+    @property
+    def server(self) -> str:
+        return self.value.split(":", 1)[1]
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class AgentProfile:
+    handle: Handle
+    display_name: str | None = None
+    capabilities: tuple[str, ...] = ()
+    protocols: tuple[str, ...] = ("seagull",)
+    status: str = "active"
+    owner_user_id: str | None = None
+    node_id: str | None = None
+    trust_label: str = "unknown"
+    visibility: Visibility = Visibility.PUBLIC
+    supported_extension_namespaces: tuple[str, ...] = ()
+    public_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.display_name is not None:
+            object.__setattr__(
+                self,
+                "display_name",
+                required_string(self.display_name, "display_name"),
+            )
+        for field_name in ("owner_user_id", "node_id", "public_key"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(self, "status", required_string(self.status, "status"))
+        object.__setattr__(self, "trust_label", required_string(self.trust_label, "trust_label"))
+        object.__setattr__(
+            self,
+            "capabilities",
+            tuple(required_string(value, "capability") for value in self.capabilities),
+        )
+        object.__setattr__(
+            self,
+            "protocols",
+            tuple(required_string(value, "protocol") for value in self.protocols),
+        )
+        object.__setattr__(
+            self,
+            "supported_extension_namespaces",
+            tuple(
+                required_string(value, "supported_extension_namespace")
+                for value in self.supported_extension_namespaces
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Artifact:
+    artifact_id: str
+    kind: ArtifactKind
+    media_type: str
+    content_inline: str | None = None
+    uri: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MessageRef:
+    type: str
+    url: str | None = None
+    find: str | None = None
+    remember_as: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ContentRef:
+    content_ref: str
+    media_type: str
+    byte_length: int
+    hash: str
+    compression: PayloadCompression = PayloadCompression.NONE
+    ttl_expires_at: datetime | None = None
+    retention_state: PayloadRetentionState = PayloadRetentionState.READY
+    access_scope: PayloadAccessScope = PayloadAccessScope.RECIPIENTS
+    chunk_manifest_ref: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "content_ref", required_string(self.content_ref, "content_ref"))
+        object.__setattr__(self, "media_type", required_string(self.media_type, "media_type"))
+        object.__setattr__(self, "hash", required_string(self.hash, "hash"))
+        require_non_negative_int(self.byte_length, "byte_length")
+        if self.chunk_manifest_ref is not None:
+            object.__setattr__(
+                self,
+                "chunk_manifest_ref",
+                required_string(self.chunk_manifest_ref, "chunk_manifest_ref"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class PayloadChunk:
+    content_ref: str
+    sequence: int
+    byte_offset: int
+    byte_length: int
+    hash: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "content_ref", required_string(self.content_ref, "content_ref"))
+        require_non_negative_int(self.sequence, "sequence")
+        require_non_negative_int(self.byte_offset, "byte_offset")
+        require_non_negative_int(self.byte_length, "byte_length")
+        if self.hash is not None:
+            object.__setattr__(self, "hash", required_string(self.hash, "hash"))
+
+
+@dataclass(frozen=True, slots=True)
+class PayloadManifest:
+    manifest_id: str
+    payload: ContentRef
+    chunks: tuple[PayloadChunk, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "manifest_id", required_string(self.manifest_id, "manifest_id"))
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowTraceEntry:
+    hook: HookType
+    runtime: HookRuntime
+    action: str = "continue"
+    actor: Handle | str | None = None
+    changed: tuple[str, ...] = ()
+    note: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionRequest:
+    action_request_id: str
+    type: str
+    target: str | None = None
+    runtime: HookRuntime = HookRuntime.CLOUD
+    requires_approval: bool = True
+    status: str = "pending"
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    message_id: str
+    thread_id: str
+    sender: Handle
+    recipients: tuple[Handle, ...]
+    intent: MessageIntent | str
+    visibility: Visibility
+    content: str | None = None
+    content_ref: str | None = None
+    refs: tuple[MessageRef, ...] = ()
+    artifacts: tuple[Artifact, ...] = ()
+    schema_version: str = "seagull.message.v1"
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "intent", normalize_message_intent(self.intent))
+        if self.content_ref is not None:
+            object.__setattr__(
+                self,
+                "content_ref",
+                required_string(self.content_ref, "content_ref"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class Thread:
+    thread_id: str
+    root_message_id: str
+    participants: frozenset[Handle]
+    message_count: int
+    last_message_id: str
+    last_message_at: datetime
+    title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    delivery_id: str
+    message_id: str
+    thread_id: str
+    sender: Handle
+    recipient: Handle
+    state: DeliveryState
+    current_content: str | None = None
+    current_content_ref: str | None = None
+    refs: tuple[MessageRef, ...] = ()
+    workflow_trace: tuple[WorkflowTraceEntry, ...] = ()
+    current_stage: str = "agent.wait"
+    action_request: ActionRequest | None = None
+    retry_count: int = 0
+    last_error: str | None = None
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        if self.current_content_ref is not None:
+            object.__setattr__(
+                self,
+                "current_content_ref",
+                required_string(self.current_content_ref, "current_content_ref"),
+            )
+
+
+def normalize_handle(handle: str) -> str:
+    normalized = handle.strip().lower()
+    if not HANDLE_RE.fullmatch(normalized):
+        raise ProtocolError("handle must look like @agent:server")
+    return normalized
+
+
+def normalize_message_intent(intent: MessageIntent | str) -> MessageIntent | str:
+    if isinstance(intent, MessageIntent):
+        return intent
+    value = required_string(intent, "intent")
+    try:
+        return MessageIntent(value)
+    except ValueError:
+        return value
+
+
+def required_string(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ProtocolError(f"{field_name} must be a string")
+    stripped = value.strip()
+    if not stripped:
+        raise ProtocolError(f"{field_name} is required")
+    return stripped
+
+
+def require_non_negative_int(value: int, field_name: str) -> None:
+    if not isinstance(value, int) or value < 0:
+        raise ProtocolError(f"{field_name} must be a non-negative integer")
+
+
+__all__ = [
+    "ActionRequest",
+    "AgentDecision",
+    "AgentProfile",
+    "Artifact",
+    "ArtifactKind",
+    "ContentRef",
+    "Delivery",
+    "DeliveryState",
+    "Handle",
+    "HookRuntime",
+    "HookType",
+    "Message",
+    "MessageIntent",
+    "MessageRef",
+    "PayloadAccessScope",
+    "PayloadChunk",
+    "PayloadCompression",
+    "PayloadManifest",
+    "PayloadRetentionState",
+    "ProtocolError",
+    "RoutingRuleMode",
+    "Thread",
+    "Visibility",
+    "WorkflowTraceEntry",
+    "normalize_handle",
+    "normalize_message_intent",
+]

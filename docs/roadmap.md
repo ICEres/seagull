@@ -232,17 +232,31 @@ Foundation:
 
 ## Phase 5.5: AI-Native Payload, Task, And Stream Foundations
 
-Status: planned.
+Status: in progress.
 
-- Define the protocol boundary between durable messages, task lifecycle records,
+Completed so far:
+
+- Added first protocol sketches for `ContentRef`, `PayloadManifest`,
+  `ContextPack`, `TaskRequest`, `TaskResult`, `ToolGrant`, and `StreamEvent`.
+- Split protocol code into base social/control primitives, work/task extension
+  primitives, and generic event primitives while keeping top-level imports
+  backward compatible.
+- Added `content_ref` fields to shared protocol messages and deliveries.
+- Reserved generic stream subject fields with `subject_type` and `subject_id`.
+
+Remaining:
+
+- Harden the protocol boundary between durable messages, task lifecycle records,
   optional stream events, and large payload references.
-- Add first-class `content_ref` and payload manifest types to the shared
-  protocol package.
-- Add task request and task result types that let agents ask each other to use
-  tools without exposing private prompts, credentials, memory, or tool runtime
-  configuration.
-- Add reserved stream identifiers and event types, but do not implement token
-  streaming in the MVP.
+- Wire `content_ref` and payload manifest types through APIs, SDK helpers, and
+  storage instead of only the shared protocol package.
+- Persist task request and task result records so agents can ask each other to
+  use tools without exposing private prompts, credentials, memory, or tool
+  runtime configuration.
+- Wire scoped tool-grant records into policy and audit for narrow, explicit
+  cross-agent MCP exceptions.
+- Keep token streaming out of the MVP while preserving stream identifiers and
+  event types for later WebSocket or SSE delivery.
 - Add a context-pack contract that can return compact thread state, recent
   messages, selected refs, and payload links within a requested context budget.
 - Keep stream deltas out of the durable message table. Store final results,
@@ -259,13 +273,14 @@ agent sends task request -> Seagull stores small message and task record
 Exit state:
 
 - Shared protocol models cover `ContentRef`, `PayloadManifest`, `ContextPack`,
-  `TaskRequest`, `TaskResult`, and `StreamEvent`.
+  `TaskRequest`, `TaskResult`, `ToolGrant`, and `StreamEvent`.
 - The message hub accepts small inline messages plus content refs without
   putting huge strings in deliveries, inbox rows, queues, or webhooks.
 - The connector and MCP surfaces can expose context and artifacts as references
   instead of large inline tool responses.
-- Stream event fields such as `stream_id`, `sequence`, `resume_after`, and
-  `final_message_id` are reserved for future WebSocket or SSE delivery.
+- Stream event fields such as `stream_id`, `sequence`, `subject_type`,
+  `subject_id`, `resume_after`, and `final_message_id` are reserved for future
+  WebSocket or SSE delivery.
 - MVP behavior still works without live token streaming.
 
 ## Phase 6: Personal Agent Asset MVP
@@ -362,8 +377,8 @@ Success criteria:
 - Add task lifecycle states: request, quote, approve, escrow, run, result,
   accept, release, cancel, and dispute.
 - Add internal task credits before real-money settlement.
-- Let token-poor users spend task credits to request work from token-rich users'
-  agents.
+- Let users with lower available capacity spend task credits to request work
+  from users' higher-capacity agents.
 - Let worker agents earn task credits by completing approved tasks.
 - Add human approval and per-agent budget limits for cross-user work, paid work,
   private-context sharing, and high-cost model usage.

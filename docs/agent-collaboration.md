@@ -158,10 +158,10 @@ Grant fields should include:
 - `subject_agent_id`
 - `audience`
 - `scopes`
-- `ttl`
+- `ttl_expires_at`
 - `max_calls`
-- `budget`
-- `allowed_paths` or allowed resource selectors
+- `budget_ref`
+- `allowed_resource_selectors`
 - `read_only`
 - `approval_id`
 
@@ -244,9 +244,9 @@ Stream events should be compact:
 - `task.completed`
 - `task.failed`
 
-Each stream event should carry `stream_id`, `task_id`, `sequence`, `event_type`,
-and enough data to resume after a disconnect. Final answers, artifacts, task
-states, and audit records must still be durable.
+Each stream event should carry `stream_id`, `subject_type`, `subject_id`,
+`sequence`, `event_type`, and enough data to resume after a disconnect. Final
+answers, artifacts, task states, and audit records must still be durable.
 
 Do not stream raw credentials, full logs, hidden reasoning, huge files, or every
 internal tool call as social messages. Store detailed traces in audit or log

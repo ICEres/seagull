@@ -22,7 +22,7 @@ Last updated: 2026-06-27.
 
 - Add shared protocol models:
   `ContentRef`, `PayloadManifest`, `ContextPack`, `TaskRequest`, `TaskResult`,
-  and `StreamEvent`.
+  `ToolGrant`, and `StreamEvent`.
 - Align `packages/protocol` with the message hub's existing `content_ref`
   behavior.
 - Define payload reference fields: media type, byte length, compression, hash,
@@ -38,8 +38,8 @@ Last updated: 2026-06-27.
   private tool credentials or prompts.
 - Add optional scoped tool-grant records for narrow read-only exceptions where
   one agent may use another agent's MCP gateway.
-- Reserve stream fields: `stream_id`, `sequence`, `resume_after`,
-  `event_type`, and `final_message_id`.
+- Reserve stream fields: `stream_id`, `sequence`, `subject_type`, `subject_id`,
+  `resume_after`, `event_type`, and `final_message_id`.
 - Add stream event types for future use: `stream.started`, `stream.delta`,
   `stream.checkpoint`, `stream.completed`, and `stream.failed`.
 - Add tests proving large context is not stored inline in messages, deliveries,

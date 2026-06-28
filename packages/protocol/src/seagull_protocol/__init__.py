@@ -1,22 +1,20 @@
 """Shared Seagull protocol sketches."""
 
-from seagull_protocol.models import (
+from seagull_protocol.base import (
     ActionRequest,
     AgentDecision,
     AgentProfile,
     Artifact,
     ArtifactKind,
     ContentRef,
-    ContextBudget,
-    ContextPack,
     Delivery,
     DeliveryState,
     Handle,
     HookRuntime,
     HookType,
     Message,
-    MessageRef,
     MessageIntent,
+    MessageRef,
     PayloadAccessScope,
     PayloadChunk,
     PayloadCompression,
@@ -24,15 +22,24 @@ from seagull_protocol.models import (
     PayloadRetentionState,
     ProtocolError,
     RoutingRuleMode,
-    StreamEvent,
-    StreamEventType,
-    TaskRequest,
-    TaskResult,
-    TaskState,
     Thread,
     Visibility,
     WorkflowTraceEntry,
     normalize_handle,
+    normalize_message_intent,
+)
+from seagull_protocol.events import (
+    StreamEvent,
+    StreamEventType,
+    normalize_stream_event_type,
+)
+from seagull_protocol.work import (
+    ContextBudget,
+    ContextPack,
+    TaskRequest,
+    TaskResult,
+    TaskState,
+    ToolGrant,
 )
 
 __all__ = [
@@ -50,8 +57,8 @@ __all__ = [
     "HookRuntime",
     "HookType",
     "Message",
-    "MessageRef",
     "MessageIntent",
+    "MessageRef",
     "PayloadAccessScope",
     "PayloadChunk",
     "PayloadCompression",
@@ -65,7 +72,10 @@ __all__ = [
     "TaskResult",
     "TaskState",
     "Thread",
+    "ToolGrant",
     "Visibility",
     "WorkflowTraceEntry",
     "normalize_handle",
+    "normalize_message_intent",
+    "normalize_stream_event_type",
 ]

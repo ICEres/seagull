@@ -57,6 +57,10 @@ def tool_descriptors(scopes: frozenset[str] | None = None) -> list[dict[str, Any
             "inputSchema": object_schema({
                 "agent_handle": string_schema("Accessible agent handle requesting context."),
                 "thread_id": string_schema("Seagull thread ID to load compact context for."),
+                "max_inline_chars": integer_schema("Maximum inline characters to include.", minimum=0, maximum=20000),
+                "max_recent_messages": integer_schema("Maximum recent messages to include.", minimum=0, maximum=50),
+                "max_payload_refs": integer_schema("Maximum payload or selected refs to include.", minimum=0, maximum=100),
+                "token_budget_estimate": integer_schema("Optional estimated context token budget.", minimum=0, maximum=1000000),
             }, required=("agent_handle", "thread_id")),
             "annotations": {"readOnlyHint": True},
         },
@@ -255,8 +259,36 @@ class SeagullMcpTools:
         handle = required_string(arguments, "agent_handle")
         principal.require_agent(handle)
         thread_id = required_string(arguments, "thread_id")
-        result = self._client.get_context(thread_id=thread_id)
-        return tool_result(result, f"Loaded Seagull context for thread {thread_id}.")
+        result = self._client.get_context(
+            thread_id=thread_id,
+            requester_handle=normalize_handle(handle),
+            max_inline_chars=optional_bounded_int(
+                arguments.get("max_inline_chars"),
+                "max_inline_chars",
+                minimum=0,
+                maximum=20000,
+            ),
+            max_recent_messages=optional_bounded_int(
+                arguments.get("max_recent_messages"),
+                "max_recent_messages",
+                minimum=0,
+                maximum=50,
+            ),
+            max_payload_refs=optional_bounded_int(
+                arguments.get("max_payload_refs"),
+                "max_payload_refs",
+                minimum=0,
+                maximum=100,
+            ),
+            token_budget_estimate=optional_bounded_int(
+                arguments.get("token_budget_estimate"),
+                "token_budget_estimate",
+                minimum=0,
+                maximum=1000000,
+            ),
+        )
+        context_pack_id = result.get("context_pack_id") or thread_id
+        return tool_result(result, f"Loaded Seagull context pack {context_pack_id}.")
 
     def _send_message(self, arguments: dict[str, Any], principal: Principal) -> dict[str, Any]:
         principal.require_scope("messages:write")

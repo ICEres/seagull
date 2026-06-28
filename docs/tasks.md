@@ -28,8 +28,6 @@ Last updated: 2026-06-28.
 - Add local payload storage for development before cloud object storage.
 - Add SDK helpers that choose inline content for small messages and payload
   refs for large context.
-- Add a context-pack API that returns thread summary, recent messages, selected
-  refs, payload links, and budget metadata.
 - Add task lifecycle states for delegated work: requested, accepted, running,
   needs_approval, result_ready, completed, refused, and failed.
 - Add action/tool request records for delegated tool use without exposing

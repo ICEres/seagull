@@ -11,6 +11,9 @@ from message_hub.domain.models import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    ContextBudget,
+    ContextPack,
+    ContextPayloadRef,
     Delivery,
     DeliveryStatus,
     InboxItem,
@@ -58,6 +61,17 @@ class ForbiddenDeliveryError(MessageHubError):
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
 DeliveryEventPublisher = Callable[[dict[str, Any]], None]
+DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
+DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
+DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+PRIVATE_CONTEXT_REF_MARKERS = (
+    "mcp://",
+    "file://",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    ".sock",
+)
 
 
 class MessageHubService:
@@ -312,6 +326,138 @@ class MessageHubService:
             thread=thread,
             summary=self._repository.get_latest_thread_summary(thread_id),
             recent_messages=self._repository.list_thread_messages(thread_id, limit=recent_limit),
+        )
+
+    def get_context_pack(
+        self,
+        thread_id: str,
+        *,
+        requester_handle: str,
+        max_inline_chars: int = DEFAULT_CONTEXT_MAX_INLINE_CHARS,
+        max_recent_messages: int = DEFAULT_CONTEXT_MAX_RECENT_MESSAGES,
+        max_payload_refs: int = DEFAULT_CONTEXT_MAX_PAYLOAD_REFS,
+        token_budget_estimate: int | None = None,
+    ) -> ContextPack:
+        thread = self._repository.get_thread(thread_id)
+        if thread is None:
+            raise NotFoundError(f"thread not found: {thread_id}")
+
+        requester = self._require_agent_by_handle(requester_handle)
+        if requester.agent_id not in thread.participants:
+            raise ForbiddenDeliveryError("agent cannot read context for this thread")
+
+        normalized_max_inline_chars = require_bounded_int(
+            max_inline_chars,
+            "max_inline_chars",
+            minimum=0,
+            maximum=20000,
+        )
+        normalized_max_recent_messages = require_bounded_int(
+            max_recent_messages,
+            "max_recent_messages",
+            minimum=0,
+            maximum=50,
+        )
+        normalized_max_payload_refs = require_bounded_int(
+            max_payload_refs,
+            "max_payload_refs",
+            minimum=0,
+            maximum=100,
+        )
+        if token_budget_estimate is not None:
+            token_budget_estimate = require_bounded_int(
+                token_budget_estimate,
+                "token_budget_estimate",
+                minimum=0,
+                maximum=1_000_000,
+            )
+
+        messages = (
+            ()
+            if normalized_max_recent_messages == 0
+            else self._repository.list_thread_messages(thread_id, limit=normalized_max_recent_messages)
+        )
+        inline_chars_used = 0
+        truncated = False
+        budgeted_messages: list[Message] = []
+        selected_refs: list[MessageRef] = []
+        payload_refs: list[ContextPayloadRef] = []
+        redacted_refs: list[str] = []
+
+        for message in messages:
+            budgeted_message = message
+            if message.content_inline:
+                remaining_chars = max(normalized_max_inline_chars - inline_chars_used, 0)
+                if len(message.content_inline) <= remaining_chars:
+                    inline_chars_used += len(message.content_inline)
+                elif remaining_chars > 0:
+                    budgeted_message = replace(message, content_inline=message.content_inline[:remaining_chars])
+                    inline_chars_used += remaining_chars
+                    truncated = True
+                    redacted_refs.append(f"message://{message.message_id}/content_inline")
+                else:
+                    budgeted_message = replace(message, content_inline=None)
+                    truncated = True
+                    redacted_refs.append(f"message://{message.message_id}/content_inline")
+
+            if message.content_ref and len(payload_refs) < normalized_max_payload_refs:
+                payload_refs.append(
+                    ContextPayloadRef(
+                        content_ref=message.content_ref,
+                        source_type="message",
+                        source_id=message.message_id,
+                    )
+                )
+
+            for ref in message.refs:
+                if is_private_context_ref(ref):
+                    redacted_refs.append(f"message://{message.message_id}/ref")
+                    continue
+                if len(selected_refs) < normalized_max_payload_refs:
+                    selected_refs.append(ref)
+
+            budgeted_messages.append(budgeted_message)
+
+        summary = self._repository.get_latest_thread_summary(thread_id)
+        if summary is not None and summary.content_ref and len(payload_refs) < normalized_max_payload_refs:
+            payload_refs.append(
+                ContextPayloadRef(
+                    content_ref=summary.content_ref,
+                    source_type="thread_summary",
+                    source_id=summary.summary_id,
+                )
+            )
+
+        allowed_recipients = tuple(
+            sorted(
+                agent.handle
+                for agent_id in thread.participants
+                for agent in (self._repository.get_agent(agent_id),)
+                if agent is not None
+            )
+        )
+        budget = ContextBudget(
+            max_inline_chars=normalized_max_inline_chars,
+            max_recent_messages=normalized_max_recent_messages,
+            max_payload_refs=normalized_max_payload_refs,
+            token_budget_estimate=token_budget_estimate,
+            inline_chars_used=inline_chars_used,
+            recent_messages_returned=len(budgeted_messages),
+            payload_refs_returned=len(payload_refs),
+            truncated=truncated,
+        )
+        return ContextPack(
+            context_pack_id=f"context_pack_{thread.thread_id}_{requester.agent_id}",
+            thread=thread,
+            requester_handle=requester.handle,
+            summary=summary,
+            recent_messages=tuple(budgeted_messages),
+            selected_refs=tuple(selected_refs),
+            payload_refs=tuple(payload_refs),
+            budget=budget,
+            allowed_recipients=allowed_recipients,
+            redacted_refs=tuple(redacted_refs),
+            created_at=self._clock(),
         )
 
     def ack_message(
@@ -737,6 +883,22 @@ def normalize_agent_decision(decision: str) -> str:
     if normalized not in {"reply", "action", "ignore", "ask_human"}:
         raise InvalidMessageError("agent decision must be reply, action, ignore, or ask_human")
     return normalized
+
+
+def require_bounded_int(value: int, field_name: str, *, minimum: int, maximum: int) -> int:
+    if not isinstance(value, int):
+        raise InvalidMessageError(f"{field_name} must be an integer")
+    if value < minimum:
+        raise InvalidMessageError(f"{field_name} must be at least {minimum}")
+    if value > maximum:
+        return maximum
+    return value
+
+
+def is_private_context_ref(ref: MessageRef) -> bool:
+    haystacks = (ref.type, ref.url or "", ref.find or "", ref.remember_as or "")
+    normalized = " ".join(haystacks).lower()
+    return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
 
 
 def next_stage_after_hook(hook: str, fallback: str) -> str:

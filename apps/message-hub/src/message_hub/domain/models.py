@@ -174,3 +174,38 @@ class ThreadContext:
     thread: ThreadRecord
     summary: ThreadSummary | None
     recent_messages: tuple[Message, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ContextPayloadRef:
+    content_ref: str
+    source_type: str
+    source_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ContextBudget:
+    max_inline_chars: int
+    max_recent_messages: int
+    max_payload_refs: int
+    token_budget_estimate: int | None = None
+    inline_chars_used: int = 0
+    recent_messages_returned: int = 0
+    payload_refs_returned: int = 0
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ContextPack:
+    context_pack_id: str
+    thread: ThreadRecord
+    requester_handle: str
+    summary: ThreadSummary | None
+    recent_messages: tuple[Message, ...]
+    selected_refs: tuple[MessageRef, ...]
+    payload_refs: tuple[ContextPayloadRef, ...]
+    budget: ContextBudget
+    access_scope: str = "recipients"
+    allowed_recipients: tuple[str, ...] = ()
+    redacted_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)

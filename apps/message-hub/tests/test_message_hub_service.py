@@ -62,6 +62,57 @@ class MessageHubServiceTest(TestCase):
         self.assertIsNone(context.summary)
         self.assertEqual((result.message,), context.recent_messages)
 
+    def test_context_pack_applies_budget_and_redacts_private_refs(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="abcdefghijklmnopqrstuvwxyz",
+            content_ref="payload://thread_1/message_1/full",
+            refs=(
+                MessageRef(type="url", url="https://example.com/context", remember_as="public link"),
+                MessageRef(type="mcp", url="mcp://private-tools.local/session"),
+            ),
+        )
+        self.service.save_thread_summary(
+            result.thread.thread_id,
+            "Compact summary.",
+            content_ref="payload://thread_1/summary",
+        )
+
+        context_pack = self.service.get_context_pack(
+            result.thread.thread_id,
+            requester_handle="@reviewer:gulls.ai",
+            max_inline_chars=8,
+            max_recent_messages=5,
+            max_payload_refs=5,
+            token_budget_estimate=1000,
+        )
+
+        self.assertEqual("context_pack_thread_1_agent_2", context_pack.context_pack_id)
+        self.assertEqual("@reviewer:gulls.ai", context_pack.requester_handle)
+        self.assertEqual("abcdefgh", context_pack.recent_messages[0].content_inline)
+        self.assertTrue(context_pack.budget.truncated)
+        self.assertEqual(8, context_pack.budget.inline_chars_used)
+        self.assertEqual(("payload://thread_1/message_1/full", "payload://thread_1/summary"), tuple(
+            ref.content_ref for ref in context_pack.payload_refs
+        ))
+        self.assertEqual(("https://example.com/context",), tuple(ref.url for ref in context_pack.selected_refs))
+        self.assertIn("message://message_1/ref", context_pack.redacted_refs)
+        self.assertEqual(("@researcher:gulls.ai", "@reviewer:gulls.ai"), context_pack.allowed_recipients)
+
+    def test_context_pack_requires_thread_participant(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Private thread.",
+        )
+
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.get_context_pack(
+                result.thread.thread_id,
+                requester_handle="@map-reader:gulls.ai",
+            )
+
     def test_reply_updates_existing_thread(self) -> None:
         first = self.service.send_message(
             sender_handle="@researcher:gulls.ai",

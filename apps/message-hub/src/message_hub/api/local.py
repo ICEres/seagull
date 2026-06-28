@@ -8,6 +8,9 @@ from message_hub.domain import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    ContextBudget,
+    ContextPack,
+    ContextPayloadRef,
     Delivery,
     DuplicateAgentHandleError,
     ForbiddenDeliveryError,
@@ -130,6 +133,34 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return thread_context_to_dict(context)
+
+    def read_context_pack(
+        self,
+        thread_id: str,
+        *,
+        requester_handle: str,
+        max_inline_chars: int = 4000,
+        max_recent_messages: int = 10,
+        max_payload_refs: int = 20,
+        token_budget_estimate: int | None = None,
+    ) -> dict[str, Any]:
+        try:
+            context_pack = self._service.get_context_pack(
+                thread_id,
+                requester_handle=requester_handle,
+                max_inline_chars=max_inline_chars,
+                max_recent_messages=max_recent_messages,
+                max_payload_refs=max_payload_refs,
+                token_budget_estimate=token_budget_estimate,
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return context_pack_to_dict(context_pack)
 
     def ack_message(self, message_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -348,6 +379,53 @@ def thread_context_to_dict(context: ThreadContext) -> dict[str, Any]:
             "created_at": datetime_to_string(context.summary.created_at),
         },
         "recent_messages": [message_to_dict(message) for message in context.recent_messages],
+    }
+
+
+def context_pack_to_dict(context_pack: ContextPack) -> dict[str, Any]:
+    return {
+        "context_pack_id": context_pack.context_pack_id,
+        "thread": thread_to_dict(context_pack.thread),
+        "requester_handle": context_pack.requester_handle,
+        "summary": None if context_pack.summary is None else {
+            "summary_id": context_pack.summary.summary_id,
+            "thread_id": context_pack.summary.thread_id,
+            "summary_text": context_pack.summary.summary_text,
+            "message_start_id": context_pack.summary.message_start_id,
+            "message_end_id": context_pack.summary.message_end_id,
+            "token_count_estimate": context_pack.summary.token_count_estimate,
+            "content_ref": context_pack.summary.content_ref,
+            "created_at": datetime_to_string(context_pack.summary.created_at),
+        },
+        "recent_messages": [message_to_dict(message) for message in context_pack.recent_messages],
+        "selected_refs": [message_ref_to_dict(ref) for ref in context_pack.selected_refs],
+        "payload_refs": [context_payload_ref_to_dict(ref) for ref in context_pack.payload_refs],
+        "budget": context_budget_to_dict(context_pack.budget),
+        "access_scope": context_pack.access_scope,
+        "allowed_recipients": list(context_pack.allowed_recipients),
+        "redacted_refs": list(context_pack.redacted_refs),
+        "created_at": datetime_to_string(context_pack.created_at),
+    }
+
+
+def context_budget_to_dict(budget: ContextBudget) -> dict[str, Any]:
+    return {
+        "max_inline_chars": budget.max_inline_chars,
+        "max_recent_messages": budget.max_recent_messages,
+        "max_payload_refs": budget.max_payload_refs,
+        "token_budget_estimate": budget.token_budget_estimate,
+        "inline_chars_used": budget.inline_chars_used,
+        "recent_messages_returned": budget.recent_messages_returned,
+        "payload_refs_returned": budget.payload_refs_returned,
+        "truncated": budget.truncated,
+    }
+
+
+def context_payload_ref_to_dict(ref: ContextPayloadRef) -> dict[str, str]:
+    return {
+        "content_ref": ref.content_ref,
+        "source_type": ref.source_type,
+        "source_id": ref.source_id,
     }
 
 

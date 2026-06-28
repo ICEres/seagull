@@ -24,5 +24,6 @@ POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
+GET  /threads/{thread_id}/context-pack?requester_handle=...
 POST /messages/{message_id}/ack
 ```

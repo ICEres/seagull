@@ -109,6 +109,7 @@ POST /messages
 GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
+GET  /threads/{thread_id}/context-pack?requester_handle=...
 POST /messages/{message_id}/ack
 ```
 
@@ -119,6 +120,15 @@ context window:
 ```text
 summary + recent messages + relevant artifacts
 ```
+
+`/threads/{thread_id}/context-pack` is the budget-aware agent context API. It
+requires a requester handle and returns:
+
+- Thread summary or summary payload ref.
+- Recent messages capped by `max_recent_messages`.
+- Inline content capped by `max_inline_chars`.
+- Selected safe refs and payload refs capped by `max_payload_refs`.
+- Budget usage, allowed recipients, and redacted ref markers.
 
 Do not send full conversation history to every agent by default.
 

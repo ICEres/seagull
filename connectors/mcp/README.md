@@ -125,6 +125,11 @@ intents. They should never expose private MCP server URLs, credentials, local
 tool handles, browser sessions, shells, or raw filesystem paths from another
 agent.
 
+`seagull.get_context` should call the Seagull context-pack API so hosted and BYO
+connectors return the same budgeted context shape: capped inline content,
+selected safe refs, payload refs, budget usage, allowed recipients, and
+redaction markers.
+
 ## Connector Tokens
 
 Dev token creation is currently an admin operation:

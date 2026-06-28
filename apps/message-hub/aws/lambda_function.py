@@ -20,6 +20,17 @@ SAFETY_BLOCKED_TERMS = tuple(
     for term in os.environ.get("SAFETY_BLOCKED_TERMS", "unsafe:").split(",")
     if term.strip()
 )
+DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
+DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
+DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+PRIVATE_CONTEXT_REF_MARKERS = (
+    "mcp://",
+    "file://",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    ".sock",
+)
 
 AGENTS_TABLE = os.environ["AGENTS_TABLE"]
 MESSAGES_TABLE = os.environ["MESSAGES_TABLE"]
@@ -108,6 +119,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET" and path.startswith("/threads/") and path.endswith("/context"):
             thread_id = path_param(path, "/threads/", "/context")
             return read_thread_context(thread_id, event)
+
+        if method == "GET" and path.startswith("/threads/") and path.endswith("/context-pack"):
+            thread_id = path_param(path, "/threads/", "/context-pack")
+            return read_context_pack(thread_id, event)
 
         if method == "GET" and path.startswith("/threads/"):
             thread_id = unquote(path.removeprefix("/threads/").strip("/"))
@@ -427,6 +442,142 @@ def read_thread_context(thread_id: str, event: dict[str, Any]) -> dict[str, Any]
             "context_mode": "summary_plus_recent",
             "summary": clean_item(summary),
             "recent_messages": clean_item(recent_messages),
+        },
+    )
+
+
+def read_context_pack(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    thread = get_thread_record(thread_id)
+    if thread is None:
+        raise NotFound(f"thread not found: {thread_id}")
+
+    params = query_params(event)
+    requester_handle = normalize_handle(required(params, "requester_handle"))
+    requester = require_agent_by_handle(requester_handle)
+    participants = set(thread.get("participants", []))
+    if requester["agent_id"] not in participants:
+        raise Forbidden("agent cannot read context for this thread")
+
+    max_inline_chars = query_int(
+        event,
+        "max_inline_chars",
+        default=DEFAULT_CONTEXT_MAX_INLINE_CHARS,
+        minimum=0,
+        maximum=20000,
+    )
+    max_recent_messages = query_int(
+        event,
+        "max_recent_messages",
+        default=DEFAULT_CONTEXT_MAX_RECENT_MESSAGES,
+        minimum=0,
+        maximum=50,
+    )
+    max_payload_refs = query_int(
+        event,
+        "max_payload_refs",
+        default=DEFAULT_CONTEXT_MAX_PAYLOAD_REFS,
+        minimum=0,
+        maximum=100,
+    )
+    token_budget_estimate = optional_query_int(
+        event,
+        "token_budget_estimate",
+        minimum=0,
+        maximum=1_000_000,
+    )
+
+    if max_recent_messages == 0:
+        messages = []
+    else:
+        message_result = messages_table.query(
+            IndexName="thread-created-at-index",
+            KeyConditionExpression=Key("thread_id").eq(thread_id),
+            ScanIndexForward=False,
+            Limit=max_recent_messages,
+        )
+        messages = list(reversed(message_result.get("Items", [])))
+    inline_chars_used = 0
+    truncated = False
+    budgeted_messages = []
+    selected_refs = []
+    payload_refs = []
+    redacted_refs = []
+
+    for message in messages:
+        budgeted_message = dict(message)
+        content_inline = budgeted_message.get("content_inline")
+        if isinstance(content_inline, str) and content_inline:
+            remaining_chars = max(max_inline_chars - inline_chars_used, 0)
+            if len(content_inline) <= remaining_chars:
+                inline_chars_used += len(content_inline)
+            elif remaining_chars > 0:
+                budgeted_message["content_inline"] = content_inline[:remaining_chars]
+                inline_chars_used += remaining_chars
+                truncated = True
+                redacted_refs.append(f"message://{message['message_id']}/content_inline")
+            else:
+                budgeted_message.pop("content_inline", None)
+                truncated = True
+                redacted_refs.append(f"message://{message['message_id']}/content_inline")
+
+        if budgeted_message.get("content_ref") and len(payload_refs) < max_payload_refs:
+            payload_refs.append(
+                {
+                    "content_ref": budgeted_message["content_ref"],
+                    "source_type": "message",
+                    "source_id": budgeted_message["message_id"],
+                }
+            )
+
+        for ref in message.get("refs", []):
+            if private_context_ref(ref):
+                redacted_refs.append(f"message://{message['message_id']}/ref")
+                continue
+            if len(selected_refs) < max_payload_refs:
+                selected_refs.append(ref)
+
+        budgeted_messages.append(budgeted_message)
+
+    summary = latest_thread_summary(thread_id)
+    if summary and summary.get("content_ref") and len(payload_refs) < max_payload_refs:
+        payload_refs.append(
+            {
+                "content_ref": summary["content_ref"],
+                "source_type": "thread_summary",
+                "source_id": summary.get("summary_id", "latest"),
+            }
+        )
+
+    allowed_recipients = sorted(
+        agent["handle"]
+        for agent_id in participants
+        for agent in (agents_table.get_item(Key={"agent_id": agent_id}).get("Item"),)
+        if agent is not None
+    )
+    return response(
+        200,
+        {
+            "context_pack_id": f"context_pack_{thread_id}_{requester['agent_id']}",
+            "thread": clean_item(thread),
+            "requester_handle": requester["handle"],
+            "summary": clean_item(summary),
+            "recent_messages": clean_item(budgeted_messages),
+            "selected_refs": clean_item(selected_refs),
+            "payload_refs": clean_item(payload_refs),
+            "budget": {
+                "max_inline_chars": max_inline_chars,
+                "max_recent_messages": max_recent_messages,
+                "max_payload_refs": max_payload_refs,
+                "token_budget_estimate": token_budget_estimate,
+                "inline_chars_used": inline_chars_used,
+                "recent_messages_returned": len(budgeted_messages),
+                "payload_refs_returned": len(payload_refs),
+                "truncated": truncated,
+            },
+            "access_scope": "recipients",
+            "allowed_recipients": allowed_recipients,
+            "redacted_refs": redacted_refs,
+            "created_at": now_iso(),
         },
     )
 
@@ -1132,6 +1283,37 @@ def query_limit(event: dict[str, Any], *, default: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(limit, maximum))
+
+
+def query_int(event: dict[str, Any], key: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw_value = query_params(event).get(key, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def optional_query_int(event: dict[str, Any], key: str, *, minimum: int, maximum: int) -> int | None:
+    raw_value = query_params(event).get(key)
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        raise BadRequest(f"{key} must be an integer") from None
+    return max(minimum, min(value, maximum))
+
+
+def private_context_ref(ref: dict[str, Any]) -> bool:
+    haystacks = (
+        str(ref.get("type") or ""),
+        str(ref.get("url") or ""),
+        str(ref.get("find") or ""),
+        str(ref.get("remember_as") or ""),
+    )
+    normalized = " ".join(haystacks).lower()
+    return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
 
 
 def without_none(item: dict[str, Any]) -> dict[str, Any]:

@@ -257,8 +257,6 @@ Remaining:
   cross-agent MCP exceptions.
 - Keep token streaming out of the MVP while preserving stream identifiers and
   event types for later WebSocket or SSE delivery.
-- Add a context-pack contract that can return compact thread state, recent
-  messages, selected refs, and payload links within a requested context budget.
 - Keep stream deltas out of the durable message table. Store final results,
   artifacts, task states, and audit records as the source of truth.
 
@@ -278,6 +276,9 @@ Exit state:
   putting huge strings in deliveries, inbox rows, queues, or webhooks.
 - The connector and MCP surfaces can expose context and artifacts as references
   instead of large inline tool responses.
+- The message hub exposes a context-pack API that returns compact thread state,
+  recent messages, selected safe refs, payload refs, budget usage, allowed
+  recipients, and redaction markers.
 - Stream event fields such as `stream_id`, `sequence`, `subject_type`,
   `subject_id`, `resume_after`, and `final_message_id` are reserved for future
   WebSocket or SSE delivery.

@@ -26,6 +26,7 @@ GET  /agents/{handle}/outbox
 GET  /agents/{handle}/sent
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
+GET  /threads/{thread_id}/context-pack?requester_handle=...
 POST /messages/{message_id}/ack
 ```
 
@@ -34,6 +35,6 @@ This is still an MVP adapter, not the final production router. It proves:
 - Agent registration.
 - Direct message delivery.
 - Inbox/outbox and sent-message reads.
-- Thread and compact context reads.
+- Thread, compact context, and budgeted context-pack reads.
 - Delivery ack updates.
 - Terraform, Lambda, API Gateway, IAM, DynamoDB, and CloudWatch wiring.

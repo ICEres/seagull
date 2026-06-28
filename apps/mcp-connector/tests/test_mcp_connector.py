@@ -28,6 +28,7 @@ class FakeSeagullClient:
         self.updated_tasks: list[dict[str, object]] = []
         self.returned_results: list[dict[str, object]] = []
         self.uploaded_artifacts: list[dict[str, object]] = []
+        self.context_requests: list[dict[str, object]] = []
 
     def list_agents(self, handles: tuple[str, ...]) -> list[dict[str, object]]:
         return [{"handle": handle, "status": "active"} for handle in handles]
@@ -54,8 +55,25 @@ class FakeSeagullClient:
     def get_thread_context(self, thread_id: str) -> dict[str, object]:
         return {"thread": {"thread_id": thread_id}, "recent_messages": []}
 
-    def get_context(self, *, thread_id: str) -> dict[str, object]:
-        return {"context_subject": {"type": "thread", "id": thread_id}, "recent_messages": []}
+    def get_context(
+        self,
+        *,
+        thread_id: str,
+        requester_handle: str,
+        max_inline_chars: int | None = None,
+        max_recent_messages: int | None = None,
+        max_payload_refs: int | None = None,
+        token_budget_estimate: int | None = None,
+    ) -> dict[str, object]:
+        self.context_requests.append({
+            "thread_id": thread_id,
+            "requester_handle": requester_handle,
+            "max_inline_chars": max_inline_chars,
+            "max_recent_messages": max_recent_messages,
+            "max_payload_refs": max_payload_refs,
+            "token_budget_estimate": token_budget_estimate,
+        })
+        return {"context_pack_id": "context_pack_1", "thread": {"thread_id": thread_id}, "recent_messages": []}
 
     def send_message(
         self,
@@ -402,6 +420,35 @@ class McpConnectorTest(TestCase):
         self.assertIsInstance(response.body, dict)
         self.assertEqual(-32003, response.body["error"]["code"])
 
+    def test_get_context_passes_budget_to_seagull_client(self) -> None:
+        response = self.mcp(
+            "tools/call",
+            {
+                "name": "seagull.get_context",
+                "arguments": {
+                    "agent_handle": "@alice:gulls.ai",
+                    "thread_id": "thread_1",
+                    "max_inline_chars": 120,
+                    "max_recent_messages": 3,
+                    "max_payload_refs": 4,
+                    "token_budget_estimate": 500,
+                },
+            },
+        )
+
+        self.assertEqual("context_pack_1", response["result"]["structuredContent"]["context_pack_id"])
+        self.assertEqual(
+            {
+                "thread_id": "thread_1",
+                "requester_handle": "@alice:gulls.ai",
+                "max_inline_chars": 120,
+                "max_recent_messages": 3,
+                "max_payload_refs": 4,
+                "token_budget_estimate": 500,
+            },
+            self.client.context_requests[0],
+        )
+
     def test_create_task_requires_allowed_requester(self) -> None:
         response = self.mcp(
             "tools/call",
@@ -521,6 +568,29 @@ class McpConnectorTest(TestCase):
         result_payload = json.loads(str(result_body["content"]))
         self.assertEqual(returned["task_id"], result_payload["task_id"])
         self.assertEqual(["artifact://review_1"], result_payload["artifact_refs"])
+
+    def test_http_client_reads_context_pack_with_budget_query(self) -> None:
+        client = RecordingHttpClient()
+
+        client.get_context(
+            thread_id="thread_1",
+            requester_handle="@alice:gulls.ai",
+            max_inline_chars=100,
+            max_recent_messages=3,
+            max_payload_refs=5,
+            token_budget_estimate=1000,
+        )
+
+        method, path, body = client.requests[0]
+        self.assertEqual("GET", method)
+        self.assertIsNone(body)
+        self.assertTrue(path.startswith("/threads/thread_1/context-pack?"))
+        query = parse.parse_qs(parse.urlsplit(path).query)
+        self.assertEqual(["@alice:gulls.ai"], query["requester_handle"])
+        self.assertEqual(["100"], query["max_inline_chars"])
+        self.assertEqual(["3"], query["max_recent_messages"])
+        self.assertEqual(["5"], query["max_payload_refs"])
+        self.assertEqual(["1000"], query["token_budget_estimate"])
 
     def test_send_message_requires_allowed_sender(self) -> None:
         response = self.mcp(

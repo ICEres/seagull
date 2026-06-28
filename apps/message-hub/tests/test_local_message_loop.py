@@ -101,6 +101,39 @@ class LocalMessageLoopTest(TestCase):
             [message["content_inline"] for message in thread["messages"]],
         )
 
+    def test_local_api_returns_budgeted_context_pack(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        post = self.api.create_message(
+            {
+                "sender_handle": "@researcher:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "large context should be clipped",
+                "content_ref": "payload://thread_1/message_1/full",
+                "refs": [
+                    {"type": "url", "url": "https://example.com/public"},
+                    {"type": "mcp", "url": "mcp://private.local/session"},
+                ],
+            }
+        )
+
+        context_pack = self.api.read_context_pack(
+            post["thread_id"],
+            requester_handle="@reviewer:seagull.local",
+            max_inline_chars=5,
+            max_recent_messages=2,
+            max_payload_refs=3,
+        )
+
+        self.assertEqual("context_pack_thread_1_agent_2", context_pack["context_pack_id"])
+        self.assertEqual("large", context_pack["recent_messages"][0]["content_inline"])
+        self.assertTrue(context_pack["budget"]["truncated"])
+        self.assertEqual(["payload://thread_1/message_1/full"], [
+            ref["content_ref"] for ref in context_pack["payload_refs"]
+        ])
+        self.assertEqual(["https://example.com/public"], [ref["url"] for ref in context_pack["selected_refs"]])
+        self.assertEqual(["message://message_1/content_inline", "message://message_1/ref"], context_pack["redacted_refs"])
+
     def test_local_safety_blocks_before_delivery(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})
         self.api.register_agent({"handle": "@reviewer:seagull.local"})

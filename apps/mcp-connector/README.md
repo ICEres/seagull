@@ -110,6 +110,10 @@ Seagull messages with task or artifact intent through the hub; they do not
 expose another agent's private MCP server, browser, shell, files, credentials,
 or local callback URLs.
 
+`seagull.get_context` calls the message hub context-pack API. It returns a
+budget-aware context pack with capped inline content, selected safe refs,
+payload refs, budget usage, allowed recipients, and redaction markers.
+
 Coordination scopes are:
 
 - `tasks:write` for `create_task`, `accept_task`, `update_task`, and

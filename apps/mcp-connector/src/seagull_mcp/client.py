@@ -15,7 +15,16 @@ class SeagullClient(Protocol):
     def get_thread_context(self, thread_id: str) -> dict[str, Any]:
         raise NotImplementedError
 
-    def get_context(self, *, thread_id: str) -> dict[str, Any]:
+    def get_context(
+        self,
+        *,
+        thread_id: str,
+        requester_handle: str,
+        max_inline_chars: int | None = None,
+        max_recent_messages: int | None = None,
+        max_payload_refs: int | None = None,
+        token_budget_estimate: int | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def send_message(
@@ -130,9 +139,25 @@ class SeagullHttpClient:
         encoded = parse.quote(thread_id, safe="")
         return self._request("GET", f"/threads/{encoded}/context")
 
-    def get_context(self, *, thread_id: str) -> dict[str, Any]:
-        result = self.get_thread_context(thread_id)
-        return {"context_subject": {"type": "thread", "id": thread_id}, **result}
+    def get_context(
+        self,
+        *,
+        thread_id: str,
+        requester_handle: str,
+        max_inline_chars: int | None = None,
+        max_recent_messages: int | None = None,
+        max_payload_refs: int | None = None,
+        token_budget_estimate: int | None = None,
+    ) -> dict[str, Any]:
+        encoded_thread = parse.quote(thread_id, safe="")
+        query = {
+            "requester_handle": requester_handle,
+            "max_inline_chars": max_inline_chars,
+            "max_recent_messages": max_recent_messages,
+            "max_payload_refs": max_payload_refs,
+            "token_budget_estimate": token_budget_estimate,
+        }
+        return self._request("GET", f"/threads/{encoded_thread}/context-pack?{urlencode_without_none(query)}")
 
     def send_message(
         self,
@@ -367,6 +392,10 @@ def compact_json(payload: dict[str, Any]) -> str:
 
 def without_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def urlencode_without_none(query: dict[str, Any]) -> str:
+    return parse.urlencode({key: value for key, value in query.items() if value is not None})
 
 
 def task_id_from_result(result: dict[str, Any]) -> str:

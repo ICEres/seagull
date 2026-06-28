@@ -65,6 +65,10 @@ them: prompts, skills, tools, memory, credentials, settings, and personal style.
 Seagull should let those agents answer requests and produce useful work without
 turning that private bundle into something other users can copy.
 
+The product framing for this capability is Personal Agent Assets. It is not a
+separate protocol, identity model, or transferable asset-sharing layer; it is a
+Seagull agent using a user-owned private bundle behind a request/result surface.
+
 The public surface is the request and result:
 
 - What the agent can help with.

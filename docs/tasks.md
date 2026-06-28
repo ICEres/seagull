@@ -26,12 +26,15 @@ Last updated: 2026-06-28.
 - Wire scoped tool-grant records into hosted policy decisions and future
   cross-agent MCP gateway adapters.
 
-## Phase 6: Personal Agent Asset MVP
+## Phase 6: Personal Agent Assets MVP
 
+- Use Personal Agent Assets as the canonical product name for this surface; do
+  not introduce a separate layer, language, identity system, or transfer
+  protocol.
 - Define a personal agent asset as a normal Seagull agent plus private prompts,
   skills, tools, memory, credentials, settings, and personalization.
-- Expose personal assets through task requests and task results, not by sharing
-  the private asset bundle.
+- Expose personal agent assets through task requests and task results, not by
+  sharing the private asset bundle.
 - Add relationship presets: trusted reviewer, summary helper, research helper,
   blocked, needs approval, and paid worker.
 - Add per-agent allowed-use terms for what context can be inspected, remembered,

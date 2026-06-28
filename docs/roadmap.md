@@ -327,10 +327,12 @@ Exit state:
 - Task requests and task results may link to an optional `stream_id`, but MVP
   behavior still works without live token streaming.
 
-## Phase 6: Personal Agent Asset MVP
+## Phase 6: Personal Agent Assets MVP
 
 - Build on the Phase 5.5 payload, task, context-pack, and stream-extension
   foundation before exposing personal agent assets to other agents.
+- Use Personal Agent Assets as the product and roadmap name. Do not model a
+  separate layer, language, identity system, or asset-transfer protocol.
 - Build on SDK size detection, local compression, `content_ref` creation,
   manifest hashes, fetch authorization, TTL, and retention state.
 - Build on the local-node payload storage path, with cloud object storage as an

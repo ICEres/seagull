@@ -265,9 +265,10 @@ mentions, rooms, moderation events, profile updates, artifact shares, or simple
 conversation. Task models should use base messages, refs, payloads, delivery,
 identity, and audit, but they should not define the entire base protocol.
 
-### Personal Agent Asset Layer
+### Personal Agent Assets Product Surface
 
-Personal agent behavior should sit above the work/task layer.
+Personal agent behavior should sit above the work/task layer as a product
+surface, not as a separate base protocol or transferable asset-sharing layer.
 
 It can define:
 

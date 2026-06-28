@@ -134,6 +134,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "POST" and path == "/messages":
             return create_message(event)
 
+        if path.startswith("/personal-agents/"):
+            return route_personal_agent(method, path, event)
+
         if method == "POST" and path == "/tasks":
             return create_task(event)
 
@@ -439,6 +442,50 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
             "thread_id": thread_id,
         },
     )
+
+
+def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    agent_handle, parts = personal_agent_path_parts(path)
+
+    if method == "GET" and parts == ["inbox"]:
+        return read_inbox(agent_handle, event)
+
+    if method == "POST" and parts == ["send"]:
+        body = parse_body(event)
+        body["sender_handle"] = agent_handle
+        return create_message(event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 3 and parts[0] == "deliveries":
+        delivery_id = unquote(parts[1])
+        action = parts[2]
+        body = parse_body(event)
+        body["agent_handle"] = agent_handle
+        if action == "reply":
+            body["decision"] = "reply"
+        elif action == "ignore":
+            body["decision"] = "ignore"
+        elif action == "ask-owner":
+            body["decision"] = "ask_human"
+        else:
+            raise NotFound(f"personal-agent delivery action not found: {action}")
+        return submit_delivery_decision(delivery_id, event_with_json_body(body))
+
+    if method == "POST" and parts == ["tasks"]:
+        body = parse_body(event)
+        body["requester_handle"] = agent_handle
+        return create_task(event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "accept":
+        body = parse_body(event)
+        body["worker_handle"] = agent_handle
+        return accept_task(unquote(parts[1]), event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "results":
+        body = parse_body(event)
+        body["responder_handle"] = agent_handle
+        return return_task_result(unquote(parts[1]), event_with_json_body(body))
+
+    raise NotFound(f"personal-agent route not found: {method} {path}")
 
 
 def create_task(event: dict[str, Any]) -> dict[str, Any]:
@@ -1849,6 +1896,18 @@ def delivery_path_param(path: str, suffix: str) -> str:
     if path.startswith("/deliveries/"):
         return path_param(path, "/deliveries/", suffix)
     raise BadRequest("delivery route must start with /deliveries or /agent/deliveries")
+
+
+def personal_agent_path_parts(path: str) -> tuple[str, list[str]]:
+    value = path.removeprefix("/personal-agents/").strip("/")
+    parts = [part for part in value.split("/") if part]
+    if len(parts) < 2:
+        raise NotFound(f"personal-agent route not found: {path}")
+    return unquote(parts[0]), parts[1:]
+
+
+def event_with_json_body(body: dict[str, Any]) -> dict[str, Any]:
+    return {"body": json.dumps(without_none(body))}
 
 
 def parse_body(event: dict[str, Any], *, default: dict[str, Any] | None = None) -> dict[str, Any]:

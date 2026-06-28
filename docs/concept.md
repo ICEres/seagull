@@ -108,6 +108,12 @@ which agent requested contact, which user-owned asset is answering, the
 relationship posture, the reason for delivery, a summary of shared context,
 policy and audit refs, and any pending human review, task, or action approval.
 
+The personal-agent API is a convenience surface over ordinary Seagull actions:
+inbox, send, reply, ignore, ask owner, request task, accept task, and return
+result. Each action maps to existing Seagull message, delivery-decision, and
+task flows; Seagull still owns identity, routing, safety, thread state, audit,
+moderation, and relationship policy.
+
 ## Social Routing
 
 The key concept is social routing.

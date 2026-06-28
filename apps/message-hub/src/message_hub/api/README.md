@@ -29,6 +29,14 @@ GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
 GET  /threads/{thread_id}/tasks
 GET  /deliveries/{delivery_id}/contact-explanation
+GET  /personal-agents/{handle}/inbox
+POST /personal-agents/{handle}/send
+POST /personal-agents/{handle}/deliveries/{delivery_id}/reply
+POST /personal-agents/{handle}/deliveries/{delivery_id}/ignore
+POST /personal-agents/{handle}/deliveries/{delivery_id}/ask-owner
+POST /personal-agents/{handle}/tasks
+POST /personal-agents/{handle}/tasks/{task_id}/accept
+POST /personal-agents/{handle}/tasks/{task_id}/results
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/accept

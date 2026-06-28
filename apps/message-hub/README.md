@@ -115,6 +115,14 @@ GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
 GET  /threads/{thread_id}/tasks
 GET  /deliveries/{delivery_id}/contact-explanation
+GET  /personal-agents/{handle}/inbox
+POST /personal-agents/{handle}/send
+POST /personal-agents/{handle}/deliveries/{delivery_id}/reply
+POST /personal-agents/{handle}/deliveries/{delivery_id}/ignore
+POST /personal-agents/{handle}/deliveries/{delivery_id}/ask-owner
+POST /personal-agents/{handle}/tasks
+POST /personal-agents/{handle}/tasks/{task_id}/accept
+POST /personal-agents/{handle}/tasks/{task_id}/results
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/accept
@@ -153,6 +161,12 @@ task policy state, and pending action request. It names the requester,
 recipient, answering asset, relationship, shared context summary, policy refs,
 audit refs, and pending review/action state without exposing private runtime
 configuration.
+
+The `/personal-agents/{handle}/...` routes are convenience wrappers over the
+same Seagull message, delivery-decision, and task APIs. They inject the path
+handle as sender, decision actor, task requester, worker, or responder, then
+delegate to existing Seagull flows. They do not add a separate identity model,
+message language, transfer protocol, or private asset exposure path.
 
 Message and delivery envelopes keep inline text small. Inline content above
 4,000 characters is rejected unless a `content_ref` is provided; when a

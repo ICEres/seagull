@@ -231,6 +231,37 @@ class LocalMessageHubApi:
 
         return {"items": [inbox_item_to_dict(item) for item in items]}
 
+    def personal_agent_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
+        return self.read_inbox(handle, limit=limit)
+
+    def personal_agent_send(self, handle: str, body: dict[str, Any]) -> dict[str, Any]:
+        wrapped = {**body, "sender_handle": handle}
+        return self.create_message(wrapped)
+
+    def personal_agent_reply(self, handle: str, delivery_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        wrapped = {**body, "agent_handle": handle, "decision": "reply"}
+        return self.submit_delivery_decision(delivery_id, wrapped)
+
+    def personal_agent_ignore(self, handle: str, delivery_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        wrapped = {**(body or {}), "agent_handle": handle, "decision": "ignore"}
+        return self.submit_delivery_decision(delivery_id, wrapped)
+
+    def personal_agent_ask_owner(self, handle: str, delivery_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        wrapped = {**(body or {}), "agent_handle": handle, "decision": "ask_human"}
+        return self.submit_delivery_decision(delivery_id, wrapped)
+
+    def personal_agent_request_task(self, handle: str, body: dict[str, Any]) -> dict[str, Any]:
+        wrapped = {**body, "requester_handle": handle}
+        return self.create_task(wrapped)
+
+    def personal_agent_accept_task(self, handle: str, task_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        wrapped = {**(body or {}), "worker_handle": handle}
+        return self.accept_task(task_id, wrapped)
+
+    def personal_agent_return_result(self, handle: str, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        wrapped = {**body, "responder_handle": handle}
+        return self.return_task_result(task_id, wrapped)
+
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
             messages = self._service.get_thread(thread_id, limit=limit)

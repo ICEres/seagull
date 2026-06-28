@@ -570,3 +570,93 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual("open_url for https://example.com (requires approval)", explanation["pending_action"])
         self.assertIn("action_approval_required:true", explanation["policy_refs"])
         self.assertIn("action_request:action_1:pending", explanation["audit_event_refs"])
+
+    def test_personal_agent_api_wraps_existing_message_and_task_flows(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+
+        sent = self.api.personal_agent_send(
+            "@researcher:seagull.local",
+            {
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "Please review this through the personal-agent surface.",
+                "sender_handle": "@spoofed:seagull.local",
+            },
+        )
+        inbox = self.api.personal_agent_inbox("@reviewer:seagull.local")
+        delivery_id = inbox["items"][0]["delivery"]["delivery_id"]
+
+        self.assertEqual("agent_1", sent["message"]["sender_agent_id"])
+        self.assertEqual("message_1", inbox["items"][0]["message"]["message_id"])
+
+        reply = self.api.personal_agent_reply(
+            "@reviewer:seagull.local",
+            delivery_id,
+            {
+                "agent_handle": "@spoofed:seagull.local",
+                "decision": "ignore",
+                "content": "Reviewed from the normal reply flow.",
+            },
+        )
+        self.assertEqual("replied", reply["delivery"]["status"])
+        self.assertEqual("reply", reply["reply"]["message"]["intent"])
+
+        ask = self.api.personal_agent_send(
+            "@researcher:seagull.local",
+            {
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "Should the owner approve this?",
+            },
+        )
+        ask_owner = self.api.personal_agent_ask_owner(
+            "@reviewer:seagull.local",
+            ask["deliveries"][0]["delivery_id"],
+            {"note": "Owner review requested."},
+        )
+        self.assertEqual("needs_review", ask_owner["delivery"]["status"])
+        self.assertEqual("human.review", ask_owner["delivery"]["current_stage"])
+        self.assertEqual("ask_human", ask_owner["delivery"]["workflow_trace"][-1]["action"])
+
+        ignored = self.api.personal_agent_send(
+            "@researcher:seagull.local",
+            {
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "Ignore this.",
+            },
+        )
+        ignore = self.api.personal_agent_ignore(
+            "@reviewer:seagull.local",
+            ignored["deliveries"][0]["delivery_id"],
+        )
+        self.assertEqual("ignored", ignore["delivery"]["status"])
+
+        task = self.api.personal_agent_request_task(
+            "@researcher:seagull.local",
+            {
+                "recipient_handle": "@reviewer:seagull.local",
+                "requester_handle": "@spoofed:seagull.local",
+                "objective": "Return a task result.",
+                "context_refs": ["payload://task_1/context"],
+            },
+        )
+        self.assertEqual("task_1", task["task_id"])
+        self.assertEqual("agent_1", task["task"]["requester_agent_id"])
+
+        accepted = self.api.personal_agent_accept_task(
+            "@reviewer:seagull.local",
+            task["task_id"],
+            {"worker_handle": "@spoofed:seagull.local"},
+        )
+        self.assertEqual("accepted", accepted["state"])
+        self.assertEqual("agent_2", accepted["task"]["accepted_by_agent_id"])
+
+        result = self.api.personal_agent_return_result(
+            "@reviewer:seagull.local",
+            task["task_id"],
+            {
+                "responder_handle": "@spoofed:seagull.local",
+                "content": "Done through the existing task-result flow.",
+            },
+        )
+        self.assertEqual("completed", result["state"])
+        self.assertEqual("agent_2", result["result"]["responder_agent_id"])

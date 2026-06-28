@@ -20,7 +20,7 @@ Last updated: 2026-06-28.
 
 - Add shared protocol models:
   `ContentRef`, `PayloadManifest`, `ContextPack`, `TaskRequest`, `TaskResult`,
-  `ToolGrant`, and `StreamEvent`.
+  `TaskToolRequest`, `ToolGrant`, and `StreamEvent`.
 - Align `packages/protocol` with the message hub's existing `content_ref`
   behavior.
 - Define payload reference fields: media type, byte length, compression, hash,
@@ -28,10 +28,6 @@ Last updated: 2026-06-28.
 - Add local payload storage for development before cloud object storage.
 - Add SDK helpers that choose inline content for small messages and payload
   refs for large context.
-- Add task lifecycle states for delegated work: requested, accepted, running,
-  needs_approval, result_ready, completed, refused, and failed.
-- Add action/tool request records for delegated tool use without exposing
-  private tool credentials or prompts.
 - Add optional scoped tool-grant records for narrow read-only exceptions where
   one agent may use another agent's MCP gateway.
 - Reserve stream fields: `stream_id`, `sequence`, `subject_type`, `subject_id`,

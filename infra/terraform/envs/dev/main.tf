@@ -169,8 +169,11 @@ resource "aws_lambda_function" "message_hub_api" {
       MESSAGES_TABLE         = module.message_hub_storage.table_names.messages
       ROUTING_RULES_TABLE    = module.message_hub_storage.table_names.routing_rules
       SAFETY_BLOCKED_TERMS   = "unsafe:"
+      TASK_RESULTS_TABLE     = module.message_hub_storage.table_names.task_results
+      TASKS_TABLE            = module.message_hub_storage.table_names.tasks
       THREAD_SUMMARIES_TABLE = module.message_hub_storage.table_names.thread_summaries
       THREADS_TABLE          = module.message_hub_storage.table_names.threads
+      TOOL_REQUESTS_TABLE    = module.message_hub_storage.table_names.tool_requests
     }
   }
 

@@ -39,6 +39,7 @@ from seagull_protocol.work import (
     TaskRequest,
     TaskResult,
     TaskState,
+    TaskToolRequest,
     ToolGrant,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "TaskRequest",
     "TaskResult",
     "TaskState",
+    "TaskToolRequest",
     "Thread",
     "ToolGrant",
     "Visibility",

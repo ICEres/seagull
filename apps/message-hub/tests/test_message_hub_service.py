@@ -4,7 +4,14 @@ from datetime import datetime, timedelta, timezone
 from itertools import count
 from unittest import TestCase
 
-from message_hub.domain import DeliveryStatus, ForbiddenDeliveryError, MessageHubService, MessageRef, NotFoundError
+from message_hub.domain import (
+    DeliveryStatus,
+    ForbiddenDeliveryError,
+    MessageHubService,
+    MessageRef,
+    NotFoundError,
+    TaskState,
+)
 from message_hub.storage import InMemoryMessageHubRepository
 
 
@@ -112,6 +119,91 @@ class MessageHubServiceTest(TestCase):
                 result.thread.thread_id,
                 requester_handle="@map-reader:gulls.ai",
             )
+
+    def test_delegated_task_records_lifecycle_without_inline_task_payload_messages(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the private plan without copying private prompts.",
+            context_refs=("thread://thread_1",),
+            context_pack_id="context_pack_1",
+            input_ref="payload://task_1/input",
+            allowed_tool_names=("repo_read",),
+            allowed_use_terms=("no_memory",),
+        )
+
+        self.assertEqual("task_1", task.task_id)
+        self.assertEqual(TaskState.REQUESTED, task.state)
+        self.assertEqual("local_safety_allow", task.policy_decision_id)
+        self.assertEqual(("repo_read",), task.allowed_tool_names)
+        request_message = self.repository.get_message(task.request_message_id)
+        self.assertIsNotNone(request_message)
+        assert request_message is not None
+        self.assertIsNone(request_message.content_inline)
+        self.assertEqual("task_request", request_message.intent)
+        self.assertEqual(("seagull://tasks/task_1",), tuple(ref.url for ref in request_message.refs))
+
+        accepted = self.service.accept_task(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            note="Accepted after owner policy check.",
+        )
+        self.assertEqual(TaskState.ACCEPTED, accepted.state)
+        self.assertEqual(self.recipient.agent_id, accepted.accepted_by_agent_id)
+
+        tool_request = self.service.create_tool_request(
+            task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            worker_handle="@reviewer:gulls.ai",
+            tool_name="repo_read",
+            purpose="Read only the requested files.",
+            input_ref="payload://task_1/tool_input",
+            requires_approval=True,
+            approval_id="approval_1",
+            policy_decision_id="policy_1",
+        )
+        self.assertEqual("tool_request_1", tool_request.tool_request_id)
+        self.assertEqual(TaskState.NEEDS_APPROVAL, tool_request.status)
+        self.assertEqual("policy_1", tool_request.policy_decision_id)
+        self.assertEqual(("tool_request_1",), self.service.get_task(task.task_id).tool_request_ids)
+
+        completed_tool = self.service.complete_tool_request(
+            tool_request.tool_request_id,
+            actor_handle="@reviewer:gulls.ai",
+            state="result_ready",
+            result_ref="payload://task_1/tool_result",
+            artifact_refs=("artifact://tool_summary",),
+            tool_use_summary_ref="payload://task_1/tool_summary",
+        )
+        self.assertEqual(TaskState.RESULT_READY, completed_tool.status)
+        self.assertEqual(self.recipient.agent_id, completed_tool.accepted_by_agent_id)
+        self.assertEqual("payload://task_1/tool_result", completed_tool.result_ref)
+
+        result = self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="completed",
+            content="Reviewed. See referenced artifact.",
+            content_ref="payload://task_1/result",
+            artifact_refs=("artifact://review",),
+            tool_use_summary_refs=("payload://task_1/tool_summary",),
+        )
+
+        self.assertEqual("task_result_1", result.result_id)
+        self.assertEqual(TaskState.COMPLETED, result.state)
+        updated_task = self.service.get_task(task.task_id)
+        self.assertEqual(TaskState.COMPLETED, updated_task.state)
+        self.assertEqual("artifact://review", updated_task.artifact_refs[0])
+        result_message = self.repository.get_message(result.result_message_id)
+        self.assertIsNotNone(result_message)
+        assert result_message is not None
+        self.assertIsNone(result_message.content_inline)
+        self.assertEqual("payload://task_1/result", result_message.content_ref)
+        self.assertEqual("task_result", result_message.intent)
+        self.assertEqual(
+            ("seagull://tasks/task_1/results/task_result_1",),
+            tuple(ref.url for ref in result_message.refs),
+        )
 
     def test_reply_updates_existing_thread(self) -> None:
         first = self.service.send_message(

@@ -265,6 +265,11 @@ class RecordingHttpClient(SeagullHttpClient):
 
     def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object]:
         self.requests.append((method, path, body))
+        if path == "/tasks":
+            return {"task_id": "task_1", "thread_id": "thread_task", "task": body or {}}
+        if path.endswith("/results"):
+            task_id = path.split("/")[2]
+            return {"task_id": task_id, "thread_id": body.get("thread_id", "thread_task") if body else "thread_task"}
         return {"message_id": "message_1", "thread_id": body.get("thread_id", "thread_1") if body else "thread_1"}
 
 
@@ -534,7 +539,7 @@ class McpConnectorTest(TestCase):
         self.assertEqual(-32003, response["error"]["code"])
         self.assertEqual([], self.client.uploaded_artifacts)
 
-    def test_http_client_maps_tasks_to_message_hub_intents(self) -> None:
+    def test_http_client_uses_task_record_endpoints(self) -> None:
         client = RecordingHttpClient()
 
         created = client.create_task(
@@ -556,18 +561,17 @@ class McpConnectorTest(TestCase):
         create_body = client.requests[0][2]
         result_body = client.requests[1][2]
         self.assertEqual("POST", client.requests[0][0])
-        self.assertEqual("/messages", client.requests[0][1])
+        self.assertEqual("/tasks", client.requests[0][1])
         self.assertIsInstance(create_body, dict)
-        self.assertEqual("task_request", create_body["intent"])
-        self.assertEqual(["@bob:gulls.ai"], create_body["recipient_handles"])
-        create_payload = json.loads(str(create_body["content"]))
-        self.assertEqual("seagull.task_request.v1", create_payload["schema_version"])
-        self.assertEqual(["thread://thread_1"], create_payload["context_refs"])
+        self.assertEqual("@alice:gulls.ai", create_body["requester_handle"])
+        self.assertEqual("@bob:gulls.ai", create_body["recipient_handle"])
+        self.assertEqual(["thread://thread_1"], create_body["context_refs"])
+        self.assertEqual("POST", client.requests[1][0])
+        self.assertEqual("/tasks/task_1/results", client.requests[1][1])
         self.assertIsInstance(result_body, dict)
-        self.assertEqual("task_result", result_body["intent"])
-        result_payload = json.loads(str(result_body["content"]))
-        self.assertEqual(returned["task_id"], result_payload["task_id"])
-        self.assertEqual(["artifact://review_1"], result_payload["artifact_refs"])
+        self.assertEqual(returned["task_id"], "task_1")
+        self.assertEqual("@bob:gulls.ai", result_body["responder_handle"])
+        self.assertEqual(["artifact://review_1"], result_body["artifact_refs"])
 
     def test_http_client_reads_context_pack_with_budget_query(self) -> None:
         client = RecordingHttpClient()

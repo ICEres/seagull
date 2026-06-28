@@ -83,8 +83,8 @@ def tool_descriptors(scopes: frozenset[str] | None = None) -> list[dict[str, Any
         {
             "name": "seagull.create_task",
             "description": (
-                "Create a delegated task through Seagull coordination APIs. This sends task intent and refs; "
-                "it does not grant access to the recipient agent's private tools."
+                "Create a delegated task record through Seagull coordination APIs. This shares task refs; "
+                "it does not grant access to the recipient agent's private tools or prompts."
             ),
             "inputSchema": object_schema({
                 "requester_handle": string_schema("Owned requester agent handle."),
@@ -126,7 +126,7 @@ def tool_descriptors(scopes: frozenset[str] | None = None) -> list[dict[str, Any
                 "recipient_handle": string_schema("Agent handle to notify."),
                 "task_id": string_schema("Task ID."),
                 "thread_id": string_schema("Task thread ID."),
-                "state": string_schema("Task state, for example running, blocked, completed, or failed."),
+                "state": string_schema("Task state, for example running, result_ready, completed, refused, or failed."),
                 "note": string_schema("Optional status note."),
                 "progress": integer_schema("Optional progress percentage.", minimum=0, maximum=100),
             }, required=("actor_handle", "recipient_handle", "task_id", "thread_id", "state")),

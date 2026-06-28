@@ -23,6 +23,9 @@ from message_hub.domain import (
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
+    TaskRecord,
+    TaskResultRecord,
+    TaskToolRequest,
     ThreadContext,
     ThreadRecord,
     WorkflowTraceEntry,
@@ -161,6 +164,168 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return context_pack_to_dict(context_pack)
+
+    def create_task(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            reject_private_task_fields(body)
+            task = self._service.create_task(
+                requester_handle=required_string(body, "requester_handle"),
+                recipient_handle=required_string(body, "recipient_handle"),
+                objective=required_string(body, "objective"),
+                thread_id=optional_string(body, "thread_id"),
+                context_refs=string_list(body.get("context_refs", ()), "context_refs"),
+                context_pack_id=optional_string(body, "context_pack_id"),
+                context_pack_ref=optional_string(body, "context_pack_ref"),
+                input_ref=optional_string(body, "input_ref"),
+                allowed_tool_names=string_list(body.get("allowed_tool_names", ()), "allowed_tool_names"),
+                allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
+                idempotency_key=optional_string(body, "idempotency_key"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        except SafetyBlockedError as exc:
+            raise ApiError(403, "blocked", str(exc)) from exc
+
+        return {"created": True, "task": task_to_dict(task), "task_id": task.task_id, "thread_id": task.thread_id}
+
+    def read_task(self, task_id: str) -> dict[str, Any]:
+        try:
+            task = self._service.get_task(task_id)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"task": task_to_dict(task)}
+
+    def read_thread_tasks(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
+        try:
+            tasks = self._service.list_thread_tasks(thread_id, limit=limit)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"thread_id": thread_id, "tasks": [task_to_dict(task) for task in tasks]}
+
+    def accept_task(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            task = self._service.accept_task(
+                task_id,
+                worker_handle=required_string(body, "worker_handle"),
+                note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"task": task_to_dict(task), "task_id": task.task_id, "thread_id": task.thread_id, "state": task.state.value}
+
+    def update_task(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            task = self._service.update_task_state(
+                task_id,
+                actor_handle=required_string(body, "actor_handle"),
+                state=required_string(body, "state"),
+                note=optional_string(body, "note"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"task": task_to_dict(task), "task_id": task.task_id, "thread_id": task.thread_id, "state": task.state.value}
+
+    def return_task_result(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._service.return_task_result(
+                task_id,
+                responder_handle=required_string(body, "responder_handle"),
+                state=optional_string(body, "state") or "completed",
+                content=optional_string(body, "content") or optional_string(body, "content_inline"),
+                content_ref=optional_string(body, "content_ref"),
+                artifact_refs=string_list(body.get("artifact_refs", ()), "artifact_refs"),
+                tool_use_summary_refs=string_list(
+                    body.get("tool_use_summary_refs", ()),
+                    "tool_use_summary_refs",
+                ),
+                error=optional_string(body, "error"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        except SafetyBlockedError as exc:
+            raise ApiError(403, "blocked", str(exc)) from exc
+
+        return {
+            "task_id": result.task_id,
+            "thread_id": result.thread_id,
+            "state": result.state.value,
+            "result": task_result_to_dict(result),
+        }
+
+    def create_tool_request(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            reject_private_task_fields(body)
+            tool_request = self._service.create_tool_request(
+                task_id,
+                requester_handle=required_string(body, "requester_handle"),
+                worker_handle=required_string(body, "worker_handle"),
+                tool_name=required_string(body, "tool_name"),
+                purpose=required_string(body, "purpose"),
+                input_ref=optional_string(body, "input_ref"),
+                requires_approval=optional_bool(body, "requires_approval", default=True),
+                approval_id=optional_string(body, "approval_id"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        except SafetyBlockedError as exc:
+            raise ApiError(403, "blocked", str(exc)) from exc
+
+        return {
+            "tool_request": tool_request_to_dict(tool_request),
+            "tool_request_id": tool_request.tool_request_id,
+            "task_id": tool_request.task_id,
+        }
+
+    def complete_tool_request(self, tool_request_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            tool_request = self._service.complete_tool_request(
+                tool_request_id,
+                actor_handle=required_string(body, "actor_handle"),
+                state=required_string(body, "state"),
+                result_ref=optional_string(body, "result_ref"),
+                artifact_refs=string_list(body.get("artifact_refs", ()), "artifact_refs"),
+                tool_use_summary_ref=optional_string(body, "tool_use_summary_ref"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "tool_request": tool_request_to_dict(tool_request),
+            "tool_request_id": tool_request.tool_request_id,
+            "task_id": tool_request.task_id,
+            "state": tool_request.status.value,
+        }
 
     def ack_message(self, message_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -427,6 +592,97 @@ def context_payload_ref_to_dict(ref: ContextPayloadRef) -> dict[str, str]:
         "source_type": ref.source_type,
         "source_id": ref.source_id,
     }
+
+
+def task_to_dict(task: TaskRecord) -> dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "thread_id": task.thread_id,
+        "requester_agent_id": task.requester_agent_id,
+        "recipient_agent_id": task.recipient_agent_id,
+        "objective": task.objective,
+        "request_message_id": task.request_message_id,
+        "context_refs": list(task.context_refs),
+        "context_pack_id": task.context_pack_id,
+        "context_pack_ref": task.context_pack_ref,
+        "input_ref": task.input_ref,
+        "allowed_tool_names": list(task.allowed_tool_names),
+        "allowed_use_terms": list(task.allowed_use_terms),
+        "state": task.state.value,
+        "policy_decision_id": task.policy_decision_id,
+        "accepted_by_agent_id": task.accepted_by_agent_id,
+        "result_message_id": task.result_message_id,
+        "result_ref": task.result_ref,
+        "artifact_refs": list(task.artifact_refs),
+        "tool_request_ids": list(task.tool_request_ids),
+        "created_at": datetime_to_string(task.created_at),
+        "updated_at": datetime_to_string(task.updated_at),
+    }
+
+
+def tool_request_to_dict(tool_request: TaskToolRequest) -> dict[str, Any]:
+    return {
+        "tool_request_id": tool_request.tool_request_id,
+        "task_id": tool_request.task_id,
+        "thread_id": tool_request.thread_id,
+        "requester_agent_id": tool_request.requester_agent_id,
+        "worker_agent_id": tool_request.worker_agent_id,
+        "tool_name": tool_request.tool_name,
+        "purpose": tool_request.purpose,
+        "input_ref": tool_request.input_ref,
+        "requires_approval": tool_request.requires_approval,
+        "status": tool_request.status.value,
+        "approval_id": tool_request.approval_id,
+        "policy_decision_id": tool_request.policy_decision_id,
+        "accepted_by_agent_id": tool_request.accepted_by_agent_id,
+        "result_ref": tool_request.result_ref,
+        "artifact_refs": list(tool_request.artifact_refs),
+        "tool_use_summary_ref": tool_request.tool_use_summary_ref,
+        "created_at": datetime_to_string(tool_request.created_at),
+        "updated_at": datetime_to_string(tool_request.updated_at),
+    }
+
+
+def task_result_to_dict(result: TaskResultRecord) -> dict[str, Any]:
+    return {
+        "result_id": result.result_id,
+        "task_id": result.task_id,
+        "thread_id": result.thread_id,
+        "responder_agent_id": result.responder_agent_id,
+        "state": result.state.value,
+        "result_message_id": result.result_message_id,
+        "content_inline": result.content_inline,
+        "content_ref": result.content_ref,
+        "artifact_refs": list(result.artifact_refs),
+        "tool_use_summary_refs": list(result.tool_use_summary_refs),
+        "error": result.error,
+        "created_at": datetime_to_string(result.created_at),
+    }
+
+
+PRIVATE_TASK_FIELDS = {
+    "credential",
+    "credentials",
+    "mcp_server_url",
+    "mcp_session",
+    "private_prompt",
+    "prompt",
+    "raw_tool_handle",
+    "secret",
+    "secrets",
+    "tool_credentials",
+    "tool_runtime_config",
+}
+
+
+def reject_private_task_fields(body: dict[str, Any]) -> None:
+    private_fields = sorted(set(body) & PRIVATE_TASK_FIELDS)
+    if private_fields:
+        raise ApiError(
+            400,
+            "bad_request",
+            f"private task field(s) are not accepted: {', '.join(private_fields)}",
+        )
 
 
 def required_string(body: dict[str, Any], field_name: str) -> str:

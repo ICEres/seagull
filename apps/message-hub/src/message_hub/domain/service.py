@@ -22,6 +22,10 @@ from message_hub.domain.models import (
     RoutingRule,
     RoutingRuleMode,
     SendMessageResult,
+    TaskRecord,
+    TaskResultRecord,
+    TaskState,
+    TaskToolRequest,
     ThreadContext,
     ThreadRecord,
     ThreadSummary,
@@ -460,6 +464,329 @@ class MessageHubService:
             created_at=self._clock(),
         )
 
+    def create_task(
+        self,
+        *,
+        requester_handle: str,
+        recipient_handle: str,
+        objective: str,
+        thread_id: str | None = None,
+        context_refs: Sequence[str] = (),
+        context_pack_id: str | None = None,
+        context_pack_ref: str | None = None,
+        input_ref: str | None = None,
+        allowed_tool_names: Sequence[str] = (),
+        allowed_use_terms: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> TaskRecord:
+        requester = self._require_agent_by_handle(requester_handle)
+        recipient = self._require_agent_by_handle(recipient_handle)
+        normalized_objective = normalize_required(objective, "objective")
+        normalized_context_refs = tuple(normalize_required(ref, "context_ref") for ref in context_refs)
+        normalized_allowed_tool_names = tuple(
+            normalize_required(tool_name, "allowed_tool_name")
+            for tool_name in allowed_tool_names
+        )
+        normalized_allowed_use_terms = tuple(
+            normalize_required(term, "allowed_use_term")
+            for term in allowed_use_terms
+        )
+
+        if idempotency_key:
+            normalized_idempotency_key = normalize_required(idempotency_key, "idempotency_key")
+            existing_task_id = self._repository.get_idempotent_task_id(
+                requester.agent_id,
+                normalized_idempotency_key,
+            )
+            if existing_task_id is not None:
+                existing_task = self._repository.get_task(existing_task_id)
+                if existing_task is not None:
+                    return existing_task
+        else:
+            normalized_idempotency_key = None
+
+        safety_decision = self._safety_evaluator.evaluate_send(
+            SafetyCheckRequest(
+                sender=requester,
+                recipients=(recipient,),
+                content=None,
+                content_ref=None,
+                intent="task_request",
+                visibility="direct",
+                thread_id=thread_id,
+            )
+        )
+        require_deliverable(safety_decision)
+
+        task_id = self._new_id("task")
+        notification = self.send_message(
+            sender_handle=requester.handle,
+            recipient_handles=(recipient.handle,),
+            refs=(task_ref(task_id, "task request"),),
+            intent="task_request",
+            visibility="direct",
+            thread_id=thread_id,
+        )
+
+        now = self._clock()
+        task = TaskRecord(
+            task_id=task_id,
+            thread_id=notification.thread.thread_id,
+            requester_agent_id=requester.agent_id,
+            recipient_agent_id=recipient.agent_id,
+            objective=normalized_objective,
+            request_message_id=notification.message.message_id,
+            context_refs=normalized_context_refs,
+            context_pack_id=normalized_optional_string(context_pack_id),
+            context_pack_ref=normalized_optional_string(context_pack_ref),
+            input_ref=normalized_optional_string(input_ref),
+            allowed_tool_names=normalized_allowed_tool_names,
+            allowed_use_terms=normalized_allowed_use_terms,
+            state=TaskState.REQUESTED,
+            policy_decision_id=safety_decision.decision_id,
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_task(task)
+        if normalized_idempotency_key is not None:
+            self._repository.put_task_idempotency_key(
+                requester.agent_id,
+                normalized_idempotency_key,
+                task.task_id,
+            )
+        return task
+
+    def get_task(self, task_id: str) -> TaskRecord:
+        return self._require_task(task_id)
+
+    def list_thread_tasks(self, thread_id: str, *, limit: int = 50) -> tuple[TaskRecord, ...]:
+        if self._repository.get_thread(thread_id) is None:
+            raise NotFoundError(f"thread not found: {thread_id}")
+        normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
+        return self._repository.list_tasks_by_thread(thread_id, limit=normalized_limit)
+
+    def accept_task(
+        self,
+        task_id: str,
+        *,
+        worker_handle: str,
+        note: str | None = None,
+    ) -> TaskRecord:
+        task = self._require_task(task_id)
+        worker = self._require_agent_by_handle(worker_handle)
+        if worker.agent_id != task.recipient_agent_id:
+            raise ForbiddenDeliveryError("only the recipient agent can accept this task")
+
+        now = self._clock()
+        updated = replace(
+            task,
+            state=TaskState.ACCEPTED,
+            accepted_by_agent_id=worker.agent_id,
+            updated_at=now,
+        )
+        self._repository.update_task(updated)
+        self._send_task_notification(
+            task=updated,
+            sender=worker,
+            recipient_agent_id=task.requester_agent_id,
+            intent="status_update",
+            label="task accepted",
+            note=note,
+        )
+        return updated
+
+    def update_task_state(
+        self,
+        task_id: str,
+        *,
+        actor_handle: str,
+        state: str,
+        note: str | None = None,
+    ) -> TaskRecord:
+        task = self._require_task(task_id)
+        actor = self._require_task_actor(task, actor_handle)
+        task_state = normalize_task_state(state)
+        now = self._clock()
+        updated = replace(task, state=task_state, updated_at=now)
+        self._repository.update_task(updated)
+        recipient_agent_id = (
+            task.requester_agent_id
+            if actor.agent_id != task.requester_agent_id
+            else task.recipient_agent_id
+        )
+        self._send_task_notification(
+            task=updated,
+            sender=actor,
+            recipient_agent_id=recipient_agent_id,
+            intent="status_update",
+            label=f"task {task_state.value}",
+            note=note,
+        )
+        return updated
+
+    def return_task_result(
+        self,
+        task_id: str,
+        *,
+        responder_handle: str,
+        state: str = TaskState.COMPLETED.value,
+        content: str | None = None,
+        content_ref: str | None = None,
+        artifact_refs: Sequence[str] = (),
+        tool_use_summary_refs: Sequence[str] = (),
+        error: str | None = None,
+    ) -> TaskResultRecord:
+        task = self._require_task(task_id)
+        responder = self._require_task_actor(task, responder_handle)
+        if responder.agent_id == task.requester_agent_id:
+            raise ForbiddenDeliveryError("requester cannot return its own task result")
+
+        task_state = normalize_task_state(state)
+        normalized_artifact_refs = tuple(normalize_required(ref, "artifact_ref") for ref in artifact_refs)
+        normalized_tool_use_summary_refs = tuple(
+            normalize_required(ref, "tool_use_summary_ref")
+            for ref in tool_use_summary_refs
+        )
+        if (
+            content is None
+            and content_ref is None
+            and not normalized_artifact_refs
+            and error is None
+        ):
+            raise InvalidMessageError("task result requires content, content_ref, artifact_refs, or error")
+
+        result_id = self._new_id("task_result")
+        result_ref = f"seagull://tasks/{task.task_id}/results/{result_id}"
+        notification = self.send_message(
+            sender_handle=responder.handle,
+            recipient_handles=(self._require_agent(task.requester_agent_id).handle,),
+            content_ref=content_ref,
+            refs=(MessageRef(type="task_result", url=result_ref, remember_as="task result"),),
+            intent="task_result",
+            visibility="direct",
+            thread_id=task.thread_id,
+        )
+
+        now = self._clock()
+        result = TaskResultRecord(
+            result_id=result_id,
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            responder_agent_id=responder.agent_id,
+            state=task_state,
+            result_message_id=notification.message.message_id,
+            content_inline=normalized_optional_string(content),
+            content_ref=normalized_optional_string(content_ref),
+            artifact_refs=normalized_artifact_refs,
+            tool_use_summary_refs=normalized_tool_use_summary_refs,
+            error=normalized_optional_string(error),
+            created_at=now,
+        )
+        self._repository.put_task_result(result)
+        updated_task = replace(
+            task,
+            state=task_state,
+            result_message_id=notification.message.message_id,
+            result_ref=result_ref,
+            artifact_refs=tuple(dict.fromkeys((*task.artifact_refs, *normalized_artifact_refs))),
+            updated_at=now,
+        )
+        self._repository.update_task(updated_task)
+        return result
+
+    def create_tool_request(
+        self,
+        task_id: str,
+        *,
+        requester_handle: str,
+        worker_handle: str,
+        tool_name: str,
+        purpose: str,
+        input_ref: str | None = None,
+        requires_approval: bool = True,
+        approval_id: str | None = None,
+        policy_decision_id: str | None = None,
+    ) -> TaskToolRequest:
+        task = self._require_task(task_id)
+        requester = self._require_agent_by_handle(requester_handle)
+        worker = self._require_agent_by_handle(worker_handle)
+        if requester.agent_id != task.requester_agent_id:
+            raise ForbiddenDeliveryError("only the task requester can request delegated tool use")
+        if worker.agent_id != task.recipient_agent_id:
+            raise ForbiddenDeliveryError("tool request worker must be the task recipient")
+
+        now = self._clock()
+        tool_request = TaskToolRequest(
+            tool_request_id=self._new_id("tool_request"),
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            requester_agent_id=requester.agent_id,
+            worker_agent_id=worker.agent_id,
+            tool_name=normalize_required(tool_name, "tool_name"),
+            purpose=normalize_required(purpose, "purpose"),
+            input_ref=normalized_optional_string(input_ref),
+            requires_approval=requires_approval,
+            status=TaskState.NEEDS_APPROVAL if requires_approval else TaskState.REQUESTED,
+            approval_id=normalized_optional_string(approval_id),
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_tool_request(tool_request)
+        self._repository.update_task(
+            replace(
+                task,
+                tool_request_ids=(*task.tool_request_ids, tool_request.tool_request_id),
+                updated_at=now,
+            )
+        )
+        self._send_task_notification(
+            task=task,
+            sender=requester,
+            recipient_agent_id=worker.agent_id,
+            intent="tool_request",
+            label="tool request",
+            ref=MessageRef(
+                type="tool_request",
+                url=f"seagull://tasks/{task.task_id}/tool-requests/{tool_request.tool_request_id}",
+                remember_as="tool request",
+            ),
+        )
+        return tool_request
+
+    def complete_tool_request(
+        self,
+        tool_request_id: str,
+        *,
+        actor_handle: str,
+        state: str,
+        result_ref: str | None = None,
+        artifact_refs: Sequence[str] = (),
+        tool_use_summary_ref: str | None = None,
+    ) -> TaskToolRequest:
+        tool_request = self._require_tool_request(tool_request_id)
+        actor = self._require_agent_by_handle(actor_handle)
+        if actor.agent_id != tool_request.worker_agent_id:
+            raise ForbiddenDeliveryError("only the worker agent can complete this tool request")
+        tool_state = normalize_task_state(state)
+        normalized_artifact_refs = tuple(normalize_required(ref, "artifact_ref") for ref in artifact_refs)
+        now = self._clock()
+        updated = replace(
+            tool_request,
+            status=tool_state,
+            accepted_by_agent_id=(
+                actor.agent_id
+                if tool_state in {TaskState.ACCEPTED, TaskState.RUNNING, TaskState.RESULT_READY, TaskState.COMPLETED}
+                else tool_request.accepted_by_agent_id
+            ),
+            result_ref=normalized_optional_string(result_ref),
+            artifact_refs=normalized_artifact_refs,
+            tool_use_summary_ref=normalized_optional_string(tool_use_summary_ref),
+            updated_at=now,
+        )
+        self._repository.update_tool_request(updated)
+        return updated
+
     def ack_message(
         self,
         message_id: str,
@@ -742,6 +1069,12 @@ class MessageHubService:
             raise NotFoundError(f"agent not found: {normalized_handle}")
         return agent
 
+    def _require_agent(self, agent_id: str) -> Agent:
+        agent = self._repository.get_agent(agent_id)
+        if agent is None:
+            raise NotFoundError(f"agent not found: {agent_id}")
+        return agent
+
     def _require_delivery(self, delivery_id: str) -> Delivery:
         delivery = self._repository.get_delivery(delivery_id)
         if delivery is None:
@@ -754,6 +1087,54 @@ class MessageHubService:
         if delivery.recipient_agent_id != recipient.agent_id:
             raise ForbiddenDeliveryError("agent cannot decide another recipient's delivery")
         return delivery
+
+    def _require_task(self, task_id: str) -> TaskRecord:
+        task = self._repository.get_task(task_id)
+        if task is None:
+            raise NotFoundError(f"task not found: {task_id}")
+        return task
+
+    def _require_tool_request(self, tool_request_id: str) -> TaskToolRequest:
+        tool_request = self._repository.get_tool_request(tool_request_id)
+        if tool_request is None:
+            raise NotFoundError(f"tool request not found: {tool_request_id}")
+        return tool_request
+
+    def _require_task_actor(self, task: TaskRecord, actor_handle: str) -> Agent:
+        actor = self._require_agent_by_handle(actor_handle)
+        allowed_agent_ids = {
+            task.requester_agent_id,
+            task.recipient_agent_id,
+        }
+        if task.accepted_by_agent_id is not None:
+            allowed_agent_ids.add(task.accepted_by_agent_id)
+        if actor.agent_id not in allowed_agent_ids:
+            raise ForbiddenDeliveryError("agent cannot update this task")
+        return actor
+
+    def _send_task_notification(
+        self,
+        *,
+        task: TaskRecord,
+        sender: Agent,
+        recipient_agent_id: str,
+        intent: str,
+        label: str,
+        note: str | None = None,
+        ref: MessageRef | None = None,
+    ) -> SendMessageResult:
+        recipient = self._require_agent(recipient_agent_id)
+        refs = (ref or task_ref(task.task_id, label),)
+        if note:
+            refs = (*refs, MessageRef(type="note", find=note))
+        return self.send_message(
+            sender_handle=sender.handle,
+            recipient_handles=(recipient.handle,),
+            refs=refs,
+            intent=intent,
+            visibility="direct",
+            thread_id=task.thread_id,
+        )
 
     def _inbox_item_for_delivery(self, delivery: Delivery) -> InboxItem:
         message = self._repository.get_message(delivery.message_id)
@@ -883,6 +1264,19 @@ def normalize_agent_decision(decision: str) -> str:
     if normalized not in {"reply", "action", "ignore", "ask_human"}:
         raise InvalidMessageError("agent decision must be reply, action, ignore, or ask_human")
     return normalized
+
+
+def normalize_task_state(state: str) -> TaskState:
+    normalized = state.strip().lower()
+    try:
+        return TaskState(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(task_state.value for task_state in TaskState)
+        raise InvalidMessageError(f"task state must be one of: {allowed}") from exc
+
+
+def task_ref(task_id: str, label: str) -> MessageRef:
+    return MessageRef(type="task", url=f"seagull://tasks/{task_id}", remember_as=label)
 
 
 def require_bounded_int(value: int, field_name: str, *, minimum: int, maximum: int) -> int:

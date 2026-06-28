@@ -134,6 +134,94 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual(["https://example.com/public"], [ref["url"] for ref in context_pack["selected_refs"]])
         self.assertEqual(["message://message_1/content_inline", "message://message_1/ref"], context_pack["redacted_refs"])
 
+    def test_local_api_manages_delegated_task_records(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+
+        task_response = self.api.create_task(
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "recipient_handle": "@reviewer:seagull.local",
+                "objective": "Review the referenced plan.",
+                "context_refs": ["thread://thread_1"],
+                "input_ref": "payload://task_1/input",
+                "allowed_tool_names": ["repo_read"],
+                "allowed_use_terms": ["no_memory"],
+            }
+        )
+
+        self.assertEqual("task_1", task_response["task_id"])
+        self.assertEqual("requested", task_response["task"]["state"])
+        self.assertEqual("message_1", task_response["task"]["request_message_id"])
+        inbox = self.api.read_inbox("@reviewer:seagull.local")
+        self.assertIsNone(inbox["items"][0]["message"]["content_inline"])
+        self.assertEqual("task_request", inbox["items"][0]["message"]["intent"])
+        self.assertEqual("seagull://tasks/task_1", inbox["items"][0]["message"]["refs"][0]["url"])
+
+        accepted = self.api.accept_task(
+            "task_1",
+            {
+                "worker_handle": "@reviewer:seagull.local",
+                "note": "Accepted.",
+            },
+        )
+        self.assertEqual("accepted", accepted["state"])
+
+        tool_request = self.api.create_tool_request(
+            "task_1",
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "worker_handle": "@reviewer:seagull.local",
+                "tool_name": "repo_read",
+                "purpose": "Read requested files only.",
+                "requires_approval": True,
+                "approval_id": "approval_1",
+                "policy_decision_id": "policy_1",
+            },
+        )
+        self.assertEqual("tool_request_1", tool_request["tool_request_id"])
+        self.assertEqual("needs_approval", tool_request["tool_request"]["status"])
+
+        completed_tool = self.api.complete_tool_request(
+            "tool_request_1",
+            {
+                "actor_handle": "@reviewer:seagull.local",
+                "state": "completed",
+                "result_ref": "payload://task_1/tool_result",
+            },
+        )
+        self.assertEqual("completed", completed_tool["state"])
+
+        result = self.api.return_task_result(
+            "task_1",
+            {
+                "responder_handle": "@reviewer:seagull.local",
+                "content": "Done.",
+                "content_ref": "payload://task_1/result",
+                "artifact_refs": ["artifact://review"],
+            },
+        )
+        self.assertEqual("completed", result["state"])
+        self.assertEqual("task_result_1", result["result"]["result_id"])
+        self.assertEqual("payload://task_1/result", result["result"]["content_ref"])
+
+    def test_local_api_rejects_private_task_fields(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+
+        with self.assertRaises(ApiError) as error:
+            self.api.create_task(
+                {
+                    "requester_handle": "@researcher:seagull.local",
+                    "recipient_handle": "@reviewer:seagull.local",
+                    "objective": "Use private runtime config.",
+                    "private_prompt": "secret system prompt",
+                }
+            )
+
+        self.assertEqual(400, error.exception.status_code)
+        self.assertIn("private_prompt", error.exception.message)
+
     def test_local_safety_blocks_before_delivery(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})
         self.api.register_agent({"handle": "@reviewer:seagull.local"})

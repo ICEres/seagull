@@ -258,3 +258,144 @@ resource "aws_dynamodb_table" "thread_summaries" {
 
   tags = local.common_tags
 }
+
+resource "aws_dynamodb_table" "tasks" {
+  name                        = "${var.name_prefix}-tasks"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "task_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "task_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "thread_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "requester_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "recipient_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "thread-created-at-index"
+    hash_key        = "thread_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "requester-created-at-index"
+    hash_key        = "requester_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "recipient-created-at-index"
+    hash_key        = "recipient_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "tool_requests" {
+  name                        = "${var.name_prefix}-tool-requests"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "tool_request_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "tool_request_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "task_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "task-created-at-index"
+    hash_key        = "task_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "task_results" {
+  name                        = "${var.name_prefix}-task-results"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "result_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "result_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "task_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "task-created-at-index"
+    hash_key        = "task_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}

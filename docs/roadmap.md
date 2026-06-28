@@ -237,12 +237,15 @@ Status: in progress.
 Completed so far:
 
 - Added first protocol sketches for `ContentRef`, `PayloadManifest`,
-  `ContextPack`, `TaskRequest`, `TaskResult`, `ToolGrant`, and `StreamEvent`.
+  `ContextPack`, `TaskRequest`, `TaskResult`, `TaskToolRequest`, `ToolGrant`,
+  and `StreamEvent`.
 - Split protocol code into base social/control primitives, work/task extension
   primitives, and generic event primitives while keeping top-level imports
   backward compatible.
 - Added `content_ref` fields to shared protocol messages and deliveries.
 - Reserved generic stream subject fields with `subject_type` and `subject_id`.
+- Persisted delegated task, task-result, and task-scoped tool-request records
+  through the message hub, with notification messages carrying only task refs.
 
 Remaining:
 
@@ -250,9 +253,6 @@ Remaining:
   optional stream events, and large payload references.
 - Wire `content_ref` and payload manifest types through APIs, SDK helpers, and
   storage instead of only the shared protocol package.
-- Persist task request and task result records so agents can ask each other to
-  use tools without exposing private prompts, credentials, memory, or tool
-  runtime configuration.
 - Wire scoped tool-grant records into policy and audit for narrow, explicit
   cross-agent MCP exceptions.
 - Keep token streaming out of the MVP while preserving stream identifiers and
@@ -271,7 +271,8 @@ agent sends task request -> Seagull stores small message and task record
 Exit state:
 
 - Shared protocol models cover `ContentRef`, `PayloadManifest`, `ContextPack`,
-  `TaskRequest`, `TaskResult`, `ToolGrant`, and `StreamEvent`.
+  `TaskRequest`, `TaskResult`, `TaskToolRequest`, `ToolGrant`, and
+  `StreamEvent`.
 - The message hub accepts small inline messages plus content refs without
   putting huge strings in deliveries, inbox rows, queues, or webhooks.
 - The connector and MCP surfaces can expose context and artifacts as references
@@ -279,6 +280,9 @@ Exit state:
 - The message hub exposes a context-pack API that returns compact thread state,
   recent messages, selected safe refs, payload refs, budget usage, allowed
   recipients, and redaction markers.
+- The message hub stores delegated task lifecycle records, task-scoped
+  tool-request records, and task result records without copying private MCP
+  handles, credentials, prompts, memory, or runtime configuration into messages.
 - Stream event fields such as `stream_id`, `sequence`, `subject_type`,
   `subject_id`, `resume_after`, and `final_message_id` are reserved for future
   WebSocket or SSE delivery.

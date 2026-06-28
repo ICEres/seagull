@@ -207,8 +207,7 @@ class SeagullHttpClient:
         allowed_use_terms: tuple[str, ...] = (),
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        payload = without_none({
-            "schema_version": "seagull.task_request.v1",
+        body = without_none({
             "requester_handle": requester_handle,
             "recipient_handle": recipient_handle,
             "objective": objective,
@@ -218,16 +217,9 @@ class SeagullHttpClient:
             "input_ref": input_ref,
             "allowed_tool_names": list(allowed_tool_names),
             "allowed_use_terms": list(allowed_use_terms),
+            "idempotency_key": idempotency_key,
         })
-        result = self.send_message(
-            sender_handle=requester_handle,
-            recipient_handles=(recipient_handle,),
-            content=compact_json(payload),
-            intent="task_request",
-            idempotency_key=idempotency_key,
-        )
-        task_id = task_id_from_result(result)
-        return {**result, "task_id": task_id, "task_request": payload}
+        return self._request("POST", "/tasks", body)
 
     def accept_task(
         self,
@@ -238,13 +230,16 @@ class SeagullHttpClient:
         requester_handle: str,
         note: str | None = None,
     ) -> dict[str, Any]:
-        return self._task_status_message(
-            task_id=task_id,
-            thread_id=thread_id,
-            actor_handle=worker_handle,
-            recipient_handle=requester_handle,
-            state="accepted",
-            note=note,
+        encoded_task = parse.quote(task_id, safe="")
+        return self._request(
+            "POST",
+            f"/tasks/{encoded_task}/accept",
+            without_none({
+                "thread_id": thread_id,
+                "worker_handle": worker_handle,
+                "requester_handle": requester_handle,
+                "note": note,
+            }),
         )
 
     def update_task(
@@ -258,14 +253,18 @@ class SeagullHttpClient:
         note: str | None = None,
         progress: int | None = None,
     ) -> dict[str, Any]:
-        return self._task_status_message(
-            task_id=task_id,
-            thread_id=thread_id,
-            actor_handle=actor_handle,
-            recipient_handle=recipient_handle,
-            state=state,
-            note=note,
-            progress=progress,
+        encoded_task = parse.quote(task_id, safe="")
+        return self._request(
+            "POST",
+            f"/tasks/{encoded_task}/status",
+            without_none({
+                "thread_id": thread_id,
+                "actor_handle": actor_handle,
+                "recipient_handle": recipient_handle,
+                "state": state,
+                "note": note,
+                "progress": progress,
+            }),
         )
 
     def return_task_result(
@@ -282,10 +281,11 @@ class SeagullHttpClient:
         tool_use_summary_refs: tuple[str, ...] = (),
         error: str | None = None,
     ) -> dict[str, Any]:
-        payload = without_none({
-            "schema_version": "seagull.task_result.v1",
-            "task_id": task_id,
+        encoded_task = parse.quote(task_id, safe="")
+        body = without_none({
+            "thread_id": thread_id,
             "responder_handle": responder_handle,
+            "requester_handle": requester_handle,
             "state": state,
             "content": content,
             "content_ref": content_ref,
@@ -293,15 +293,7 @@ class SeagullHttpClient:
             "tool_use_summary_refs": list(tool_use_summary_refs),
             "error": error,
         })
-        result = self.send_message(
-            sender_handle=responder_handle,
-            recipient_handles=(requester_handle,),
-            content=compact_json(payload),
-            content_ref=content_ref,
-            thread_id=thread_id,
-            intent="task_result",
-        )
-        return {**result, "task_id": task_id, "task_result": payload}
+        return self._request("POST", f"/tasks/{encoded_task}/results", body)
 
     def upload_artifact(
         self,
@@ -332,34 +324,6 @@ class SeagullHttpClient:
             intent="artifact_share",
         )
         return {**result, "artifact_ref": content_ref, "artifact": payload}
-
-    def _task_status_message(
-        self,
-        *,
-        task_id: str,
-        thread_id: str,
-        actor_handle: str,
-        recipient_handle: str,
-        state: str,
-        note: str | None = None,
-        progress: int | None = None,
-    ) -> dict[str, Any]:
-        payload = without_none({
-            "schema_version": "seagull.task_status.v1",
-            "task_id": task_id,
-            "actor_handle": actor_handle,
-            "state": state,
-            "note": note,
-            "progress": progress,
-        })
-        result = self.send_message(
-            sender_handle=actor_handle,
-            recipient_handles=(recipient_handle,),
-            content=compact_json(payload),
-            thread_id=thread_id,
-            intent="status_update",
-        )
-        return {**result, "task_id": task_id, "task_status": payload}
 
     def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         data = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -396,15 +360,3 @@ def without_none(payload: dict[str, Any]) -> dict[str, Any]:
 
 def urlencode_without_none(query: dict[str, Any]) -> str:
     return parse.urlencode({key: value for key, value in query.items() if value is not None})
-
-
-def task_id_from_result(result: dict[str, Any]) -> str:
-    task_id = result.get("task_id") or result.get("message_id")
-    if isinstance(task_id, str) and task_id.strip():
-        return task_id
-    message = result.get("message")
-    if isinstance(message, dict):
-        nested_task_id = message.get("task_id") or message.get("message_id")
-        if isinstance(nested_task_id, str) and nested_task_id.strip():
-            return nested_task_id
-    return ""

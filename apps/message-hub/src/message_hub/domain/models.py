@@ -30,6 +30,17 @@ class RoutingRuleMode(str, Enum):
     BLOCK = "block"
 
 
+class TaskState(str, Enum):
+    REQUESTED = "requested"
+    ACCEPTED = "accepted"
+    RUNNING = "running"
+    NEEDS_APPROVAL = "needs_approval"
+    RESULT_READY = "result_ready"
+    COMPLETED = "completed"
+    REFUSED = "refused"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRef:
     type: str
@@ -167,6 +178,69 @@ class AgentDecisionResult:
     delivery: Delivery
     reply: SendMessageResult | None = None
     action_request: ActionRequest | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRecord:
+    task_id: str
+    thread_id: str
+    requester_agent_id: str
+    recipient_agent_id: str
+    objective: str
+    request_message_id: str
+    context_refs: tuple[str, ...] = ()
+    context_pack_id: str | None = None
+    context_pack_ref: str | None = None
+    input_ref: str | None = None
+    allowed_tool_names: tuple[str, ...] = ()
+    allowed_use_terms: tuple[str, ...] = ()
+    state: TaskState = TaskState.REQUESTED
+    policy_decision_id: str | None = None
+    accepted_by_agent_id: str | None = None
+    result_message_id: str | None = None
+    result_ref: str | None = None
+    artifact_refs: tuple[str, ...] = ()
+    tool_request_ids: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskToolRequest:
+    tool_request_id: str
+    task_id: str
+    thread_id: str
+    requester_agent_id: str
+    worker_agent_id: str
+    tool_name: str
+    purpose: str
+    input_ref: str | None = None
+    requires_approval: bool = True
+    status: TaskState = TaskState.NEEDS_APPROVAL
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    accepted_by_agent_id: str | None = None
+    result_ref: str | None = None
+    artifact_refs: tuple[str, ...] = ()
+    tool_use_summary_ref: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskResultRecord:
+    result_id: str
+    task_id: str
+    thread_id: str
+    responder_agent_id: str
+    state: TaskState
+    result_message_id: str
+    content_inline: str | None = None
+    content_ref: str | None = None
+    artifact_refs: tuple[str, ...] = ()
+    tool_use_summary_refs: tuple[str, ...] = ()
+    error: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)

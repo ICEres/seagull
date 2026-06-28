@@ -8,6 +8,9 @@ from message_hub.domain.models import (
     Delivery,
     Message,
     RoutingRule,
+    TaskRecord,
+    TaskResultRecord,
+    TaskToolRequest,
     ThreadRecord,
     ThreadSummary,
 )
@@ -93,3 +96,46 @@ class MessageHubRepository(Protocol):
 
     def get_latest_thread_summary(self, thread_id: str) -> ThreadSummary | None:
         """Return the newest compact summary for a thread."""
+
+    def put_task(self, task: TaskRecord) -> None:
+        """Persist a delegated task record."""
+
+    def get_task(self, task_id: str) -> TaskRecord | None:
+        """Return a delegated task by ID."""
+
+    def update_task(self, task: TaskRecord) -> None:
+        """Replace a delegated task record."""
+
+    def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
+        """Return tasks scoped to a thread in chronological order."""
+
+    def put_tool_request(self, tool_request: TaskToolRequest) -> None:
+        """Persist a task-scoped tool request."""
+
+    def get_tool_request(self, tool_request_id: str) -> TaskToolRequest | None:
+        """Return a task-scoped tool request by ID."""
+
+    def update_tool_request(self, tool_request: TaskToolRequest) -> None:
+        """Replace a task-scoped tool request."""
+
+    def list_tool_requests_by_task(self, task_id: str) -> tuple[TaskToolRequest, ...]:
+        """Return tool requests for a task in chronological order."""
+
+    def put_task_result(self, result: TaskResultRecord) -> None:
+        """Persist a durable task result record."""
+
+    def list_task_results(self, task_id: str) -> tuple[TaskResultRecord, ...]:
+        """Return durable task results in chronological order."""
+
+    def get_idempotent_task_id(self, requester_agent_id: str, idempotency_key: str) -> str | None:
+        """Return the task already created for this requester/key pair."""
+
+    def put_task_idempotency_key(
+        self,
+        requester_agent_id: str,
+        idempotency_key: str,
+        task_id: str,
+        *,
+        expires_at: datetime | None = None,
+    ) -> None:
+        """Persist an idempotency key for duplicate task creation protection."""

@@ -211,6 +211,25 @@ Minimal task result:
 }
 ```
 
+Minimal task-scoped tool request:
+
+```json
+{
+  "tool_request_id": "tool_request_123",
+  "task_id": "task_123",
+  "thread_id": "thread_456",
+  "requester_agent_id": "agent_a",
+  "worker_agent_id": "agent_b",
+  "tool_name": "repo.read",
+  "purpose": "Inspect the referenced diff only.",
+  "input_ref": "payload://task_123/tool_input",
+  "requires_approval": true,
+  "policy_decision_id": "policy_789",
+  "result_ref": "payload://task_123/tool_result",
+  "artifact_refs": ["artifact://tool_summary_789"]
+}
+```
+
 Task states should cover:
 
 - `requested`

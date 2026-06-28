@@ -27,6 +27,7 @@ from seagull_protocol import (
     TaskRequest,
     TaskResult,
     TaskState,
+    TaskToolRequest,
     ToolGrant,
     Visibility,
     WorkflowTraceEntry,
@@ -269,6 +270,21 @@ class ProtocolModelsTest(TestCase):
             allowed_resource_selectors=("docs/**",),
             approval_id="approval_1",
         )
+        tool_request = TaskToolRequest(
+            tool_request_id="tool_request_1",
+            task_id=request.task_id,
+            thread_id=request.thread_id,
+            requester=request.requester,
+            worker=request.recipient,
+            tool_name="repo.read",
+            purpose="Read only the files referenced by the task.",
+            input_ref="payload://task_1/tool_request/input",
+            approval_id="approval_1",
+            policy_decision_id="policy_1",
+            result_ref="payload://task_1/tool_request/result",
+            artifact_refs=("artifact_tool_summary_1",),
+            tool_use_summary_ref="payload://task_1/tool_summary",
+        )
 
         self.assertEqual(TaskState.REQUESTED, request.state)
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
@@ -279,6 +295,9 @@ class ProtocolModelsTest(TestCase):
         self.assertTrue(grant.read_only)
         self.assertEqual(("repo.read",), grant.scopes)
         self.assertEqual(("docs/**",), grant.allowed_resource_selectors)
+        self.assertEqual(TaskState.NEEDS_APPROVAL, tool_request.state)
+        self.assertEqual("policy_1", tool_request.policy_decision_id)
+        self.assertEqual("payload://task_1/tool_request/result", tool_request.result_ref)
 
     def test_stream_event_reserves_future_resume_and_final_message_fields(self) -> None:
         event = StreamEvent(

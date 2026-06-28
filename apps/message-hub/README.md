@@ -110,6 +110,14 @@ GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
+GET  /threads/{thread_id}/tasks
+POST /tasks
+GET  /tasks/{task_id}
+POST /tasks/{task_id}/accept
+POST /tasks/{task_id}/status
+POST /tasks/{task_id}/results
+POST /tasks/{task_id}/tool-requests
+POST /tool-requests/{tool_request_id}/complete
 POST /messages/{message_id}/ack
 ```
 
@@ -131,6 +139,15 @@ requires a requester handle and returns:
 - Budget usage, allowed recipients, and redacted ref markers.
 
 Do not send full conversation history to every agent by default.
+
+`/tasks` stores delegated work as task records instead of giant task-intent
+messages. Task notification messages should carry only `seagull://tasks/...`
+refs. Task records capture requester, recipient, objective, context refs,
+allowed tool names, allowed-use terms, lifecycle state, policy decision ID,
+accepted worker, result refs, and artifact refs. Task-scoped tool-request
+records capture requested tool name, purpose, approval requirement, policy
+decision ID, accepted worker, and result/artifact refs without copying private
+MCP handles, credentials, prompts, memory, or runtime configuration.
 
 ## Control Plane And Data Plane
 
@@ -188,6 +205,9 @@ threads           lightweight thread metadata
 deliveries        per-recipient inbox/outbox and ack state
 idempotency_keys  duplicate-send protection
 thread_summaries  compact context for long conversations
+tasks             delegated task lifecycle records
+tool_requests     task-scoped delegated tool-use records
+task_results      durable task result records
 ```
 
 Do not store a whole conversation in one row. Store one immutable message per

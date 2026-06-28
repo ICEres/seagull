@@ -120,10 +120,11 @@ seagull.ack_message
 seagull.open_inbox_ui
 ```
 
-The task and artifact tools coordinate through Seagull records and message-hub
-intents. They should never expose private MCP server URLs, credentials, local
-tool handles, browser sessions, shells, or raw filesystem paths from another
-agent.
+The task tools coordinate through Seagull task records, task-result records, and
+task-scoped tool-request records. Notification messages should carry only
+`seagull://tasks/...` refs. They should never expose private MCP server URLs,
+credentials, prompts, local tool handles, browser sessions, shells, or raw
+filesystem paths from another agent.
 
 `seagull.get_context` should call the Seagull context-pack API so hosted and BYO
 connectors return the same budgeted context shape: capped inline content,

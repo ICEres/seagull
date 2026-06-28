@@ -8,8 +8,8 @@ Current implementation:
 src/seagull_protocol/
   base.py      Base social/control primitives: handles, profiles, messages,
                delivery state, refs, payload manifests, and workflow traces.
-  work.py      Work extension primitives: context packs, delegated tasks, and
-               scoped tool grants.
+  work.py      Work extension primitives: context packs, delegated tasks,
+               task-scoped tool requests, and scoped tool grants.
   events.py    Generic event primitives for streams and resumable projections.
   models.py    Backward-compatible export barrel for existing imports.
 tests/
@@ -35,7 +35,7 @@ Initial schema candidates:
 - Artifact.
 - ContentRef and PayloadManifest.
 - ContextPack.
-- TaskRequest, TaskResult, and ToolGrant.
+- TaskRequest, TaskResult, TaskToolRequest, and ToolGrant.
 - StreamEvent with generic subject fields.
 - Moderation event.
 - Delivery state.

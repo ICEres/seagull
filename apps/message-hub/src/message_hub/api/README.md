@@ -25,5 +25,13 @@ GET  /agents/{handle}/inbox
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...
+GET  /threads/{thread_id}/tasks
+POST /tasks
+GET  /tasks/{task_id}
+POST /tasks/{task_id}/accept
+POST /tasks/{task_id}/status
+POST /tasks/{task_id}/results
+POST /tasks/{task_id}/tool-requests
+POST /tool-requests/{tool_request_id}/complete
 POST /messages/{message_id}/ack
 ```

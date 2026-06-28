@@ -9,6 +9,9 @@ from message_hub.domain.models import (
     Delivery,
     Message,
     RoutingRule,
+    TaskRecord,
+    TaskResultRecord,
+    TaskToolRequest,
     ThreadRecord,
     ThreadSummary,
     utc_now,
@@ -34,6 +37,12 @@ class InMemoryMessageHubRepository:
         self._routing_rule_ids: list[str] = []
         self._idempotency: dict[tuple[str, str], tuple[str, datetime | None]] = {}
         self._summaries_by_thread: dict[str, list[ThreadSummary]] = defaultdict(list)
+        self._tasks_by_id: dict[str, TaskRecord] = {}
+        self._task_ids_by_thread: dict[str, list[str]] = defaultdict(list)
+        self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
+        self._tool_request_ids_by_task: dict[str, list[str]] = defaultdict(list)
+        self._task_results_by_task: dict[str, list[TaskResultRecord]] = defaultdict(list)
+        self._task_idempotency: dict[tuple[str, str], tuple[str, datetime | None]] = {}
 
     def add_agent(self, agent: Agent) -> None:
         with self._lock:
@@ -192,6 +201,100 @@ class InMemoryMessageHubRepository:
 
         summaries.sort(key=lambda summary: (summary.created_at, summary.summary_id))
         return summaries[-1]
+
+    def put_task(self, task: TaskRecord) -> None:
+        with self._lock:
+            if task.task_id in self._tasks_by_id:
+                raise ValueError(f"task already exists: {task.task_id}")
+            self._tasks_by_id[task.task_id] = task
+            self._task_ids_by_thread[task.thread_id].append(task.task_id)
+
+    def get_task(self, task_id: str) -> TaskRecord | None:
+        with self._lock:
+            return self._tasks_by_id.get(task_id)
+
+    def update_task(self, task: TaskRecord) -> None:
+        with self._lock:
+            if task.task_id not in self._tasks_by_id:
+                raise ValueError(f"task does not exist: {task.task_id}")
+            self._tasks_by_id[task.task_id] = task
+
+    def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
+        with self._lock:
+            tasks = [
+                self._tasks_by_id[task_id]
+                for task_id in self._task_ids_by_thread.get(thread_id, [])
+                if task_id in self._tasks_by_id
+            ]
+
+        tasks.sort(key=lambda task: (task.created_at, task.task_id))
+        if limit is not None:
+            tasks = tasks[-limit:]
+        return tuple(tasks)
+
+    def put_tool_request(self, tool_request: TaskToolRequest) -> None:
+        with self._lock:
+            if tool_request.tool_request_id in self._tool_requests_by_id:
+                raise ValueError(f"tool request already exists: {tool_request.tool_request_id}")
+            self._tool_requests_by_id[tool_request.tool_request_id] = tool_request
+            self._tool_request_ids_by_task[tool_request.task_id].append(tool_request.tool_request_id)
+
+    def get_tool_request(self, tool_request_id: str) -> TaskToolRequest | None:
+        with self._lock:
+            return self._tool_requests_by_id.get(tool_request_id)
+
+    def update_tool_request(self, tool_request: TaskToolRequest) -> None:
+        with self._lock:
+            if tool_request.tool_request_id not in self._tool_requests_by_id:
+                raise ValueError(f"tool request does not exist: {tool_request.tool_request_id}")
+            self._tool_requests_by_id[tool_request.tool_request_id] = tool_request
+
+    def list_tool_requests_by_task(self, task_id: str) -> tuple[TaskToolRequest, ...]:
+        with self._lock:
+            tool_requests = [
+                self._tool_requests_by_id[tool_request_id]
+                for tool_request_id in self._tool_request_ids_by_task.get(task_id, [])
+                if tool_request_id in self._tool_requests_by_id
+            ]
+
+        tool_requests.sort(key=lambda tool_request: (tool_request.created_at, tool_request.tool_request_id))
+        return tuple(tool_requests)
+
+    def put_task_result(self, result: TaskResultRecord) -> None:
+        with self._lock:
+            self._task_results_by_task[result.task_id].append(result)
+
+    def list_task_results(self, task_id: str) -> tuple[TaskResultRecord, ...]:
+        with self._lock:
+            results = list(self._task_results_by_task.get(task_id, []))
+
+        results.sort(key=lambda result: (result.created_at, result.result_id))
+        return tuple(results)
+
+    def get_idempotent_task_id(self, requester_agent_id: str, idempotency_key: str) -> str | None:
+        key = (requester_agent_id, idempotency_key)
+        with self._lock:
+            value = self._task_idempotency.get(key)
+            if value is None:
+                return None
+
+            task_id, expires_at = value
+            if expires_at is not None and expires_at <= utc_now():
+                del self._task_idempotency[key]
+                return None
+
+            return task_id
+
+    def put_task_idempotency_key(
+        self,
+        requester_agent_id: str,
+        idempotency_key: str,
+        task_id: str,
+        *,
+        expires_at: datetime | None = None,
+    ) -> None:
+        with self._lock:
+            self._task_idempotency[(requester_agent_id, idempotency_key)] = (task_id, expires_at)
 
     def _list_deliveries(self, delivery_ids: list[str], limit: int | None) -> tuple[Delivery, ...]:
         with self._lock:

@@ -10,6 +10,8 @@ Current resources:
 - DynamoDB `deliveries` table with recipient, sender, and message indexes.
 - DynamoDB `idempotency_keys` table with TTL.
 - DynamoDB `thread_summaries` table for compact context.
+- DynamoDB `tasks`, `tool_requests`, and `task_results` tables for delegated
+  work records.
 
 This module intentionally starts with storage only. API Gateway, Lambda,
 WebSocket routes, SQS, and EventBridge can be added after the message hub app
@@ -44,4 +46,18 @@ idempotency_keys
 thread_summaries
   PK thread_id
   SK created_at
+
+tasks
+  PK task_id
+  GSI thread-created-at-index(thread_id, created_at)
+  GSI requester-created-at-index(requester_agent_id, created_at)
+  GSI recipient-created-at-index(recipient_agent_id, created_at)
+
+tool_requests
+  PK tool_request_id
+  GSI task-created-at-index(task_id, created_at)
+
+task_results
+  PK result_id
+  GSI task-created-at-index(task_id, created_at)
 ```

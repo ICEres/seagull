@@ -39,6 +39,9 @@ DELIVERIES_TABLE = os.environ["DELIVERIES_TABLE"]
 IDEMPOTENCY_TABLE = os.environ["IDEMPOTENCY_TABLE"]
 ROUTING_RULES_TABLE = os.environ.get("ROUTING_RULES_TABLE")
 THREAD_SUMMARIES_TABLE = os.environ["THREAD_SUMMARIES_TABLE"]
+TASKS_TABLE = os.environ.get("TASKS_TABLE")
+TOOL_REQUESTS_TABLE = os.environ.get("TOOL_REQUESTS_TABLE")
+TASK_RESULTS_TABLE = os.environ.get("TASK_RESULTS_TABLE")
 AGENT_JOBS_QUEUE_URL = os.environ.get("AGENT_JOBS_QUEUE_URL")
 
 dynamodb = boto3.resource("dynamodb")
@@ -50,6 +53,9 @@ deliveries_table = dynamodb.Table(DELIVERIES_TABLE)
 idempotency_table = dynamodb.Table(IDEMPOTENCY_TABLE)
 routing_rules_table = dynamodb.Table(ROUTING_RULES_TABLE) if ROUTING_RULES_TABLE else None
 thread_summaries_table = dynamodb.Table(THREAD_SUMMARIES_TABLE)
+tasks_table = dynamodb.Table(TASKS_TABLE) if TASKS_TABLE else None
+tool_requests_table = dynamodb.Table(TOOL_REQUESTS_TABLE) if TOOL_REQUESTS_TABLE else None
+task_results_table = dynamodb.Table(TASK_RESULTS_TABLE) if TASK_RESULTS_TABLE else None
 
 
 class BadRequest(ValueError):
@@ -108,6 +114,33 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "POST" and path == "/messages":
             return create_message(event)
 
+        if method == "POST" and path == "/tasks":
+            return create_task(event)
+
+        if method == "POST" and path.startswith("/tasks/") and path.endswith("/accept"):
+            task_id = path_param(path, "/tasks/", "/accept")
+            return accept_task(task_id, event)
+
+        if method == "POST" and path.startswith("/tasks/") and path.endswith("/status"):
+            task_id = path_param(path, "/tasks/", "/status")
+            return update_task_status(task_id, event)
+
+        if method == "POST" and path.startswith("/tasks/") and path.endswith("/results"):
+            task_id = path_param(path, "/tasks/", "/results")
+            return return_task_result(task_id, event)
+
+        if method == "POST" and path.startswith("/tasks/") and path.endswith("/tool-requests"):
+            task_id = path_param(path, "/tasks/", "/tool-requests")
+            return create_task_tool_request(task_id, event)
+
+        if method == "POST" and path.startswith("/tool-requests/") and path.endswith("/complete"):
+            tool_request_id = path_param(path, "/tool-requests/", "/complete")
+            return complete_task_tool_request(tool_request_id, event)
+
+        if method == "GET" and path.startswith("/tasks/"):
+            task_id = unquote(path.removeprefix("/tasks/").strip("/"))
+            return read_task(task_id)
+
         if method == "POST" and path.endswith("/hook-results"):
             delivery_id = delivery_path_param(path, "/hook-results")
             return submit_hook_result(delivery_id, event)
@@ -123,6 +156,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET" and path.startswith("/threads/") and path.endswith("/context-pack"):
             thread_id = path_param(path, "/threads/", "/context-pack")
             return read_context_pack(thread_id, event)
+
+        if method == "GET" and path.startswith("/threads/") and path.endswith("/tasks"):
+            thread_id = path_param(path, "/threads/", "/tasks")
+            return read_thread_tasks(thread_id, event)
 
         if method == "GET" and path.startswith("/threads/"):
             thread_id = unquote(path.removeprefix("/threads/").strip("/"))
@@ -373,6 +410,265 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
             "thread_id": thread_id,
         },
     )
+
+
+def create_task(event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    reject_private_task_fields(body)
+    requester = require_agent_by_handle(required(body, "requester_handle"))
+    recipient = require_agent_by_handle(required(body, "recipient_handle"))
+    objective = required(body, "objective")
+    idempotency_key = optional_string(body, "idempotency_key")
+    if idempotency_key:
+        existing_task_id = get_idempotent_task_id(requester["agent_id"], idempotency_key)
+        if existing_task_id is not None:
+            existing_task = tasks_table.get_item(Key={"task_id": existing_task_id}).get("Item")
+            if existing_task is not None:
+                return response(200, {"created": False, "task": clean_item(existing_task), "task_id": existing_task_id, "thread_id": existing_task["thread_id"]})
+
+    task_id = f"task_{uuid.uuid4().hex}"
+    message_response = create_message(
+        {
+            "body": json.dumps(
+                without_none(
+                    {
+                        "sender_handle": requester["handle"],
+                        "recipient_handles": [recipient["handle"]],
+                        "thread_id": optional_string(body, "thread_id"),
+                        "intent": "task_request",
+                        "visibility": "direct",
+                        "refs": [task_ref(task_id, "task request")],
+                    }
+                )
+            )
+        }
+    )
+    message_body = json.loads(message_response["body"])
+    now = now_iso()
+    task = {
+        "task_id": task_id,
+        "thread_id": message_body["thread_id"],
+        "requester_agent_id": requester["agent_id"],
+        "recipient_agent_id": recipient["agent_id"],
+        "objective": objective,
+        "request_message_id": message_body["message_id"],
+        "context_refs": string_list(body.get("context_refs", []), "context_refs"),
+        "context_pack_id": optional_string(body, "context_pack_id"),
+        "context_pack_ref": optional_string(body, "context_pack_ref"),
+        "input_ref": optional_string(body, "input_ref"),
+        "allowed_tool_names": string_list(body.get("allowed_tool_names", []), "allowed_tool_names"),
+        "allowed_use_terms": string_list(body.get("allowed_use_terms", []), "allowed_use_terms"),
+        "state": "requested",
+        "policy_decision_id": "local_safety_allow",
+        "artifact_refs": [],
+        "tool_request_ids": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+    tasks_table.put_item(Item=without_none(task), ConditionExpression="attribute_not_exists(task_id)")
+    if idempotency_key:
+        idempotency_table.put_item(
+            Item={
+                "sender_agent_id": requester["agent_id"],
+                "idempotency_key": f"task:{idempotency_key}",
+                "task_id": task_id,
+                "created_at": now,
+                "expires_at": int(time.time()) + 604800,
+            }
+        )
+    return response(201, {"created": True, "task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"]})
+
+
+def read_task(task_id: str) -> dict[str, Any]:
+    task = require_task(task_id)
+    return response(200, {"task": clean_item(task)})
+
+
+def read_thread_tasks(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    if get_thread_record(thread_id) is None:
+        raise NotFound(f"thread not found: {thread_id}")
+    result = tasks_table.query(
+        IndexName="thread-created-at-index",
+        KeyConditionExpression=Key("thread_id").eq(thread_id),
+        ScanIndexForward=True,
+        Limit=query_limit(event, default=50, maximum=100),
+    )
+    return response(200, {"thread_id": thread_id, "tasks": clean_item(result.get("Items", []))})
+
+
+def accept_task(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    task = require_task(task_id)
+    worker = require_agent_by_handle(required(body, "worker_handle"))
+    if worker["agent_id"] != task["recipient_agent_id"]:
+        raise Forbidden("only the recipient agent can accept this task")
+    now = now_iso()
+    task["state"] = "accepted"
+    task["accepted_by_agent_id"] = worker["agent_id"]
+    task["updated_at"] = now
+    tasks_table.put_item(Item=without_none(task))
+    send_task_notification(
+        task,
+        sender=worker,
+        recipient_agent_id=task["requester_agent_id"],
+        intent="status_update",
+        label="task accepted",
+        note=optional_string(body, "note"),
+    )
+    return response(200, {"task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"], "state": task["state"]})
+
+
+def update_task_status(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    task = require_task(task_id)
+    actor = require_agent_by_handle(required(body, "actor_handle"))
+    require_task_actor(task, actor)
+    state = normalize_task_state(required(body, "state"))
+    now = now_iso()
+    task["state"] = state
+    task["updated_at"] = now
+    tasks_table.put_item(Item=without_none(task))
+    recipient_agent_id = task["requester_agent_id"] if actor["agent_id"] != task["requester_agent_id"] else task["recipient_agent_id"]
+    send_task_notification(
+        task,
+        sender=actor,
+        recipient_agent_id=recipient_agent_id,
+        intent="status_update",
+        label=f"task {state}",
+        note=optional_string(body, "note"),
+    )
+    return response(200, {"task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"], "state": state})
+
+
+def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    task = require_task(task_id)
+    responder = require_agent_by_handle(required(body, "responder_handle"))
+    require_task_actor(task, responder)
+    if responder["agent_id"] == task["requester_agent_id"]:
+        raise Forbidden("requester cannot return its own task result")
+    state = normalize_task_state(optional_string(body, "state") or "completed")
+    content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
+    content_ref = optional_string(body, "content_ref")
+    artifact_refs = string_list(body.get("artifact_refs", []), "artifact_refs")
+    tool_use_summary_refs = string_list(body.get("tool_use_summary_refs", []), "tool_use_summary_refs")
+    error = optional_string(body, "error")
+    if content_inline is None and content_ref is None and not artifact_refs and error is None:
+        raise BadRequest("task result requires content, content_ref, artifact_refs, or error")
+
+    result_id = f"task_result_{uuid.uuid4().hex}"
+    result_ref = f"seagull://tasks/{task_id}/results/{result_id}"
+    requester = require_agent(task["requester_agent_id"])
+    message_response = create_message(
+        {
+            "body": json.dumps(
+                without_none(
+                    {
+                        "sender_handle": responder["handle"],
+                        "recipient_handles": [requester["handle"]],
+                        "thread_id": task["thread_id"],
+                        "intent": "task_result",
+                        "visibility": "direct",
+                        "content_ref": content_ref,
+                        "refs": [{"type": "task_result", "url": result_ref, "remember_as": "task result"}],
+                    }
+                )
+            )
+        }
+    )
+    message_body = json.loads(message_response["body"])
+    now = now_iso()
+    result = {
+        "result_id": result_id,
+        "task_id": task_id,
+        "thread_id": task["thread_id"],
+        "responder_agent_id": responder["agent_id"],
+        "state": state,
+        "result_message_id": message_body["message_id"],
+        "content_inline": content_inline,
+        "content_ref": content_ref,
+        "artifact_refs": artifact_refs,
+        "tool_use_summary_refs": tool_use_summary_refs,
+        "error": error,
+        "created_at": now,
+    }
+    task_results_table.put_item(Item=without_none(result), ConditionExpression="attribute_not_exists(result_id)")
+    task["state"] = state
+    task["result_message_id"] = message_body["message_id"]
+    task["result_ref"] = result_ref
+    task["artifact_refs"] = list(dict.fromkeys([*task.get("artifact_refs", []), *artifact_refs]))
+    task["updated_at"] = now
+    tasks_table.put_item(Item=without_none(task))
+    return response(200, {"task_id": task_id, "thread_id": task["thread_id"], "state": state, "result": clean_item(result)})
+
+
+def create_task_tool_request(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    reject_private_task_fields(body)
+    task = require_task(task_id)
+    requester = require_agent_by_handle(required(body, "requester_handle"))
+    worker = require_agent_by_handle(required(body, "worker_handle"))
+    if requester["agent_id"] != task["requester_agent_id"]:
+        raise Forbidden("only the task requester can request delegated tool use")
+    if worker["agent_id"] != task["recipient_agent_id"]:
+        raise Forbidden("tool request worker must be the task recipient")
+    now = now_iso()
+    tool_request_id = f"tool_request_{uuid.uuid4().hex}"
+    tool_request = {
+        "tool_request_id": tool_request_id,
+        "task_id": task_id,
+        "thread_id": task["thread_id"],
+        "requester_agent_id": requester["agent_id"],
+        "worker_agent_id": worker["agent_id"],
+        "tool_name": required(body, "tool_name"),
+        "purpose": required(body, "purpose"),
+        "input_ref": optional_string(body, "input_ref"),
+        "requires_approval": optional_bool(body, "requires_approval", default=True),
+        "approval_id": optional_string(body, "approval_id"),
+        "policy_decision_id": optional_string(body, "policy_decision_id"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    tool_request["status"] = "needs_approval" if tool_request["requires_approval"] else "requested"
+    tool_requests_table.put_item(Item=without_none(tool_request), ConditionExpression="attribute_not_exists(tool_request_id)")
+    task["tool_request_ids"] = [*task.get("tool_request_ids", []), tool_request_id]
+    task["updated_at"] = now
+    tasks_table.put_item(Item=without_none(task))
+    send_task_notification(
+        task,
+        sender=requester,
+        recipient_agent_id=worker["agent_id"],
+        intent="tool_request",
+        label="tool request",
+        ref={"type": "tool_request", "url": f"seagull://tasks/{task_id}/tool-requests/{tool_request_id}", "remember_as": "tool request"},
+    )
+    return response(201, {"tool_request": clean_item(tool_request), "tool_request_id": tool_request_id, "task_id": task_id})
+
+
+def complete_task_tool_request(tool_request_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    require_task_tables()
+    body = parse_body(event)
+    tool_request = require_tool_request(tool_request_id)
+    actor = require_agent_by_handle(required(body, "actor_handle"))
+    if actor["agent_id"] != tool_request["worker_agent_id"]:
+        raise Forbidden("only the worker agent can complete this tool request")
+    state = normalize_task_state(required(body, "state"))
+    now = now_iso()
+    tool_request["status"] = state
+    if state in {"accepted", "running", "result_ready", "completed"}:
+        tool_request["accepted_by_agent_id"] = actor["agent_id"]
+    tool_request["result_ref"] = optional_string(body, "result_ref")
+    tool_request["artifact_refs"] = string_list(body.get("artifact_refs", []), "artifact_refs")
+    tool_request["tool_use_summary_ref"] = optional_string(body, "tool_use_summary_ref")
+    tool_request["updated_at"] = now
+    tool_requests_table.put_item(Item=without_none(tool_request))
+    return response(200, {"tool_request": clean_item(tool_request), "tool_request_id": tool_request_id, "task_id": tool_request["task_id"], "state": state})
 
 
 def read_inbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
@@ -913,6 +1209,69 @@ def require_delivery(delivery_id: str) -> dict[str, Any]:
     return delivery
 
 
+def require_task_tables() -> None:
+    if tasks_table is None or tool_requests_table is None or task_results_table is None:
+        raise BadRequest("task tables are not configured")
+
+
+def require_task(task_id: str) -> dict[str, Any]:
+    require_task_tables()
+    task = tasks_table.get_item(Key={"task_id": task_id}).get("Item")
+    if task is None:
+        raise NotFound(f"task not found: {task_id}")
+    return task
+
+
+def require_tool_request(tool_request_id: str) -> dict[str, Any]:
+    require_task_tables()
+    tool_request = tool_requests_table.get_item(Key={"tool_request_id": tool_request_id}).get("Item")
+    if tool_request is None:
+        raise NotFound(f"tool request not found: {tool_request_id}")
+    return tool_request
+
+
+def require_task_actor(task: dict[str, Any], actor: dict[str, Any]) -> None:
+    allowed_agent_ids = {
+        task["requester_agent_id"],
+        task["recipient_agent_id"],
+    }
+    accepted_by_agent_id = task.get("accepted_by_agent_id")
+    if accepted_by_agent_id:
+        allowed_agent_ids.add(accepted_by_agent_id)
+    if actor["agent_id"] not in allowed_agent_ids:
+        raise Forbidden("agent cannot update this task")
+
+
+def send_task_notification(
+    task: dict[str, Any],
+    *,
+    sender: dict[str, Any],
+    recipient_agent_id: str,
+    intent: str,
+    label: str,
+    note: str | None = None,
+    ref: dict[str, Any] | None = None,
+) -> None:
+    recipient = require_agent(recipient_agent_id)
+    refs = [ref or task_ref(task["task_id"], label)]
+    if note:
+        refs.append({"type": "note", "find": note})
+    create_message(
+        {
+            "body": json.dumps(
+                {
+                    "sender_handle": sender["handle"],
+                    "recipient_handles": [recipient["handle"]],
+                    "thread_id": task["thread_id"],
+                    "intent": intent,
+                    "visibility": "direct",
+                    "refs": refs,
+                }
+            )
+        }
+    )
+
+
 def get_thread_record(thread_id: str) -> dict[str, Any] | None:
     return threads_table.get_item(Key={"thread_id": thread_id}).get("Item")
 
@@ -957,6 +1316,19 @@ def get_idempotent_message_id(sender_agent_id: str, idempotency_key: str) -> str
     if expires_at is not None and int(expires_at) <= int(time.time()):
         return None
     return item.get("message_id")
+
+
+def get_idempotent_task_id(requester_agent_id: str, idempotency_key: str) -> str | None:
+    result = idempotency_table.get_item(
+        Key={"sender_agent_id": requester_agent_id, "idempotency_key": f"task:{idempotency_key}"}
+    )
+    item = result.get("Item")
+    if item is None:
+        return None
+    expires_at = item.get("expires_at")
+    if expires_at is not None and int(expires_at) <= int(time.time()):
+        return None
+    return item.get("task_id")
 
 
 def latest_thread_summary(thread_id: str) -> dict[str, Any] | None:
@@ -1094,6 +1466,49 @@ def message_recipient_handles(body: dict[str, Any]) -> list[str]:
             normalized.append(normalized_handle)
             seen.add(normalized_handle)
     return normalized
+
+
+TASK_STATES = {
+    "requested",
+    "accepted",
+    "running",
+    "needs_approval",
+    "result_ready",
+    "completed",
+    "refused",
+    "failed",
+}
+
+PRIVATE_TASK_FIELDS = {
+    "credential",
+    "credentials",
+    "mcp_server_url",
+    "mcp_session",
+    "private_prompt",
+    "prompt",
+    "raw_tool_handle",
+    "secret",
+    "secrets",
+    "tool_credentials",
+    "tool_runtime_config",
+}
+
+
+def normalize_task_state(state: str) -> str:
+    normalized = state.strip().lower()
+    if normalized not in TASK_STATES:
+        raise BadRequest(f"task state must be one of: {', '.join(sorted(TASK_STATES))}")
+    return normalized
+
+
+def task_ref(task_id: str, label: str) -> dict[str, str]:
+    return {"type": "task", "url": f"seagull://tasks/{task_id}", "remember_as": label}
+
+
+def reject_private_task_fields(body: dict[str, Any]) -> None:
+    private_fields = sorted(set(body) & PRIVATE_TASK_FIELDS)
+    if private_fields:
+        raise BadRequest(f"private task field(s) are not accepted: {', '.join(private_fields)}")
 
 
 def path_param(path: str, prefix: str, suffix: str) -> str:

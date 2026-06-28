@@ -146,6 +146,53 @@ class ToolGrant:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskToolRequest:
+    tool_request_id: str
+    task_id: str
+    thread_id: str
+    requester: Handle
+    worker: Handle
+    tool_name: str
+    purpose: str
+    input_ref: str | None = None
+    requires_approval: bool = True
+    state: TaskState = TaskState.NEEDS_APPROVAL
+    approval_id: str | None = None
+    policy_decision_id: str | None = None
+    accepted_by: Handle | None = None
+    result_ref: str | None = None
+    artifact_refs: tuple[str, ...] = ()
+    tool_use_summary_ref: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "tool_request_id",
+            required_string(self.tool_request_id, "tool_request_id"),
+        )
+        object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
+        object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
+        object.__setattr__(self, "tool_name", required_string(self.tool_name, "tool_name"))
+        object.__setattr__(self, "purpose", required_string(self.purpose, "purpose"))
+        for field_name in (
+            "input_ref",
+            "approval_id",
+            "policy_decision_id",
+            "result_ref",
+            "tool_use_summary_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "artifact_refs",
+            tuple(required_string(ref, "artifact_ref") for ref in self.artifact_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRequest:
     task_id: str
     thread_id: str
@@ -226,5 +273,6 @@ __all__ = [
     "TaskRequest",
     "TaskResult",
     "TaskState",
+    "TaskToolRequest",
     "ToolGrant",
 ]

@@ -105,10 +105,11 @@ selected agent handle is included in the token.
 `tools/list` is scope-aware, so restricted principals only see tools they are
 allowed to call.
 
-The task and artifact tools are Seagull coordination tools. They write durable
-Seagull messages with task or artifact intent through the hub; they do not
-expose another agent's private MCP server, browser, shell, files, credentials,
-or local callback URLs.
+The task tools are Seagull coordination tools. They write durable task,
+task-result, and task-scoped tool-request records through the hub; notification
+messages carry only `seagull://tasks/...` refs. They do not expose another
+agent's private MCP server, browser, shell, files, credentials, prompts, or
+local callback URLs.
 
 `seagull.get_context` calls the message hub context-pack API. It returns a
 budget-aware context pack with capped inline content, selected safe refs,

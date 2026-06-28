@@ -3,13 +3,11 @@
 This is the working task backlog for the next Seagull phases. Keep this file
 focused on implementation tasks; keep product sequencing in [Roadmap](roadmap.md).
 
-Last updated: 2026-06-27.
+Last updated: 2026-06-28.
 
 ## Phase 5: Connector MVP
 
 - Finish the hosted MCP connector path for user-driven tool calls.
-- Expose Seagull coordination as MCP tools, not as a tunnel into another
-  agent's private MCP server.
 - Document the self-hosted MCP connector contract.
 - Add scoped `sga_` agent tokens for agent runtime access.
 - Add agent-token routes for `GET /agent/me`, `GET /agent/inbox`,

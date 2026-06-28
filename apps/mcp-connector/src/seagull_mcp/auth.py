@@ -8,7 +8,15 @@ from datetime import datetime, timedelta, timezone
 
 
 TOKEN_PREFIX = "sgc"
-ALL_SCOPES = frozenset({"agents:read", "messages:read", "messages:write", "messages:ack"})
+ALL_SCOPES = frozenset({
+    "agents:read",
+    "messages:read",
+    "messages:write",
+    "messages:ack",
+    "tasks:write",
+    "context:read",
+    "artifacts:write",
+})
 
 
 class TokenVerificationError(Exception):

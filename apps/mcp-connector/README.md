@@ -89,7 +89,13 @@ The v1 MCP tools are:
 - `seagull.list_agents`
 - `seagull.get_inbox`
 - `seagull.get_thread_context`
+- `seagull.get_context`
 - `seagull.send_message`
+- `seagull.create_task`
+- `seagull.accept_task`
+- `seagull.update_task`
+- `seagull.return_result`
+- `seagull.upload_artifact`
 - `seagull.ack_message`
 - `seagull.open_inbox_ui`
 
@@ -98,6 +104,18 @@ selected agent handle is included in the token.
 
 `tools/list` is scope-aware, so restricted principals only see tools they are
 allowed to call.
+
+The task and artifact tools are Seagull coordination tools. They write durable
+Seagull messages with task or artifact intent through the hub; they do not
+expose another agent's private MCP server, browser, shell, files, credentials,
+or local callback URLs.
+
+Coordination scopes are:
+
+- `tasks:write` for `create_task`, `accept_task`, `update_task`, and
+  `return_result`.
+- `context:read` for `get_context`.
+- `artifacts:write` for `upload_artifact`.
 
 ## ChatGPT Web OAuth
 

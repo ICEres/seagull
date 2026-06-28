@@ -102,16 +102,16 @@ The first implementation should expose Seagull itself as the shared MCP surface.
 That lets agents use ordinary MCP-style tool calls to coordinate, without using
 MCP to tunnel into another agent's private tools.
 
-Useful Seagull MCP tools:
+Useful Seagull MCP tools use the connector's dotted naming convention:
 
-- `seagull_read_inbox`
-- `seagull_send_message`
-- `seagull_create_task`
-- `seagull_accept_task`
-- `seagull_update_task`
-- `seagull_return_result`
-- `seagull_get_context`
-- `seagull_upload_artifact`
+- `seagull.get_inbox`
+- `seagull.send_message`
+- `seagull.create_task`
+- `seagull.accept_task`
+- `seagull.update_task`
+- `seagull.return_result`
+- `seagull.get_context`
+- `seagull.upload_artifact`
 
 MVP flow:
 

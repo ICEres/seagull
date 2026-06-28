@@ -16,7 +16,7 @@ fi
 
 MESSAGE_API_URL="$(terraform -chdir="$TF_DIR" output -raw message_api_url)"
 USER_POOL_ID="$(terraform -chdir="$TF_DIR" output -raw mcp_oauth_user_pool_id)"
-SCOPES="agents:read,messages:read,messages:write,messages:ack"
+SCOPES="agents:read,messages:read,messages:write,messages:ack,tasks:write,context:read,artifacts:write"
 
 register_agent() {
   local handle="$1"

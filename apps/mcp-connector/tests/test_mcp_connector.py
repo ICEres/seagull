@@ -13,6 +13,7 @@ from seagull_mcp.auth import (
     parse_connector_token,
     verify_bearer_token,
 )
+from seagull_mcp.client import SeagullHttpClient
 from seagull_mcp.cognito import CognitoJwtVerifier, CognitoPrincipalResolver
 from seagull_mcp.oauth_proxy import CognitoOAuthProxy
 from seagull_mcp.server import McpConnectorApp
@@ -22,6 +23,11 @@ class FakeSeagullClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, object]] = []
         self.acked_messages: list[dict[str, object]] = []
+        self.created_tasks: list[dict[str, object]] = []
+        self.accepted_tasks: list[dict[str, object]] = []
+        self.updated_tasks: list[dict[str, object]] = []
+        self.returned_results: list[dict[str, object]] = []
+        self.uploaded_artifacts: list[dict[str, object]] = []
 
     def list_agents(self, handles: tuple[str, ...]) -> list[dict[str, object]]:
         return [{"handle": handle, "status": "active"} for handle in handles]
@@ -48,21 +54,32 @@ class FakeSeagullClient:
     def get_thread_context(self, thread_id: str) -> dict[str, object]:
         return {"thread": {"thread_id": thread_id}, "recent_messages": []}
 
+    def get_context(self, *, thread_id: str) -> dict[str, object]:
+        return {"context_subject": {"type": "thread", "id": thread_id}, "recent_messages": []}
+
     def send_message(
         self,
         *,
         sender_handle: str,
         recipient_handles: tuple[str, ...],
         content: str,
+        content_ref: str | None = None,
+        refs: tuple[dict[str, object], ...] = (),
         thread_id: str | None = None,
         intent: str = "message",
+        visibility: str = "direct",
+        idempotency_key: str | None = None,
     ) -> dict[str, object]:
         body = {
             "sender_handle": sender_handle,
             "recipient_handles": list(recipient_handles),
             "content": content,
+            "content_ref": content_ref,
+            "refs": list(refs),
             "thread_id": thread_id,
             "intent": intent,
+            "visibility": visibility,
+            "idempotency_key": idempotency_key,
         }
         self.sent_messages.append(body)
         return {"message_id": "message_sent", "thread_id": thread_id or "thread_new"}
@@ -71,6 +88,131 @@ class FakeSeagullClient:
         body = {"message_id": message_id, "recipient_handle": recipient_handle}
         self.acked_messages.append(body)
         return {"deliveries": [{"message_id": message_id, "recipient_handle": recipient_handle, "status": "acked"}]}
+
+    def create_task(
+        self,
+        *,
+        requester_handle: str,
+        recipient_handle: str,
+        objective: str,
+        context_refs: tuple[str, ...] = (),
+        context_pack_id: str | None = None,
+        context_pack_ref: str | None = None,
+        input_ref: str | None = None,
+        allowed_tool_names: tuple[str, ...] = (),
+        allowed_use_terms: tuple[str, ...] = (),
+        idempotency_key: str | None = None,
+    ) -> dict[str, object]:
+        body = {
+            "requester_handle": requester_handle,
+            "recipient_handle": recipient_handle,
+            "objective": objective,
+            "context_refs": list(context_refs),
+            "context_pack_id": context_pack_id,
+            "context_pack_ref": context_pack_ref,
+            "input_ref": input_ref,
+            "allowed_tool_names": list(allowed_tool_names),
+            "allowed_use_terms": list(allowed_use_terms),
+            "idempotency_key": idempotency_key,
+        }
+        self.created_tasks.append(body)
+        return {"task_id": "task_1", "thread_id": "thread_task", "message_id": "message_task"}
+
+    def accept_task(
+        self,
+        *,
+        task_id: str,
+        thread_id: str,
+        worker_handle: str,
+        requester_handle: str,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        body = {
+            "task_id": task_id,
+            "thread_id": thread_id,
+            "worker_handle": worker_handle,
+            "requester_handle": requester_handle,
+            "note": note,
+        }
+        self.accepted_tasks.append(body)
+        return {"task_id": task_id, "thread_id": thread_id, "state": "accepted"}
+
+    def update_task(
+        self,
+        *,
+        task_id: str,
+        thread_id: str,
+        actor_handle: str,
+        recipient_handle: str,
+        state: str,
+        note: str | None = None,
+        progress: int | None = None,
+    ) -> dict[str, object]:
+        body = {
+            "task_id": task_id,
+            "thread_id": thread_id,
+            "actor_handle": actor_handle,
+            "recipient_handle": recipient_handle,
+            "state": state,
+            "note": note,
+            "progress": progress,
+        }
+        self.updated_tasks.append(body)
+        return {"task_id": task_id, "thread_id": thread_id, "state": state}
+
+    def return_task_result(
+        self,
+        *,
+        task_id: str,
+        thread_id: str,
+        responder_handle: str,
+        requester_handle: str,
+        state: str,
+        content: str | None = None,
+        content_ref: str | None = None,
+        artifact_refs: tuple[str, ...] = (),
+        tool_use_summary_refs: tuple[str, ...] = (),
+        error: str | None = None,
+    ) -> dict[str, object]:
+        body = {
+            "task_id": task_id,
+            "thread_id": thread_id,
+            "responder_handle": responder_handle,
+            "requester_handle": requester_handle,
+            "state": state,
+            "content": content,
+            "content_ref": content_ref,
+            "artifact_refs": list(artifact_refs),
+            "tool_use_summary_refs": list(tool_use_summary_refs),
+            "error": error,
+        }
+        self.returned_results.append(body)
+        return {"task_id": task_id, "thread_id": thread_id, "state": state, "message_id": "message_result"}
+
+    def upload_artifact(
+        self,
+        *,
+        sender_handle: str,
+        recipient_handles: tuple[str, ...],
+        name: str,
+        content_ref: str,
+        media_type: str | None = None,
+        thread_id: str | None = None,
+        task_id: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, object]:
+        body = {
+            "sender_handle": sender_handle,
+            "recipient_handles": list(recipient_handles),
+            "name": name,
+            "content_ref": content_ref,
+            "media_type": media_type,
+            "thread_id": thread_id,
+            "task_id": task_id,
+            "description": description,
+        }
+        self.uploaded_artifacts.append(body)
+        return {"artifact_ref": content_ref, "thread_id": thread_id}
 
 
 class FakeVerifier:
@@ -96,6 +238,16 @@ class FakeCognitoIdp:
                 for name, value in attributes.items()
             ],
         }
+
+
+class RecordingHttpClient(SeagullHttpClient):
+    def __init__(self) -> None:
+        super().__init__(message_api_url="https://message.example.com")
+        self.requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object]:
+        self.requests.append((method, path, body))
+        return {"message_id": "message_1", "thread_id": body.get("thread_id", "thread_1") if body else "thread_1"}
 
 
 class McpConnectorTest(TestCase):
@@ -199,6 +351,8 @@ class McpConnectorTest(TestCase):
         tool_names = [tool["name"] for tool in tools_response["result"]["tools"]]
         self.assertIn("seagull.get_inbox", tool_names)
         self.assertIn("seagull.open_inbox_ui", tool_names)
+        self.assertIn("seagull.create_task", tool_names)
+        self.assertIn("seagull.return_result", tool_names)
 
     def test_get_inbox_requires_allowed_agent(self) -> None:
         response = self.mcp(
@@ -221,6 +375,152 @@ class McpConnectorTest(TestCase):
         )
 
         self.assertEqual("delivery_1", response["result"]["structuredContent"]["items"][0]["delivery"]["delivery_id"])
+
+    def test_get_context_requires_context_scope(self) -> None:
+        issued = issue_connector_token(
+            self.store,
+            name="messages only",
+            owner_user_id="user_alice",
+            scopes=["messages:read"],
+            agent_handles=["@alice:gulls.ai"],
+            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+        )
+        response = self.app.handle(
+            method="POST",
+            path="/mcp",
+            headers={"authorization": f"Bearer {issued.token}"},
+            body=json_rpc(
+                "tools/call",
+                {
+                    "name": "seagull.get_context",
+                    "arguments": {"agent_handle": "@alice:gulls.ai", "thread_id": "thread_1"},
+                },
+            ),
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertIsInstance(response.body, dict)
+        self.assertEqual(-32003, response.body["error"]["code"])
+
+    def test_create_task_requires_allowed_requester(self) -> None:
+        response = self.mcp(
+            "tools/call",
+            {
+                "name": "seagull.create_task",
+                "arguments": {
+                    "requester_handle": "@bob:gulls.ai",
+                    "recipient_handle": "@alice:gulls.ai",
+                    "objective": "review this plan",
+                },
+            },
+        )
+
+        self.assertEqual(-32003, response["error"]["code"])
+        self.assertEqual([], self.client.created_tasks)
+
+    def test_create_and_return_task_route_through_seagull_client(self) -> None:
+        bob_issued = issue_connector_token(
+            self.store,
+            name="bob connector",
+            owner_user_id="user_bob",
+            scopes=ALL_SCOPES,
+            agent_handles=["@bob:gulls.ai"],
+            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+        )
+        created = self.mcp(
+            "tools/call",
+            {
+                "name": "seagull.create_task",
+                "arguments": {
+                    "requester_handle": "@alice:gulls.ai",
+                    "recipient_handle": "@bob:gulls.ai",
+                    "objective": "review the protocol boundary",
+                    "context_refs": ["thread://thread_1"],
+                    "allowed_tool_names": ["repo_read"],
+                },
+            },
+        )
+        returned_response = self.app.handle(
+            method="POST",
+            path="/mcp",
+            headers={"authorization": f"Bearer {bob_issued.token}"},
+            body=json_rpc(
+                "tools/call",
+                {
+                    "name": "seagull.return_result",
+                    "arguments": {
+                        "responder_handle": "@bob:gulls.ai",
+                        "requester_handle": "@alice:gulls.ai",
+                        "task_id": "task_1",
+                        "thread_id": "thread_task",
+                        "content": "done",
+                        "artifact_refs": ["artifact://review_1"],
+                    },
+                },
+            ),
+        )
+
+        self.assertEqual(200, returned_response.status_code)
+        self.assertIsInstance(returned_response.body, dict)
+        self.assertEqual("task_1", created["result"]["structuredContent"]["task_id"])
+        self.assertEqual("@alice:gulls.ai", self.client.created_tasks[0]["requester_handle"])
+        self.assertEqual(["repo_read"], self.client.created_tasks[0]["allowed_tool_names"])
+        returned = returned_response.body
+        self.assertEqual("task_1", returned["result"]["structuredContent"]["task_id"])
+        self.assertEqual("@bob:gulls.ai", self.client.returned_results[0]["responder_handle"])
+        self.assertEqual(["artifact://review_1"], self.client.returned_results[0]["artifact_refs"])
+
+    def test_upload_artifact_requires_allowed_sender(self) -> None:
+        response = self.mcp(
+            "tools/call",
+            {
+                "name": "seagull.upload_artifact",
+                "arguments": {
+                    "sender_handle": "@bob:gulls.ai",
+                    "recipient_handles": ["@alice:gulls.ai"],
+                    "name": "review",
+                    "content_ref": "artifact://review_1",
+                },
+            },
+        )
+
+        self.assertEqual(-32003, response["error"]["code"])
+        self.assertEqual([], self.client.uploaded_artifacts)
+
+    def test_http_client_maps_tasks_to_message_hub_intents(self) -> None:
+        client = RecordingHttpClient()
+
+        created = client.create_task(
+            requester_handle="@alice:gulls.ai",
+            recipient_handle="@bob:gulls.ai",
+            objective="review this",
+            context_refs=("thread://thread_1",),
+        )
+        returned = client.return_task_result(
+            task_id=created["task_id"],
+            thread_id=created["thread_id"],
+            responder_handle="@bob:gulls.ai",
+            requester_handle="@alice:gulls.ai",
+            state="completed",
+            content="done",
+            artifact_refs=("artifact://review_1",),
+        )
+
+        create_body = client.requests[0][2]
+        result_body = client.requests[1][2]
+        self.assertEqual("POST", client.requests[0][0])
+        self.assertEqual("/messages", client.requests[0][1])
+        self.assertIsInstance(create_body, dict)
+        self.assertEqual("task_request", create_body["intent"])
+        self.assertEqual(["@bob:gulls.ai"], create_body["recipient_handles"])
+        create_payload = json.loads(str(create_body["content"]))
+        self.assertEqual("seagull.task_request.v1", create_payload["schema_version"])
+        self.assertEqual(["thread://thread_1"], create_payload["context_refs"])
+        self.assertIsInstance(result_body, dict)
+        self.assertEqual("task_result", result_body["intent"])
+        result_payload = json.loads(str(result_body["content"]))
+        self.assertEqual(returned["task_id"], result_payload["task_id"])
+        self.assertEqual(["artifact://review_1"], result_payload["artifact_refs"])
 
     def test_send_message_requires_allowed_sender(self) -> None:
         response = self.mcp(

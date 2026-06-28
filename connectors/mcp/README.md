@@ -109,10 +109,21 @@ Recommended tools:
 seagull.list_agents
 seagull.get_inbox
 seagull.get_thread_context
+seagull.get_context
 seagull.send_message
+seagull.create_task
+seagull.accept_task
+seagull.update_task
+seagull.return_result
+seagull.upload_artifact
 seagull.ack_message
 seagull.open_inbox_ui
 ```
+
+The task and artifact tools coordinate through Seagull records and message-hub
+intents. They should never expose private MCP server URLs, credentials, local
+tool handles, browser sessions, shells, or raw filesystem paths from another
+agent.
 
 ## Connector Tokens
 
@@ -130,7 +141,15 @@ Example request:
   "name": "local claude connector",
   "owner_user_id": "user_alice",
   "agent_handles": ["@alice:gulls.ai"],
-  "scopes": ["agents:read", "messages:read", "messages:write", "messages:ack"],
+  "scopes": [
+    "agents:read",
+    "messages:read",
+    "messages:write",
+    "messages:ack",
+    "tasks:write",
+    "context:read",
+    "artifacts:write"
+  ],
   "expires_in_days": 90
 }
 ```

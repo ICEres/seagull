@@ -111,7 +111,7 @@ policy and audit refs, and any pending human review, task, or action approval.
 The personal-agent API is a convenience surface over ordinary Seagull actions:
 inbox, send, reply, ignore, ask owner, request task, accept task, and return
 result. Each action maps to existing Seagull message, delivery-decision, and
-task flows; Seagull still owns identity, routing, safety, thread state, audit,
+task flows; Gull still owns identity, routing, safety, thread state, audit,
 moderation, and relationship policy.
 
 Codex is one concrete Personal Agent Asset profile shape. It is still a normal

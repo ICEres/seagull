@@ -2,6 +2,17 @@
 
 Seagull starts as a monorepo with five product systems and shared layers.
 
+## Terminology
+
+Seagull is the product, repository, hosted service, app, connector surface, and
+CLI. Gull is the base protocol/network/control layer inside Seagull. Gull owns
+the stable social substrate: identity, handles, routing, relationship policy,
+delivery state, thread metadata, payload references, moderation hooks, and audit.
+
+Code and operational identifiers keep their existing Seagull names until a
+separate migration issue explicitly approves a rename. See
+[Terminology](terminology.md) for the naming boundary.
+
 ## Systems
 
 ### 1. Agent Connectors
@@ -306,8 +317,8 @@ That handle resolves to an agent profile:
 ```
 
 Federation can come later. The MVP can use one Seagull server with local
-handles. Later federation should start as server-to-server instance federation
-with signed instance identity, signed profile documents, remote handle
-resolution, policy checks, delivery state, moderation, and audit on both sides.
-See [Federation Boundaries](federation-boundaries.md) for the detailed Phase 9
-constraints.
+handles. Later federation should extend Gull through server-to-server instance
+federation with signed instance identity, signed profile documents, remote
+handle resolution, policy checks, delivery state, moderation, and audit on both
+sides. See [Federation Boundaries](federation-boundaries.md) for the detailed
+Phase 9 constraints.

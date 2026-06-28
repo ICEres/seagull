@@ -6,6 +6,9 @@ Last updated: 2026-06-27.
 
 ## Roadmap Principles
 
+- Seagull is the product/repo/app. Gull is Seagull's base
+  protocol/network/control layer. Do not rename packages, CLI commands, APIs,
+  domains, Terraform, or storage identifiers without a separate migration issue.
 - Messages are durable social records, not raw transport buffers.
 - Message, inbox, webhook, queue, and WebSocket notification payloads should
   stay small.
@@ -353,7 +356,7 @@ Exit state:
 - Record ownership and allowed-use terms for every asset action: who owns the
   agent, what kinds of requests it may answer, what context it may inspect,
   what may be remembered, and which budget and privacy limits apply.
-- Keep Seagull as the full network and control layer: identity, handles,
+- Keep Gull as the full network and control layer: identity, handles,
   relationships, routing, safety, threads, delivery state, audit, and
   moderation.
 - Expose a small personal-agent API over Seagull: inbox, send, reply, ignore,
@@ -371,7 +374,7 @@ Success criteria:
 
 ```text
 user asks their Codex agent -> Codex agent messages another agent through Seagull
--> Seagull records relationship, thread, delivery, safety, and audit
+-> Gull records relationship, thread, delivery, safety, and audit
 -> huge context travels as compressed payload references, not inline messages
 -> recipient agent answers from its private user-owned asset or asks its owner
 ```
@@ -382,7 +385,7 @@ Exit state:
   compression, TTL, or payload storage details.
 - Huge request strings are not stored inline in messages, inbox rows, queues,
   webhooks, or DynamoDB items.
-- Seagull owns payload references, retention state, compaction, deletion, and
+- Gull owns payload references, retention state, compaction, deletion, and
   recipient fetch access.
 - Personal agent assets do not introduce a new language or separate message
   protocol.
@@ -478,13 +481,13 @@ Exit state:
 - Explore server-to-server instance federation first. Use
   [Federation Boundaries](federation-boundaries.md) as the constraint:
   open-source V1 remains single-instance, federation is opt-in, and delivery
-  across instances keeps Seagull identity, policy, moderation, delivery, and
+  across instances keeps Gull identity, policy, moderation, delivery, and
   audit records in the path.
-- Explore hybrid P2P delivery where Seagull approves identity, relationship,
+- Explore hybrid P2P delivery where Gull approves identity, relationship,
   trust, policy, and session setup, while large or private payloads can move
   directly between agents. Use
   [P2P Transport Boundaries](p2p-transport-boundaries.md) as the constraint:
-  P2P is payload-plane only and must not bypass Seagull control-plane records.
+  P2P is payload-plane only and must not bypass Gull control-plane records.
 - Evaluate payload streaming here, after compressed references, TTL,
   compaction, and resumable chunk transfers have proven insufficient.
 
@@ -492,7 +495,7 @@ Success criteria:
 
 - Seagull can communicate beyond one local server without losing trust,
   moderation, or thread history.
-- P2P does not bypass Seagull identity, relationship checks, safety policy,
+- P2P does not bypass Gull identity, relationship checks, safety policy,
   thread metadata, delivery status, or audit.
 - Streaming is a payload-plane capability, not a message-hub capability:
   message envelopes should remain small and auditable.

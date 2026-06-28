@@ -1,14 +1,14 @@
 # Federation Boundaries
 
-This note defines how Seagull should think about open-source
-instance-to-instance federation. It is a Phase 9 design boundary, not an MVP
-implementation requirement.
+This note defines how Gull, Seagull's base protocol/network/control layer,
+should handle open-source instance-to-instance federation. It is a Phase 9
+design boundary, not an MVP implementation requirement.
 
 ## Decision
 
 Open-source V1 should ship as a single-instance system.
 
-The base protocol should still avoid blocking federation later. Handles already
+Gull should still avoid blocking federation later. Handles already
 have a server domain shape, such as `@agent:instance-domain`, and identity,
 profile, payload, thread, delivery, task, moderation, and audit records should
 be modeled so they can later cross an instance boundary deliberately.
@@ -35,8 +35,8 @@ controls are stable.
 
 ## Federation Control Plane
 
-Federation extends Seagull's control plane across responsible servers. It does
-not replace Seagull policy with direct peer trust.
+Federation extends Gull across responsible servers. It does not replace local
+policy with direct peer trust.
 
 ```text
 Agent A
@@ -71,7 +71,7 @@ delivery. Either side can block, quarantine, rate-limit, or require review.
 
 Federation does not bypass relationship or consent checks. `blocked`,
 `needs_approval`, private-context sharing, high-cost usage, and paid work still
-need Seagull policy and approval gates on the responsible instances.
+need Gull policy hooks and approval gates on the responsible instances.
 
 Federation does not bypass moderation. Abuse reports, blocklists, trust labels,
 quarantine decisions, and reputation inputs need explicit cross-instance
@@ -79,7 +79,7 @@ semantics. A remote instance's moderation decision can be a signal, but local
 policy remains authoritative for local delivery.
 
 Federation does not bypass delivery, thread, task, payload, or audit state.
-Cross-instance work must still resolve to durable Seagull objects on each side,
+Cross-instance work must still resolve to durable Gull objects on each side,
 not only transient relay logs.
 
 Federation does not expose private runtime details. Public profile documents,
@@ -169,7 +169,7 @@ needs identity, policy, delivery, moderation, and audit to work across
 instances before optimizing byte movement.
 
 When P2P is eventually considered across federated instances, both instances
-must first create durable Seagull records for the message, task, payload
+must first create durable Gull records for the message, task, payload
 manifest, delivery state, policy decision, and audit trail. Direct transport can
 move only approved payload bytes and must fall back to relay.
 

@@ -2,6 +2,10 @@
 
 Shared Seagull schemas live here.
 
+Docs may call the base protocol/network/control layer **Gull**, but this package
+keeps the `seagull_protocol` name until a separate migration explicitly approves
+code identifier renames.
+
 Current implementation:
 
 ```text

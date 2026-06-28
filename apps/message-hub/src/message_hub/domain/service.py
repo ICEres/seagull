@@ -43,6 +43,9 @@ from message_hub.domain.models import (
     TaskResultRecord,
     TaskState,
     TaskToolRequest,
+    TaskWorkerReputationEventRecord,
+    TaskWorkerReputationEventType,
+    TaskWorkerReputationSummary,
     ToolGrant,
     ThreadContext,
     ThreadRecord,
@@ -860,6 +863,52 @@ class MessageHubService:
         task = self._require_task(task_id)
         return self._repository.list_task_credit_ledger_entries_by_task(task.task_id)
 
+    def get_task_worker_reputation(self, worker_handle: str) -> TaskWorkerReputationSummary:
+        worker = self._require_agent_by_handle(worker_handle)
+        return self._task_worker_reputation_summary_for_agent_id(worker.agent_id)
+
+    def list_task_worker_reputation_events(
+        self,
+        worker_handle: str,
+    ) -> tuple[TaskWorkerReputationEventRecord, ...]:
+        worker = self._require_agent_by_handle(worker_handle)
+        return self._repository.list_task_worker_reputation_events_by_worker(worker.agent_id)
+
+    def report_task_worker_abuse(
+        self,
+        task_id: str,
+        *,
+        reporter_handle: str,
+        reason: str,
+        policy_decision_id: str | None = None,
+        abuse_policy_ref: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskWorkerReputationEventRecord:
+        task = self._require_task(task_id)
+        reporter = self._require_task_actor(task, reporter_handle)
+        if reporter.agent_id == task.recipient_agent_id:
+            raise ForbiddenDeliveryError("worker cannot report itself for abuse")
+        for event in self._repository.list_task_worker_reputation_events_by_task(task.task_id):
+            if (
+                event.event_type == TaskWorkerReputationEventType.ABUSE_REPORTED
+                and event.reporter_agent_id == reporter.agent_id
+            ):
+                raise InvalidMessageError("abuse report already exists for this reporter and task")
+        normalized_reason = normalize_required(reason, "reason")
+        require_small_inline(normalized_reason, "reason")
+        return self._record_task_worker_reputation_event(
+            task=task,
+            event_type=TaskWorkerReputationEventType.ABUSE_REPORTED,
+            reporter_agent_id=reporter.agent_id,
+            reason=normalized_reason,
+            policy_decision_id=policy_decision_id,
+            abuse_policy_ref=(
+                normalized_optional_string(abuse_policy_ref)
+                or "seagull://policies/task-credits/abuse-controls"
+            ),
+            audit_refs=audit_refs,
+        )
+
     def define_task_capacity_policy(
         self,
         task_id: str,
@@ -1247,6 +1296,15 @@ class MessageHubService:
             abuse_policy_ref=escrow.abuse_policy_ref,
             audit_refs=escrow.audit_refs,
         )
+        self._record_task_worker_reputation_event_once(
+            task=updated_task,
+            event_type=TaskWorkerReputationEventType.TASK_COMPLETED,
+            reporter_agent_id=releaser.agent_id,
+            reason=note,
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
+        )
         self._send_task_notification(
             task=updated_task,
             sender=releaser,
@@ -1350,6 +1408,15 @@ class MessageHubService:
             limits_ref=escrow.limits_ref,
             abuse_policy_ref=escrow.abuse_policy_ref,
             audit_refs=escrow.audit_refs,
+        )
+        self._record_task_worker_reputation_event_once(
+            task=updated_task,
+            event_type=TaskWorkerReputationEventType.DISPUTE_OPENED,
+            reporter_agent_id=actor.agent_id,
+            reason=normalized_reason,
+            policy_decision_id=escrow.policy_decision_id,
+            limits_ref=escrow.limits_ref,
+            abuse_policy_ref=escrow.abuse_policy_ref,
         )
         self._send_task_notification(
             task=updated_task,
@@ -1476,6 +1543,27 @@ class MessageHubService:
         now = self._clock()
         updated = replace(task, state=task_state, updated_at=now)
         self._repository.update_task(updated)
+        if task_state == TaskState.RESULT_ACCEPTED:
+            self._record_task_worker_reputation_event_once(
+                task=updated,
+                event_type=TaskWorkerReputationEventType.RESULT_ACCEPTED,
+                reporter_agent_id=actor.agent_id,
+                reason=note,
+            )
+        elif task_state == TaskState.COMPLETED:
+            self._record_task_worker_reputation_event_once(
+                task=updated,
+                event_type=TaskWorkerReputationEventType.TASK_COMPLETED,
+                reporter_agent_id=actor.agent_id,
+                reason=note,
+            )
+        elif task_state == TaskState.FAILED:
+            self._record_task_worker_reputation_event_once(
+                task=updated,
+                event_type=TaskWorkerReputationEventType.TASK_FAILED,
+                reporter_agent_id=actor.agent_id,
+                reason=note,
+            )
         recipient_agent_id = (
             task.requester_agent_id
             if actor.agent_id != task.requester_agent_id
@@ -1570,6 +1658,25 @@ class MessageHubService:
             updated_at=now,
         )
         self._repository.update_task(updated_task)
+        if task_state == TaskState.FAILED:
+            self._record_task_worker_reputation_event_once(
+                task=updated_task,
+                event_type=TaskWorkerReputationEventType.TASK_FAILED,
+                reporter_agent_id=responder.agent_id,
+                reason=error,
+            )
+        elif task_state == TaskState.COMPLETED:
+            self._record_task_worker_reputation_event_once(
+                task=updated_task,
+                event_type=TaskWorkerReputationEventType.TASK_COMPLETED,
+                reporter_agent_id=responder.agent_id,
+            )
+        elif task_state == TaskState.RESULT_ACCEPTED:
+            self._record_task_worker_reputation_event_once(
+                task=updated_task,
+                event_type=TaskWorkerReputationEventType.RESULT_ACCEPTED,
+                reporter_agent_id=responder.agent_id,
+            )
         return result
 
     def create_tool_request(
@@ -2088,6 +2195,88 @@ class MessageHubService:
             account_agent_id=account_agent_id,
             available_balance=available_balance,
             escrow_balance=escrow_balance,
+        )
+
+    def _record_task_worker_reputation_event_once(
+        self,
+        *,
+        task: TaskRecord,
+        event_type: TaskWorkerReputationEventType,
+        reporter_agent_id: str | None = None,
+        reason: str | None = None,
+        policy_decision_id: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+    ) -> TaskWorkerReputationEventRecord:
+        for event in self._repository.list_task_worker_reputation_events_by_task(task.task_id):
+            if event.worker_agent_id == task.recipient_agent_id and event.event_type == event_type:
+                return event
+        return self._record_task_worker_reputation_event(
+            task=task,
+            event_type=event_type,
+            reporter_agent_id=reporter_agent_id,
+            reason=reason,
+            policy_decision_id=policy_decision_id,
+            limits_ref=limits_ref,
+            abuse_policy_ref=abuse_policy_ref,
+        )
+
+    def _record_task_worker_reputation_event(
+        self,
+        *,
+        task: TaskRecord,
+        event_type: TaskWorkerReputationEventType,
+        reporter_agent_id: str | None = None,
+        reason: str | None = None,
+        policy_decision_id: str | None = None,
+        limits_ref: str | None = None,
+        abuse_policy_ref: str | None = None,
+        audit_refs: Sequence[str] = (),
+    ) -> TaskWorkerReputationEventRecord:
+        normalized_reason = normalized_optional_string(reason)
+        if normalized_reason is not None:
+            require_small_inline(normalized_reason, "reason")
+        event_id = self._new_id("task_reputation_event")
+        normalized_audit_refs = tuple(
+            normalize_required(ref, "audit_ref")
+            for ref in audit_refs
+        ) or (f"seagull://tasks/{task.task_id}/worker-reputation/{event_id}/audit",)
+        event = TaskWorkerReputationEventRecord(
+            event_id=event_id,
+            worker_agent_id=task.recipient_agent_id,
+            event_type=event_type,
+            task_id=task.task_id,
+            thread_id=task.thread_id,
+            reporter_agent_id=normalized_optional_string(reporter_agent_id),
+            reason=normalized_reason,
+            policy_decision_id=normalized_optional_string(policy_decision_id),
+            limits_ref=normalized_optional_string(limits_ref),
+            abuse_policy_ref=normalized_optional_string(abuse_policy_ref),
+            audit_refs=normalized_audit_refs,
+            created_at=self._clock(),
+        )
+        self._repository.put_task_worker_reputation_event(event)
+        return event
+
+    def _task_worker_reputation_summary_for_agent_id(
+        self,
+        worker_agent_id: str,
+    ) -> TaskWorkerReputationSummary:
+        events = self._repository.list_task_worker_reputation_events_by_worker(worker_agent_id)
+        counts = {
+            event_type: sum(1 for event in events if event.event_type == event_type)
+            for event_type in TaskWorkerReputationEventType
+        }
+        last_event = events[-1] if events else None
+        return TaskWorkerReputationSummary(
+            worker_agent_id=worker_agent_id,
+            completed_task_count=counts[TaskWorkerReputationEventType.TASK_COMPLETED],
+            failed_task_count=counts[TaskWorkerReputationEventType.TASK_FAILED],
+            accepted_result_count=counts[TaskWorkerReputationEventType.RESULT_ACCEPTED],
+            dispute_count=counts[TaskWorkerReputationEventType.DISPUTE_OPENED],
+            abuse_report_count=counts[TaskWorkerReputationEventType.ABUSE_REPORTED],
+            last_event_id=None if last_event is None else last_event.event_id,
+            last_event_at=None if last_event is None else last_event.created_at,
         )
 
     def _latest_task_capacity_policy(

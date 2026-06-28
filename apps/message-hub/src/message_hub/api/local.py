@@ -36,6 +36,8 @@ from message_hub.domain import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    TaskWorkerReputationEventRecord,
+    TaskWorkerReputationSummary,
     ToolGrant,
     ThreadContext,
     ThreadRecord,
@@ -466,6 +468,28 @@ class LocalMessageHubApi:
             "entries": [task_credit_ledger_entry_to_dict(entry) for entry in entries],
         }
 
+    def read_task_worker_reputation(self, worker_handle: str) -> dict[str, Any]:
+        try:
+            summary = self._service.get_task_worker_reputation(worker_handle)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "worker_handle": worker_handle,
+            "reputation": task_worker_reputation_summary_to_dict(summary),
+        }
+
+    def read_task_worker_reputation_events(self, worker_handle: str) -> dict[str, Any]:
+        try:
+            events = self._service.list_task_worker_reputation_events(worker_handle)
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "worker_handle": worker_handle,
+            "events": [task_worker_reputation_event_to_dict(event) for event in events],
+        }
+
     def create_task_quote(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
             reject_private_task_fields(body)
@@ -612,6 +636,30 @@ class LocalMessageHubApi:
             "escrow_id": escrow.escrow_id,
             "state": escrow.state.value,
             "escrow": task_escrow_to_dict(escrow),
+        }
+
+    def report_task_worker_abuse(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            event = self._service.report_task_worker_abuse(
+                task_id,
+                reporter_handle=required_string(body, "reporter_handle"),
+                reason=required_string(body, "reason"),
+                policy_decision_id=optional_string(body, "policy_decision_id"),
+                abuse_policy_ref=optional_string(body, "abuse_policy_ref"),
+                audit_refs=string_list(body.get("audit_refs", ()), "audit_refs"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "task_id": event.task_id,
+            "thread_id": event.thread_id,
+            "event_id": event.event_id,
+            "event": task_worker_reputation_event_to_dict(event),
         }
 
     def accept_task(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1221,6 +1269,39 @@ def task_credit_balance_to_dict(balance: TaskCreditBalance) -> dict[str, Any]:
         "escrow_balance": balance.escrow_balance,
         "total_balance": balance.total_balance,
         "settlement_scope": balance.settlement_scope,
+    }
+
+
+def task_worker_reputation_event_to_dict(event: TaskWorkerReputationEventRecord) -> dict[str, Any]:
+    return {
+        "event_id": event.event_id,
+        "worker_agent_id": event.worker_agent_id,
+        "event_type": event.event_type.value,
+        "task_id": event.task_id,
+        "thread_id": event.thread_id,
+        "reporter_agent_id": event.reporter_agent_id,
+        "reason": event.reason,
+        "policy_decision_id": event.policy_decision_id,
+        "limits_ref": event.limits_ref,
+        "abuse_policy_ref": event.abuse_policy_ref,
+        "audit_refs": list(event.audit_refs),
+        "created_at": datetime_to_string(event.created_at),
+    }
+
+
+def task_worker_reputation_summary_to_dict(summary: TaskWorkerReputationSummary) -> dict[str, Any]:
+    return {
+        "worker_agent_id": summary.worker_agent_id,
+        "completed_task_count": summary.completed_task_count,
+        "failed_task_count": summary.failed_task_count,
+        "accepted_result_count": summary.accepted_result_count,
+        "dispute_count": summary.dispute_count,
+        "abuse_report_count": summary.abuse_report_count,
+        "total_outcome_count": summary.total_outcome_count,
+        "completion_rate": summary.completion_rate,
+        "failure_rate": summary.failure_rate,
+        "last_event_id": summary.last_event_id,
+        "last_event_at": datetime_to_string(summary.last_event_at),
     }
 
 

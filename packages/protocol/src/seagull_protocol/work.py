@@ -54,6 +54,14 @@ class TaskCapacityTier(str, Enum):
     HIGH = "high"
 
 
+class TaskWorkerReputationEventType(str, Enum):
+    TASK_COMPLETED = "task_completed"
+    TASK_FAILED = "task_failed"
+    RESULT_ACCEPTED = "result_accepted"
+    DISPUTE_OPENED = "dispute_opened"
+    ABUSE_REPORTED = "abuse_reported"
+
+
 TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
 
 
@@ -596,6 +604,96 @@ class TaskCreditLedgerEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskWorkerReputationEvent:
+    event_id: str
+    worker: Handle
+    event_type: TaskWorkerReputationEventType
+    task_id: str
+    thread_id: str
+    reporter: Handle | None = None
+    reason: str | None = None
+    policy_decision_id: str | None = None
+    limits_ref: str | None = None
+    abuse_policy_ref: str | None = None
+    audit_refs: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event_id", required_string(self.event_id, "event_id"))
+        object.__setattr__(self, "task_id", required_string(self.task_id, "task_id"))
+        object.__setattr__(self, "thread_id", required_string(self.thread_id, "thread_id"))
+        if not isinstance(self.event_type, TaskWorkerReputationEventType):
+            try:
+                object.__setattr__(
+                    self,
+                    "event_type",
+                    TaskWorkerReputationEventType(self.event_type),
+                )
+            except ValueError as exc:
+                allowed = ", ".join(event_type.value for event_type in TaskWorkerReputationEventType)
+                raise ProtocolError(f"event_type must be one of: {allowed}") from exc
+        for field_name in (
+            "reason",
+            "policy_decision_id",
+            "limits_ref",
+            "abuse_policy_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, required_string(value, field_name))
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskWorkerReputationSummary:
+    worker: Handle
+    completed_task_count: int = 0
+    failed_task_count: int = 0
+    accepted_result_count: int = 0
+    dispute_count: int = 0
+    abuse_report_count: int = 0
+    last_event_id: str | None = None
+    audit_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "completed_task_count",
+            "failed_task_count",
+            "accepted_result_count",
+            "dispute_count",
+            "abuse_report_count",
+        ):
+            require_non_negative_int(getattr(self, field_name), field_name)
+        if self.last_event_id is not None:
+            object.__setattr__(self, "last_event_id", required_string(self.last_event_id, "last_event_id"))
+        object.__setattr__(
+            self,
+            "audit_refs",
+            tuple(required_string(ref, "audit_ref") for ref in self.audit_refs),
+        )
+
+    @property
+    def total_outcome_count(self) -> int:
+        return self.completed_task_count + self.failed_task_count
+
+    @property
+    def completion_rate(self) -> float | None:
+        if self.total_outcome_count == 0:
+            return None
+        return self.completed_task_count / self.total_outcome_count
+
+    @property
+    def failure_rate(self) -> float | None:
+        if self.total_outcome_count == 0:
+            return None
+        return self.failed_task_count / self.total_outcome_count
+
+
+@dataclass(frozen=True, slots=True)
 class TaskResult:
     task_id: str
     responder: Handle
@@ -647,6 +745,9 @@ __all__ = [
     "TaskResult",
     "TaskState",
     "TaskToolRequest",
+    "TaskWorkerReputationEvent",
+    "TaskWorkerReputationEventType",
+    "TaskWorkerReputationSummary",
     "ToolGrant",
     "normalize_task_state",
     "task_lifecycle_allows",

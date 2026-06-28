@@ -40,6 +40,9 @@ from seagull_protocol import (
     TaskResult,
     TaskState,
     TaskToolRequest,
+    TaskWorkerReputationEvent,
+    TaskWorkerReputationEventType,
+    TaskWorkerReputationSummary,
     ToolGrant,
     Visibility,
     WorkflowTraceEntry,
@@ -497,6 +500,29 @@ class ProtocolModelsTest(TestCase):
             abuse_policy_ref=quote.abuse_policy_ref,
             audit_refs=("seagull://tasks/task_1/escrows/escrow_1/audit",),
         )
+        reputation_event = TaskWorkerReputationEvent(
+            event_id="task_reputation_event_1",
+            worker=request.recipient,
+            event_type=TaskWorkerReputationEventType.RESULT_ACCEPTED,
+            task_id=request.task_id,
+            thread_id=request.thread_id,
+            reporter=request.requester,
+            reason="Requester accepted the result.",
+            policy_decision_id="policy_1",
+            limits_ref=quote.limits_ref,
+            abuse_policy_ref=quote.abuse_policy_ref,
+            audit_refs=("seagull://tasks/task_1/worker-reputation/task_reputation_event_1/audit",),
+        )
+        reputation = TaskWorkerReputationSummary(
+            worker=request.recipient,
+            completed_task_count=1,
+            failed_task_count=1,
+            accepted_result_count=1,
+            dispute_count=1,
+            abuse_report_count=1,
+            last_event_id=reputation_event.event_id,
+            audit_refs=("seagull://agents/reviewer/reputation/audit",),
+        )
 
         self.assertEqual(TaskState.REQUESTED, request.state)
         self.assertEqual(("open_artifact",), request.allowed_tool_names)
@@ -533,6 +559,15 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(-3, ledger_entry.available_delta)
         self.assertEqual(3, ledger_entry.escrow_delta)
         self.assertEqual("internal_product_credit", ledger_entry.settlement_scope)
+        self.assertEqual(TaskWorkerReputationEventType.RESULT_ACCEPTED, reputation_event.event_type)
+        self.assertEqual(request.recipient, reputation_event.worker)
+        self.assertEqual(request.requester, reputation_event.reporter)
+        self.assertEqual(2, reputation.total_outcome_count)
+        self.assertEqual(0.5, reputation.completion_rate)
+        self.assertEqual(0.5, reputation.failure_rate)
+        self.assertEqual(1, reputation.accepted_result_count)
+        self.assertEqual(1, reputation.dispute_count)
+        self.assertEqual(1, reputation.abuse_report_count)
 
     def test_task_lifecycle_defines_credit_state_transitions(self) -> None:
         expected_states = {

@@ -130,8 +130,11 @@ GET  /tasks/{task_id}/capacity-policies
 POST /tasks/{task_id}/accept
 POST /tasks/{task_id}/status
 POST /tasks/{task_id}/results
+POST /tasks/{task_id}/worker-abuse-reports
 POST /tasks/{task_id}/tool-requests
 POST /tool-requests/{tool_request_id}/complete
+GET  /agents/{handle}/worker-reputation
+GET  /agents/{handle}/worker-reputation/events
 POST /messages/{message_id}/ack
 ```
 
@@ -217,7 +220,10 @@ held credits, approval refs, limits refs, abuse policy refs, and audit refs.
 Task credit ledger entries are append-only internal product-credit events for
 grants, escrow holds, releases, cancellations, and disputes; balances are
 computed from available and escrow deltas rather than stored as mutable cash-out
-accounts. Task results may carry the same optional
+accounts. Worker reputation events are append-only audit records for completed
+work, failed work, accepted results, disputes, and abuse reports; derived
+summary fields expose completion/failure rates and counts that can feed trust,
+approval, and budget decisions. Task results may carry the same optional
 `stream_id`, but durable result records and final task-result messages do not
 require live streaming. Task-scoped tool-request
 records capture requested tool name, purpose, approval requirement, policy
@@ -286,6 +292,7 @@ task_capacity_policies requester/worker capacity-sharing limits and approvals
 task_quotes       expected cost, shared context, reason, approval, and audit
 task_escrows      held internal credits linked to approved/preapproved quotes
 task_credit_ledger append-only internal credit balance and escrow movements
+task_worker_reputation_events append-only trust, outcome, dispute, and abuse events
 tool_requests     task-scoped delegated tool-use records
 task_results      durable task result records
 ```

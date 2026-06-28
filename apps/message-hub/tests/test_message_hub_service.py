@@ -20,6 +20,7 @@ from message_hub.domain import (
     TaskCapacityTier,
     TaskCreditLedgerEntryType,
     TaskState,
+    TaskWorkerReputationEventType,
     task_lifecycle_allows,
     task_lifecycle_next_states,
 )
@@ -940,6 +941,124 @@ class MessageHubServiceTest(TestCase):
                 expected_credit_cost=1,
                 task_reason="Private context should be refused.",
                 shared_context_refs=("file://private/context",),
+            )
+
+    def test_worker_reputation_tracks_lifecycle_and_abuse_events(self) -> None:
+        self.service.grant_task_credits(
+            agent_handle="@researcher:gulls.ai",
+            amount=10,
+            reason="Internal test allocation.",
+        )
+        completed_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Complete a paid review.",
+        )
+        completed_quote = self.service.create_task_quote(
+            completed_task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=2,
+            task_reason="Small paid review.",
+            requires_approval=False,
+        )
+        completed_escrow = self.service.create_task_escrow(
+            completed_task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            quote_id=completed_quote.quote_id,
+        )
+        self.service.return_task_result(
+            completed_task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="result_ready",
+            content="Done.",
+        )
+        self.service.update_task_state(
+            completed_task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="result_accepted",
+            note="Accepted.",
+        )
+        self.service.release_task_escrow(
+            completed_escrow.escrow_id,
+            releaser_handle="@researcher:gulls.ai",
+            note="Released.",
+        )
+
+        failed_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Return a failed task result.",
+        )
+        self.service.return_task_result(
+            failed_task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="failed",
+            error="Worker failed to complete the task.",
+        )
+
+        disputed_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Open a dispute.",
+        )
+        disputed_quote = self.service.create_task_quote(
+            disputed_task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+            expected_credit_cost=1,
+            task_reason="Disputable review.",
+            requires_approval=False,
+        )
+        disputed_escrow = self.service.create_task_escrow(
+            disputed_task.task_id,
+            requester_handle="@researcher:gulls.ai",
+            quote_id=disputed_quote.quote_id,
+        )
+        self.service.dispute_task_escrow(
+            disputed_escrow.escrow_id,
+            actor_handle="@researcher:gulls.ai",
+            reason="Result did not match the requested scope.",
+        )
+        abuse_event = self.service.report_task_worker_abuse(
+            disputed_task.task_id,
+            reporter_handle="@researcher:gulls.ai",
+            reason="Worker repeatedly ignored scope limits.",
+            policy_decision_id="policy_abuse_1",
+        )
+
+        summary = self.service.get_task_worker_reputation("@reviewer:gulls.ai")
+        events = self.service.list_task_worker_reputation_events("@reviewer:gulls.ai")
+
+        self.assertEqual("task_reputation_event_5", abuse_event.event_id)
+        self.assertEqual(TaskWorkerReputationEventType.ABUSE_REPORTED, abuse_event.event_type)
+        self.assertEqual("policy_abuse_1", abuse_event.policy_decision_id)
+        self.assertEqual(1, summary.completed_task_count)
+        self.assertEqual(1, summary.failed_task_count)
+        self.assertEqual(1, summary.accepted_result_count)
+        self.assertEqual(1, summary.dispute_count)
+        self.assertEqual(1, summary.abuse_report_count)
+        self.assertEqual(2, summary.total_outcome_count)
+        self.assertEqual(0.5, summary.completion_rate)
+        self.assertEqual(0.5, summary.failure_rate)
+        self.assertEqual("task_reputation_event_5", summary.last_event_id)
+        self.assertEqual(
+            (
+                TaskWorkerReputationEventType.RESULT_ACCEPTED,
+                TaskWorkerReputationEventType.TASK_COMPLETED,
+                TaskWorkerReputationEventType.TASK_FAILED,
+                TaskWorkerReputationEventType.DISPUTE_OPENED,
+                TaskWorkerReputationEventType.ABUSE_REPORTED,
+            ),
+            tuple(event.event_type for event in events),
+        )
+        self.assertEqual(
+            ("seagull://tasks/task_3/worker-reputation/task_reputation_event_5/audit",),
+            abuse_event.audit_refs,
+        )
+        with self.assertRaises(InvalidMessageError):
+            self.service.report_task_worker_abuse(
+                disputed_task.task_id,
+                reporter_handle="@researcher:gulls.ai",
+                reason="Duplicate abuse report.",
             )
 
     def test_task_escrow_without_required_approval_can_be_created_after_quote(self) -> None:

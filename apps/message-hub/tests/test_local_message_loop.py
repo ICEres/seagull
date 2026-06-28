@@ -484,6 +484,36 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual(["task_escrow_1"], readback["task"]["escrow_ids"])
         self.assertEqual(["capacity_policy_1"], readback["task"]["capacity_policy_ids"])
 
+    def test_local_api_reports_worker_reputation_events(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        task_response = self.api.create_task(
+            {
+                "requester_handle": "@researcher:seagull.local",
+                "recipient_handle": "@reviewer:seagull.local",
+                "objective": "Review scoped context.",
+            }
+        )
+
+        event = self.api.report_task_worker_abuse(
+            task_response["task_id"],
+            {
+                "reporter_handle": "@researcher:seagull.local",
+                "reason": "Worker ignored scope limits.",
+                "policy_decision_id": "policy_abuse_1",
+            },
+        )
+        summary = self.api.read_task_worker_reputation("@reviewer:seagull.local")
+        events = self.api.read_task_worker_reputation_events("@reviewer:seagull.local")
+
+        self.assertEqual("task_reputation_event_1", event["event_id"])
+        self.assertEqual("abuse_reported", event["event"]["event_type"])
+        self.assertEqual("policy_abuse_1", event["event"]["policy_decision_id"])
+        self.assertEqual(1, summary["reputation"]["abuse_report_count"])
+        self.assertEqual(0, summary["reputation"]["completed_task_count"])
+        self.assertIsNone(summary["reputation"]["completion_rate"])
+        self.assertEqual(["task_reputation_event_1"], [item["event_id"] for item in events["events"]])
+
     def test_local_api_enforces_scoped_tool_grants(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})
         self.api.register_agent({"handle": "@reviewer:seagull.local"})

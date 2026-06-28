@@ -17,6 +17,7 @@ from message_hub.domain.models import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    TaskWorkerReputationEventRecord,
     ToolGrant,
     ThreadRecord,
     ThreadSummary,
@@ -56,6 +57,9 @@ class InMemoryMessageHubRepository:
         self._task_credit_ledger_entries_by_id: dict[str, TaskCreditLedgerEntry] = {}
         self._task_credit_ledger_entry_ids_by_agent: dict[str, list[str]] = defaultdict(list)
         self._task_credit_ledger_entry_ids_by_task: dict[str, list[str]] = defaultdict(list)
+        self._task_worker_reputation_events_by_id: dict[str, TaskWorkerReputationEventRecord] = {}
+        self._task_worker_reputation_event_ids_by_worker: dict[str, list[str]] = defaultdict(list)
+        self._task_worker_reputation_event_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_grants_by_id: dict[str, ToolGrant] = {}
         self._tool_grant_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
@@ -408,6 +412,49 @@ class InMemoryMessageHubRepository:
 
         entries.sort(key=lambda entry: (entry.created_at, entry.entry_id))
         return tuple(entries)
+
+    def put_task_worker_reputation_event(self, event: TaskWorkerReputationEventRecord) -> None:
+        with self._lock:
+            if event.event_id in self._task_worker_reputation_events_by_id:
+                raise ValueError(f"task worker reputation event already exists: {event.event_id}")
+            self._task_worker_reputation_events_by_id[event.event_id] = event
+            self._task_worker_reputation_event_ids_by_worker[event.worker_agent_id].append(event.event_id)
+            self._task_worker_reputation_event_ids_by_task[event.task_id].append(event.event_id)
+
+    def get_task_worker_reputation_event(
+        self,
+        event_id: str,
+    ) -> TaskWorkerReputationEventRecord | None:
+        with self._lock:
+            return self._task_worker_reputation_events_by_id.get(event_id)
+
+    def list_task_worker_reputation_events_by_worker(
+        self,
+        worker_agent_id: str,
+    ) -> tuple[TaskWorkerReputationEventRecord, ...]:
+        with self._lock:
+            events = [
+                self._task_worker_reputation_events_by_id[event_id]
+                for event_id in self._task_worker_reputation_event_ids_by_worker.get(worker_agent_id, [])
+                if event_id in self._task_worker_reputation_events_by_id
+            ]
+
+        events.sort(key=lambda event: (event.created_at, event.event_id))
+        return tuple(events)
+
+    def list_task_worker_reputation_events_by_task(
+        self,
+        task_id: str,
+    ) -> tuple[TaskWorkerReputationEventRecord, ...]:
+        with self._lock:
+            events = [
+                self._task_worker_reputation_events_by_id[event_id]
+                for event_id in self._task_worker_reputation_event_ids_by_task.get(task_id, [])
+                if event_id in self._task_worker_reputation_events_by_id
+            ]
+
+        events.sort(key=lambda event: (event.created_at, event.event_id))
+        return tuple(events)
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         with self._lock:

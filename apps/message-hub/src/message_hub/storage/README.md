@@ -20,6 +20,8 @@ Storage should support:
 - Task-scoped tool grants and tool requests.
 - Task capacity-sharing policies, quotes, escrows, credit ledger entries, and
   results.
+- Append-only worker reputation events for task outcomes, disputes, and abuse
+  reports.
 
 Keep storage behind interfaces so domain tests do not depend on AWS.
 
@@ -40,6 +42,7 @@ task_capacity_policies
 task_quotes
 task_escrows
 task_credit_ledger
+task_worker_reputation_events
 tool_requests
 task_results
 ```

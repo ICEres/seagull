@@ -89,6 +89,11 @@ TaskCreditLedgerEntry records are append-only balance events for internal
 product credits. They track available and escrow deltas for grants, escrow
 holds, releases, cancellations, and disputes, and explicitly use the
 `internal_product_credit` settlement scope instead of cash-out settlement.
+TaskWorkerReputationEvent records are append-only audit events for completed
+work, failed work, accepted results, disputes, and abuse reports. Derived
+TaskWorkerReputationSummary fields expose completion/failure rates plus
+accepted-result, dispute, and abuse counts for trust, approval, and budget
+decisions.
 Task request lifecycle states are defined in `TaskState` and
 `TASK_LIFECYCLE_TRANSITIONS`: request (`requested`), quote (`quoted`), human
 approval (`needs_approval`/`approved`), escrow (`escrowed`), worker acceptance

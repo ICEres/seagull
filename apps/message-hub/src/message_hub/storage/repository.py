@@ -16,6 +16,7 @@ from message_hub.domain.models import (
     TaskRecord,
     TaskResultRecord,
     TaskToolRequest,
+    TaskWorkerReputationEventRecord,
     ToolGrant,
     ThreadRecord,
     ThreadSummary,
@@ -180,6 +181,27 @@ class MessageHubRepository(Protocol):
 
     def list_task_credit_ledger_entries_by_task(self, task_id: str) -> tuple[TaskCreditLedgerEntry, ...]:
         """Return task credit ledger entries for one task in chronological order."""
+
+    def put_task_worker_reputation_event(self, event: TaskWorkerReputationEventRecord) -> None:
+        """Persist an append-only worker reputation event."""
+
+    def get_task_worker_reputation_event(
+        self,
+        event_id: str,
+    ) -> TaskWorkerReputationEventRecord | None:
+        """Return a worker reputation event by ID."""
+
+    def list_task_worker_reputation_events_by_worker(
+        self,
+        worker_agent_id: str,
+    ) -> tuple[TaskWorkerReputationEventRecord, ...]:
+        """Return worker reputation events for one agent in chronological order."""
+
+    def list_task_worker_reputation_events_by_task(
+        self,
+        task_id: str,
+    ) -> tuple[TaskWorkerReputationEventRecord, ...]:
+        """Return worker reputation events for one task in chronological order."""
 
     def put_tool_grant(self, grant: ToolGrant) -> None:
         """Persist a task-scoped tool grant."""

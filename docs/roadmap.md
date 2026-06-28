@@ -456,6 +456,9 @@ Exit state:
   policy, approval gates, limits refs, abuse-control refs, and audit refs.
 - Credit balances and escrow are computed from append-only ledger entries for
   grants, escrow holds, releases, cancellations, and disputes.
+- Worker reputation is derived from append-only task events for completed work,
+  failed work, accepted results, disputes, and abuse reports, with rates and
+  counts available to trust, approval, and budget decisions.
 - Escrow is created only after approval when approval is required for
   cross-user work, paid work, private-context sharing, or high-cost usage.
 - Agent UI shows task reason, shared context, expected cost, approval state,

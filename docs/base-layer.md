@@ -321,6 +321,10 @@ The current protocol package should keep this boundary explicit:
   extension. Ledger entries use internal product-credit settlement only and
   carry available/escrow deltas plus task, quote, escrow, limits, abuse-control,
   and audit refs.
+- Represent worker reputation as append-only work/task events for completed
+  work, failed work, accepted results, disputes, and abuse reports. Derived
+  summaries can expose completion/failure rates and counts for trust, approval,
+  and budget decisions without making reputation a mutable base identity field.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
 - Use optional `stream_id` links on task records/results only as live-projection

@@ -19,13 +19,106 @@ from seagull_protocol.base import (
 
 class TaskState(str, Enum):
     REQUESTED = "requested"
+    QUOTED = "quoted"
+    NEEDS_APPROVAL = "needs_approval"
+    APPROVED = "approved"
+    ESCROWED = "escrowed"
     ACCEPTED = "accepted"
     RUNNING = "running"
-    NEEDS_APPROVAL = "needs_approval"
     RESULT_READY = "result_ready"
+    RESULT_ACCEPTED = "result_accepted"
+    RELEASED = "released"
     COMPLETED = "completed"
+    CANCELED = "canceled"
+    DISPUTED = "disputed"
     REFUSED = "refused"
     FAILED = "failed"
+
+
+TASK_LIFECYCLE_TRANSITIONS: dict[TaskState, tuple[TaskState, ...]] = {
+    TaskState.REQUESTED: (
+        TaskState.QUOTED,
+        TaskState.NEEDS_APPROVAL,
+        TaskState.ACCEPTED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.QUOTED: (
+        TaskState.NEEDS_APPROVAL,
+        TaskState.APPROVED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.NEEDS_APPROVAL: (
+        TaskState.APPROVED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.APPROVED: (
+        TaskState.ESCROWED,
+        TaskState.ACCEPTED,
+        TaskState.CANCELED,
+    ),
+    TaskState.ESCROWED: (
+        TaskState.ACCEPTED,
+        TaskState.RUNNING,
+        TaskState.CANCELED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.ACCEPTED: (
+        TaskState.RUNNING,
+        TaskState.RESULT_READY,
+        TaskState.COMPLETED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.RUNNING: (
+        TaskState.RESULT_READY,
+        TaskState.COMPLETED,
+        TaskState.FAILED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RESULT_READY: (
+        TaskState.RESULT_ACCEPTED,
+        TaskState.COMPLETED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RESULT_ACCEPTED: (
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RELEASED: (TaskState.COMPLETED,),
+    TaskState.DISPUTED: (
+        TaskState.RESULT_ACCEPTED,
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+        TaskState.CANCELED,
+    ),
+    TaskState.COMPLETED: (),
+    TaskState.CANCELED: (),
+    TaskState.REFUSED: (),
+    TaskState.FAILED: (TaskState.DISPUTED,),
+}
+
+
+def normalize_task_state(state: TaskState | str) -> TaskState:
+    if isinstance(state, TaskState):
+        return state
+    normalized = required_string(state, "state").lower()
+    try:
+        return TaskState(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(task_state.value for task_state in TaskState)
+        raise ProtocolError(f"state must be one of: {allowed}") from exc
+
+
+def task_lifecycle_next_states(state: TaskState | str) -> tuple[TaskState, ...]:
+    return TASK_LIFECYCLE_TRANSITIONS[normalize_task_state(state)]
+
+
+def task_lifecycle_allows(current: TaskState | str, next_state: TaskState | str) -> bool:
+    return normalize_task_state(next_state) in task_lifecycle_next_states(current)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +285,7 @@ class TaskToolRequest:
             "artifact_refs",
             tuple(required_string(ref, "artifact_ref") for ref in self.artifact_refs),
         )
+        object.__setattr__(self, "state", normalize_task_state(self.state))
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +328,7 @@ class TaskRequest:
             "tool_grant_ids",
             tuple(required_string(grant_id, "tool_grant_id") for grant_id in self.tool_grant_ids),
         )
+        object.__setattr__(self, "state", normalize_task_state(self.state))
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,14 +364,19 @@ class TaskResult:
                 for ref in self.tool_use_summary_refs
             ),
         )
+        object.__setattr__(self, "state", normalize_task_state(self.state))
 
 
 __all__ = [
     "ContextBudget",
     "ContextPack",
+    "TASK_LIFECYCLE_TRANSITIONS",
     "TaskRequest",
     "TaskResult",
     "TaskState",
     "TaskToolRequest",
     "ToolGrant",
+    "normalize_task_state",
+    "task_lifecycle_allows",
+    "task_lifecycle_next_states",
 ]

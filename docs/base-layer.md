@@ -303,6 +303,12 @@ The current protocol package should keep this boundary explicit:
   thread context, not task-specific work state.
 - Keep `TaskRequest`, `TaskResult`, `TaskState`, `TaskToolRequest`, and
   `ToolGrant` in a work/task extension.
+- Keep task-credit lifecycle semantics in the work/task extension too:
+  requested -> quoted -> needs_approval -> approved -> escrowed -> accepted
+  -> running -> result_ready -> result_accepted -> released -> completed,
+  with canceled/disputed/refused/failed side paths. Cross-user work, paid work,
+  private-context sharing, and high-cost usage should pass through human
+  approval before escrow or execution.
 - Make stream events generic by using `subject_type` and `subject_id` instead
   of task-specific fields.
 - Use optional `stream_id` links on task records/results only as live-projection

@@ -422,6 +422,10 @@ Success criteria:
   the task record.
 - Add task lifecycle states: request, quote, approve, escrow, run, result,
   accept, release, cancel, and dispute.
+  The protocol names these as `requested`, `quoted`, `needs_approval`,
+  `approved`, `escrowed`, `accepted`, `running`, `result_ready`,
+  `result_accepted`, `released`, `completed`, `canceled`, and `disputed`, with
+  `refused` and `failed` retained for rejection and execution failure.
 - Add internal task credits before real-money settlement.
 - Let users with lower available capacity spend task credits to request work
   from users' higher-capacity agents.

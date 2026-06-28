@@ -16,7 +16,10 @@ from message_hub.domain import (
     MessageRef,
     NotFoundError,
     PayloadUnavailableError,
+    TASK_LIFECYCLE_TRANSITIONS,
     TaskState,
+    task_lifecycle_allows,
+    task_lifecycle_next_states,
 )
 from message_hub.storage import InMemoryMessageHubRepository
 
@@ -647,6 +650,95 @@ class MessageHubServiceTest(TestCase):
             ("seagull://tasks/task_1/results/task_result_1",),
             tuple(ref.url for ref in result_message.refs),
         )
+
+    def test_task_credit_lifecycle_states_can_be_recorded(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Quote and complete paid review work.",
+            allowed_use_terms=("paid_worker", "human_approval_required"),
+        )
+        lifecycle_path = (
+            TaskState.REQUESTED,
+            TaskState.QUOTED,
+            TaskState.NEEDS_APPROVAL,
+            TaskState.APPROVED,
+            TaskState.ESCROWED,
+            TaskState.ACCEPTED,
+            TaskState.RUNNING,
+            TaskState.RESULT_READY,
+            TaskState.RESULT_ACCEPTED,
+            TaskState.RELEASED,
+            TaskState.COMPLETED,
+        )
+        for current, next_state in zip(lifecycle_path, lifecycle_path[1:]):
+            self.assertTrue(task_lifecycle_allows(current, next_state))
+
+        quoted = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@reviewer:gulls.ai",
+            state="quoted",
+            note="3 credits.",
+        )
+        approval_needed = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="needs_approval",
+            note="Owner approval required for paid private-context work.",
+        )
+        approved = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="approved",
+        )
+        escrowed = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="escrowed",
+        )
+        accepted = self.service.accept_task(
+            task.task_id,
+            worker_handle="@reviewer:gulls.ai",
+        )
+        running = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@reviewer:gulls.ai",
+            state="running",
+        )
+        result = self.service.return_task_result(
+            task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="result_ready",
+            content="Ready for requester acceptance.",
+        )
+        accepted_result = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="result_accepted",
+        )
+        released = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="released",
+        )
+        completed = self.service.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="completed",
+        )
+
+        self.assertEqual(TaskState.QUOTED, quoted.state)
+        self.assertEqual(TaskState.NEEDS_APPROVAL, approval_needed.state)
+        self.assertEqual(TaskState.APPROVED, approved.state)
+        self.assertEqual(TaskState.ESCROWED, escrowed.state)
+        self.assertEqual(TaskState.ACCEPTED, accepted.state)
+        self.assertEqual(TaskState.RUNNING, running.state)
+        self.assertEqual(TaskState.RESULT_READY, result.state)
+        self.assertEqual(TaskState.RESULT_ACCEPTED, accepted_result.state)
+        self.assertEqual(TaskState.RELEASED, released.state)
+        self.assertEqual(TaskState.COMPLETED, completed.state)
+        self.assertIn(TaskState.DISPUTED, task_lifecycle_next_states(TaskState.RESULT_READY))
+        self.assertIn(TaskState.CANCELED, TASK_LIFECYCLE_TRANSITIONS[TaskState.DISPUTED])
 
     def test_preapproved_tool_request_requires_active_tool_grant(self) -> None:
         task = self.service.create_task(

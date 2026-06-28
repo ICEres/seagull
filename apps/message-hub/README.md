@@ -274,6 +274,13 @@ task_results      durable task result records
 
 Do not store a whole conversation in one row. Store one immutable message per
 message ID, then maintain inboxes, outboxes, and context as separate views.
+Task lifecycle records use explicit state names for task-credit work:
+`requested`, `quoted`, `needs_approval`, `approved`, `escrowed`, `accepted`,
+`running`, `result_ready`, `result_accepted`, `released`, `completed`,
+`canceled`, `disputed`, `refused`, and `failed`. Status changes are written as
+task updates and paired with status-update messages so cross-user work, paid
+work, private-context sharing, and high-cost usage can be reviewed by owner
+policy and audit tooling.
 
 MVP storage rules:
 

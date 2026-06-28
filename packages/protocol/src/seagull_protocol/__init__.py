@@ -43,11 +43,15 @@ from seagull_protocol.events import (
 from seagull_protocol.work import (
     ContextBudget,
     ContextPack,
+    TASK_LIFECYCLE_TRANSITIONS,
     TaskRequest,
     TaskResult,
     TaskState,
     TaskToolRequest,
     ToolGrant,
+    normalize_task_state,
+    task_lifecycle_allows,
+    task_lifecycle_next_states,
 )
 
 __all__ = [
@@ -81,6 +85,7 @@ __all__ = [
     "RoutingRuleMode",
     "StreamEvent",
     "StreamEventType",
+    "TASK_LIFECYCLE_TRANSITIONS",
     "TaskRequest",
     "TaskResult",
     "TaskState",
@@ -92,6 +97,9 @@ __all__ = [
     "normalize_handle",
     "normalize_message_intent",
     "normalize_relationship_preset",
+    "normalize_task_state",
     "relationship_preset_defaults",
     "normalize_stream_event_type",
+    "task_lifecycle_allows",
+    "task_lifecycle_next_states",
 ]

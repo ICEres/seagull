@@ -29,6 +29,7 @@ from message_hub.domain.models import (
     RoutingRuleMode,
     SendMessageResult,
     StoredPayload,
+    TASK_INACTIVE_STATES,
     TaskRecord,
     TaskResultRecord,
     TaskState,
@@ -2016,7 +2017,7 @@ def contact_pending_action(delivery: Delivery, tasks: tuple[TaskRecord, ...]) ->
     if delivery.status == DeliveryStatus.NEEDS_REVIEW:
         return "human review"
     for task in tasks:
-        if task.state not in {TaskState.COMPLETED, TaskState.REFUSED, TaskState.FAILED}:
+        if task.state not in TASK_INACTIVE_STATES:
             return f"task {task.task_id} is {task.state.value}"
     if delivery.status == DeliveryStatus.PENDING_ACTION:
         return delivery.current_stage

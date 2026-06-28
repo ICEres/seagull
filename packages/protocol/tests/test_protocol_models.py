@@ -28,6 +28,7 @@ from seagull_protocol import (
     RelationshipPreset,
     StreamEvent,
     StreamEventType,
+    TASK_LIFECYCLE_TRANSITIONS,
     TaskRequest,
     TaskResult,
     TaskState,
@@ -37,7 +38,10 @@ from seagull_protocol import (
     WorkflowTraceEntry,
     normalize_handle,
     normalize_relationship_preset,
+    normalize_task_state,
     relationship_preset_defaults,
+    task_lifecycle_allows,
+    task_lifecycle_next_states,
 )
 from seagull_protocol.events import StreamEvent as EventStreamEvent
 from seagull_protocol.work import TaskRequest as WorkTaskRequest
@@ -440,6 +444,59 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual(TaskState.NEEDS_APPROVAL, tool_request.state)
         self.assertEqual("policy_1", tool_request.policy_decision_id)
         self.assertEqual("payload://task_1/tool_request/result", tool_request.result_ref)
+
+    def test_task_lifecycle_defines_credit_state_transitions(self) -> None:
+        expected_states = {
+            "requested",
+            "quoted",
+            "needs_approval",
+            "approved",
+            "escrowed",
+            "accepted",
+            "running",
+            "result_ready",
+            "result_accepted",
+            "released",
+            "completed",
+            "canceled",
+            "disputed",
+            "refused",
+            "failed",
+        }
+        self.assertTrue(expected_states.issubset({state.value for state in TaskState}))
+        self.assertEqual(TaskState.QUOTED, normalize_task_state(" quoted "))
+        quoted_request = TaskRequest(
+            task_id="task_quoted",
+            thread_id="thread_1",
+            requester=Handle("@researcher:seagull.local"),
+            recipient=Handle("@reviewer:seagull.local"),
+            objective="Quote this task.",
+            state="quoted",
+        )
+        self.assertEqual(TaskState.QUOTED, quoted_request.state)
+
+        credit_path = (
+            TaskState.REQUESTED,
+            TaskState.QUOTED,
+            TaskState.NEEDS_APPROVAL,
+            TaskState.APPROVED,
+            TaskState.ESCROWED,
+            TaskState.ACCEPTED,
+            TaskState.RUNNING,
+            TaskState.RESULT_READY,
+            TaskState.RESULT_ACCEPTED,
+            TaskState.RELEASED,
+            TaskState.COMPLETED,
+        )
+        for current, next_state in zip(credit_path, credit_path[1:]):
+            self.assertTrue(task_lifecycle_allows(current, next_state))
+
+        self.assertIn(TaskState.NEEDS_APPROVAL, TASK_LIFECYCLE_TRANSITIONS[TaskState.REQUESTED])
+        self.assertIn(TaskState.DISPUTED, task_lifecycle_next_states(TaskState.RESULT_READY))
+        self.assertIn(TaskState.CANCELED, task_lifecycle_next_states(TaskState.DISPUTED))
+        self.assertEqual((), task_lifecycle_next_states(TaskState.COMPLETED))
+        with self.assertRaises(ProtocolError):
+            normalize_task_state("unknown")
 
     def test_stream_event_reserves_future_resume_and_final_message_fields(self) -> None:
         event = StreamEvent(

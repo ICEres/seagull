@@ -25,6 +25,8 @@ from message_hub.domain.models import (
     RoutingRuleMode,
     SendMessageResult,
     StoredPayload,
+    TASK_INACTIVE_STATES,
+    TASK_LIFECYCLE_TRANSITIONS,
     TaskRecord,
     TaskResultRecord,
     TaskState,
@@ -34,6 +36,8 @@ from message_hub.domain.models import (
     ThreadRecord,
     ThreadSummary,
     WorkflowTraceEntry,
+    task_lifecycle_allows,
+    task_lifecycle_next_states,
 )
 from message_hub.domain.service import (
     DuplicateAgentHandleError,
@@ -80,6 +84,8 @@ __all__ = [
     "SafetyBlockedError",
     "SendMessageResult",
     "StoredPayload",
+    "TASK_INACTIVE_STATES",
+    "TASK_LIFECYCLE_TRANSITIONS",
     "TaskRecord",
     "TaskResultRecord",
     "TaskState",
@@ -91,4 +97,6 @@ __all__ = [
     "WorkflowTraceEntry",
     "delivery_created_event",
     "sign_webhook_body",
+    "task_lifecycle_allows",
+    "task_lifecycle_next_states",
 ]

@@ -32,13 +32,111 @@ class RoutingRuleMode(str, Enum):
 
 class TaskState(str, Enum):
     REQUESTED = "requested"
+    QUOTED = "quoted"
+    NEEDS_APPROVAL = "needs_approval"
+    APPROVED = "approved"
+    ESCROWED = "escrowed"
     ACCEPTED = "accepted"
     RUNNING = "running"
-    NEEDS_APPROVAL = "needs_approval"
     RESULT_READY = "result_ready"
+    RESULT_ACCEPTED = "result_accepted"
+    RELEASED = "released"
     COMPLETED = "completed"
+    CANCELED = "canceled"
+    DISPUTED = "disputed"
     REFUSED = "refused"
     FAILED = "failed"
+
+
+TASK_LIFECYCLE_TRANSITIONS: dict[TaskState, tuple[TaskState, ...]] = {
+    TaskState.REQUESTED: (
+        TaskState.QUOTED,
+        TaskState.NEEDS_APPROVAL,
+        TaskState.ACCEPTED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.QUOTED: (
+        TaskState.NEEDS_APPROVAL,
+        TaskState.APPROVED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.NEEDS_APPROVAL: (
+        TaskState.APPROVED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.APPROVED: (
+        TaskState.ESCROWED,
+        TaskState.ACCEPTED,
+        TaskState.CANCELED,
+    ),
+    TaskState.ESCROWED: (
+        TaskState.ACCEPTED,
+        TaskState.RUNNING,
+        TaskState.CANCELED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.ACCEPTED: (
+        TaskState.RUNNING,
+        TaskState.RESULT_READY,
+        TaskState.COMPLETED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+    ),
+    TaskState.RUNNING: (
+        TaskState.RESULT_READY,
+        TaskState.COMPLETED,
+        TaskState.FAILED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RESULT_READY: (
+        TaskState.RESULT_ACCEPTED,
+        TaskState.COMPLETED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RESULT_ACCEPTED: (
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+        TaskState.DISPUTED,
+    ),
+    TaskState.RELEASED: (TaskState.COMPLETED,),
+    TaskState.DISPUTED: (
+        TaskState.RESULT_ACCEPTED,
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+        TaskState.CANCELED,
+    ),
+    TaskState.COMPLETED: (),
+    TaskState.CANCELED: (),
+    TaskState.REFUSED: (),
+    TaskState.FAILED: (TaskState.DISPUTED,),
+}
+
+TASK_INACTIVE_STATES = frozenset(
+    {
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+        TaskState.CANCELED,
+        TaskState.REFUSED,
+        TaskState.FAILED,
+    }
+)
+
+
+def _coerce_task_state(state: TaskState | str) -> TaskState:
+    if isinstance(state, TaskState):
+        return state
+    return TaskState(str(state).strip().lower())
+
+
+def task_lifecycle_next_states(state: TaskState | str) -> tuple[TaskState, ...]:
+    return TASK_LIFECYCLE_TRANSITIONS[_coerce_task_state(state)]
+
+
+def task_lifecycle_allows(current: TaskState | str, next_state: TaskState | str) -> bool:
+    return _coerce_task_state(next_state) in task_lifecycle_next_states(current)
 
 
 @dataclass(frozen=True, slots=True)

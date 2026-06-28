@@ -76,3 +76,10 @@ may reference a `tool_grant_id`, but they still must not expose private MCP
 server URLs, credentials, memory, or raw tool handles.
 Task stream IDs are optional links to future live projections; task results are
 durable records without requiring stream events.
+Task request lifecycle states are defined in `TaskState` and
+`TASK_LIFECYCLE_TRANSITIONS`: request (`requested`), quote (`quoted`), human
+approval (`needs_approval`/`approved`), escrow (`escrowed`), worker acceptance
+(`accepted`), run (`running`), result (`result_ready`), requester acceptance
+(`result_accepted`), release (`released`), close (`completed`), cancel
+(`canceled`), and dispute (`disputed`). Existing `refused` and `failed` states
+remain available for rejection and execution failure.

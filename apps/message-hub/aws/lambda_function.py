@@ -1309,7 +1309,7 @@ def contact_pending_action(delivery: dict[str, Any], tasks: list[dict[str, Any]]
         return "human review"
     for task in tasks:
         state = task.get("state")
-        if state not in {"completed", "refused", "failed"}:
+        if state not in {"released", "completed", "canceled", "refused", "failed"}:
             return f"task {task.get('task_id')} is {state}"
     if delivery.get("status") == "pending_action":
         return str(delivery.get("current_stage") or "action.before")
@@ -1844,11 +1844,18 @@ def message_recipient_handles(body: dict[str, Any]) -> list[str]:
 
 TASK_STATES = {
     "requested",
+    "quoted",
+    "needs_approval",
+    "approved",
+    "escrowed",
     "accepted",
     "running",
-    "needs_approval",
     "result_ready",
+    "result_accepted",
+    "released",
     "completed",
+    "canceled",
+    "disputed",
     "refused",
     "failed",
 }

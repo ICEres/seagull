@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from message_hub._compat import dataclass
 from message_hub.domain import (
     ActionRequest,
     AgentDecisionResult,

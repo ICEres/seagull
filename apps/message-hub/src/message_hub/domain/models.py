@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from message_hub._compat import dataclass
 
 
 def utc_now() -> datetime:
@@ -266,6 +268,38 @@ class Agent:
     webhook_url: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTokenRecord:
+    token_id: str
+    token_hash: str
+    agent_id: str
+    agent_handle: str
+    scopes: tuple[str, ...]
+    name: str | None = None
+    owner_user_id: str | None = None
+    node_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedAgentToken:
+    token: str
+    record: AgentTokenRecord
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTokenPrincipal:
+    token_id: str
+    agent_id: str
+    agent_handle: str
+    scopes: frozenset[str]
+    owner_user_id: str | None = None
+    node_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

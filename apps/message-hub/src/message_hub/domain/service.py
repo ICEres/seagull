@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -13,6 +14,8 @@ from message_hub.domain.models import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    AgentTokenPrincipal,
+    AgentTokenRecord,
     ContactExplanation,
     ContextBudget,
     ContextPack,
@@ -20,6 +23,7 @@ from message_hub.domain.models import (
     Delivery,
     DeliveryStatus,
     InboxItem,
+    IssuedAgentToken,
     Message,
     MessageRef,
     PayloadCompaction,
@@ -91,6 +95,10 @@ class PayloadUnavailableError(MessageHubError):
     """Raised when payload metadata exists but content bytes are unavailable."""
 
 
+class AgentTokenVerificationError(MessageHubError):
+    """Raised when scoped agent-runtime token validation fails."""
+
+
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
 DeliveryEventPublisher = Callable[[dict[str, Any]], None]
@@ -111,6 +119,15 @@ PAYLOAD_RETENTION_STATES = {
     PAYLOAD_RETENTION_COMPACTED,
     PAYLOAD_RETENTION_DELETED,
 }
+AGENT_TOKEN_PREFIX = "sga"
+AGENT_TOKEN_SCOPES = frozenset(
+    {
+        "agent:read",
+        "agent:inbox",
+        "agent:post",
+        "agent:ack",
+    }
+)
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -188,6 +205,91 @@ class MessageHubService:
         )
         self._repository.add_agent(agent)
         return agent
+
+    def issue_agent_token(
+        self,
+        agent_handle: str,
+        *,
+        scopes: Sequence[str],
+        name: str | None = None,
+        owner_user_id: str | None = None,
+        node_id: str | None = None,
+        expires_at: datetime | None = None,
+    ) -> IssuedAgentToken:
+        agent = self._require_agent_by_handle(agent_handle)
+        normalized_scopes = normalize_agent_token_scopes(scopes)
+        normalized_expires_at = normalize_payload_ttl_expires_at(expires_at)
+        token_id = secrets.token_hex(12)
+        secret = secrets.token_hex(32)
+        token = f"{AGENT_TOKEN_PREFIX}_{token_id}_{secret}"
+        now = self._clock()
+        record = AgentTokenRecord(
+            token_id=token_id,
+            token_hash=hash_token_parts(token_id, secret),
+            agent_id=agent.agent_id,
+            agent_handle=agent.handle,
+            scopes=normalized_scopes,
+            name=normalized_optional_string(name),
+            owner_user_id=normalized_optional_string(owner_user_id),
+            node_id=normalized_optional_string(node_id),
+            created_at=now,
+            expires_at=normalized_expires_at,
+        )
+        self._repository.put_agent_token(record)
+        return IssuedAgentToken(token=token, record=record)
+
+    def verify_agent_token(
+        self,
+        token: str,
+        *,
+        required_scope: str | None = None,
+        agent_handle: str | None = None,
+    ) -> AgentTokenPrincipal:
+        token_id, secret = parse_agent_token(token)
+        record = self._repository.get_agent_token(token_id)
+        if record is None:
+            raise AgentTokenVerificationError("agent token not found")
+        if not secrets.compare_digest(hash_token_parts(token_id, secret), record.token_hash):
+            raise AgentTokenVerificationError("agent token is invalid")
+
+        checked_at = self._clock()
+        if record.revoked_at is not None:
+            raise AgentTokenVerificationError("agent token is revoked")
+        if record.expires_at is not None and record.expires_at <= checked_at:
+            raise AgentTokenVerificationError("agent token is expired")
+
+        normalized_scope = normalized_optional_string(required_scope)
+        if normalized_scope is not None:
+            normalized_scope = normalize_agent_token_scope(normalized_scope)
+            if normalized_scope not in record.scopes:
+                raise AgentTokenVerificationError(f"missing agent token scope: {normalized_scope}")
+
+        if agent_handle is not None:
+            normalized_handle = normalize_handle(agent_handle)
+            if normalized_handle != record.agent_handle:
+                raise AgentTokenVerificationError(
+                    f"agent token cannot access agent: {normalized_handle}"
+                )
+
+        updated = replace(record, last_used_at=checked_at)
+        self._repository.update_agent_token(updated)
+        return AgentTokenPrincipal(
+            token_id=updated.token_id,
+            agent_id=updated.agent_id,
+            agent_handle=updated.agent_handle,
+            scopes=frozenset(updated.scopes),
+            owner_user_id=updated.owner_user_id,
+            node_id=updated.node_id,
+        )
+
+    def revoke_agent_token(self, token_id: str) -> AgentTokenRecord:
+        normalized_token_id = normalize_required(token_id, "token_id")
+        record = self._repository.get_agent_token(normalized_token_id)
+        if record is None:
+            raise NotFoundError(f"agent token not found: {normalized_token_id}")
+        updated = replace(record, revoked_at=self._clock())
+        self._repository.update_agent_token(updated)
+        return updated
 
     def add_routing_rule(
         self,
@@ -2457,7 +2559,10 @@ class MessageHubService:
         if self._delivery_event_publisher is None:
             return
 
-        for delivery, recipient in zip(deliveries, recipients, strict=True):
+        if len(deliveries) != len(recipients):
+            raise MessageHubError("delivery and recipient counts differ")
+
+        for delivery, recipient in zip(deliveries, recipients):
             if recipient.trigger_mode != "webhook":
                 continue
             self._delivery_event_publisher(
@@ -2710,6 +2815,31 @@ def selected_payload_chunks(content: bytes, chunk_bytes: int) -> tuple[bytes, ..
 
 def payload_hash(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def hash_token_parts(token_id: str, secret: str) -> str:
+    return hashlib.sha256(f"{token_id}.{secret}".encode("utf-8")).hexdigest()
+
+
+def parse_agent_token(token: str) -> tuple[str, str]:
+    parts = token.split("_", 2)
+    if len(parts) != 3 or parts[0] != AGENT_TOKEN_PREFIX or not parts[1] or not parts[2]:
+        raise AgentTokenVerificationError("agent token has invalid format")
+    return parts[1], parts[2]
+
+
+def normalize_agent_token_scope(scope: str) -> str:
+    normalized = normalize_required(scope, "scope").lower()
+    if normalized not in AGENT_TOKEN_SCOPES:
+        raise InvalidMessageError(f"unknown agent token scope: {normalized}")
+    return normalized
+
+
+def normalize_agent_token_scopes(scopes: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(sorted({normalize_agent_token_scope(scope) for scope in scopes}))
+    if not normalized:
+        raise InvalidMessageError("agent token scopes are required")
+    return normalized
 
 
 def require_small_inline(value: str, field_name: str) -> None:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Protocol
 
+from message_hub._compat import dataclass
 from message_hub.domain.models import Agent
 from seagull_policy import RiskLabel, SafetyAction, SafetyDecision
 

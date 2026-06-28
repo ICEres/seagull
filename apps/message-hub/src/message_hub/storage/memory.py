@@ -6,6 +6,7 @@ from threading import RLock
 
 from message_hub.domain.models import (
     Agent,
+    AgentTokenRecord,
     Delivery,
     Message,
     RoutingRule,
@@ -32,6 +33,8 @@ class InMemoryMessageHubRepository:
         self._lock = RLock()
         self._agents_by_id: dict[str, Agent] = {}
         self._agent_id_by_handle: dict[str, str] = {}
+        self._agent_tokens_by_id: dict[str, AgentTokenRecord] = {}
+        self._agent_token_ids_by_agent: dict[str, list[str]] = defaultdict(list)
         self._messages_by_id: dict[str, Message] = {}
         self._message_ids_by_thread: dict[str, list[str]] = defaultdict(list)
         self._message_ids_by_sender: dict[str, list[str]] = defaultdict(list)
@@ -87,6 +90,34 @@ class InMemoryMessageHubRepository:
             if agent_id is None:
                 return None
             return self._agents_by_id[agent_id]
+
+    def put_agent_token(self, token: AgentTokenRecord) -> None:
+        with self._lock:
+            if token.token_id in self._agent_tokens_by_id:
+                raise ValueError(f"agent token already exists: {token.token_id}")
+            self._agent_tokens_by_id[token.token_id] = token
+            self._agent_token_ids_by_agent[token.agent_id].append(token.token_id)
+
+    def get_agent_token(self, token_id: str) -> AgentTokenRecord | None:
+        with self._lock:
+            return self._agent_tokens_by_id.get(token_id)
+
+    def update_agent_token(self, token: AgentTokenRecord) -> None:
+        with self._lock:
+            if token.token_id not in self._agent_tokens_by_id:
+                raise ValueError(f"agent token does not exist: {token.token_id}")
+            self._agent_tokens_by_id[token.token_id] = token
+
+    def list_agent_tokens_by_agent(self, agent_id: str) -> tuple[AgentTokenRecord, ...]:
+        with self._lock:
+            tokens = [
+                self._agent_tokens_by_id[token_id]
+                for token_id in self._agent_token_ids_by_agent.get(agent_id, [])
+                if token_id in self._agent_tokens_by_id
+            ]
+
+        tokens.sort(key=lambda token: (token.created_at, token.token_id), reverse=True)
+        return tuple(tokens)
 
     def put_message(self, message: Message) -> None:
         with self._lock:

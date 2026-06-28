@@ -7,6 +7,7 @@ from itertools import count
 from unittest import TestCase
 
 from message_hub.domain import (
+    AgentTokenVerificationError,
     DeliveryStatus,
     ForbiddenDeliveryError,
     ForbiddenPayloadError,
@@ -80,6 +81,82 @@ class MessageHubServiceTest(TestCase):
         context = self.service.get_thread_context(result.thread.thread_id)
         self.assertIsNone(context.summary)
         self.assertEqual((result.message,), context.recent_messages)
+
+    def test_agent_token_issue_stores_hash_and_validates_scope(self) -> None:
+        issued = self.service.issue_agent_token(
+            "@reviewer:gulls.ai",
+            scopes=("agent:inbox", "agent:read", "agent:inbox"),
+            name="reviewer runtime",
+            owner_user_id="user_1",
+            node_id="node_1",
+            expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(days=1),
+        )
+
+        self.assertTrue(issued.token.startswith("sga_"))
+        self.assertNotEqual(issued.token, issued.record.token_hash)
+        self.assertNotIn(issued.token, issued.record.token_hash)
+        self.assertEqual(self.recipient.agent_id, issued.record.agent_id)
+        self.assertEqual("@reviewer:gulls.ai", issued.record.agent_handle)
+        self.assertEqual(("agent:inbox", "agent:read"), issued.record.scopes)
+        self.assertEqual("user_1", issued.record.owner_user_id)
+        self.assertEqual("node_1", issued.record.node_id)
+        self.assertIsNone(issued.record.last_used_at)
+        self.assertIsNone(issued.record.revoked_at)
+
+        principal = self.service.verify_agent_token(
+            issued.token,
+            required_scope="agent:inbox",
+            agent_handle="@reviewer:gulls.ai",
+        )
+        stored = self.repository.get_agent_token(issued.record.token_id)
+
+        self.assertEqual(issued.record.token_id, principal.token_id)
+        self.assertEqual(self.recipient.agent_id, principal.agent_id)
+        self.assertEqual("@reviewer:gulls.ai", principal.agent_handle)
+        self.assertEqual(frozenset({"agent:inbox", "agent:read"}), principal.scopes)
+        self.assertEqual("user_1", principal.owner_user_id)
+        self.assertEqual("node_1", principal.node_id)
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(issued.record.token_hash, stored.token_hash)
+        self.assertIsNotNone(stored.last_used_at)
+
+    def test_agent_token_rejects_invalid_expired_revoked_scope_and_cross_agent_use(self) -> None:
+        issued = self.service.issue_agent_token(
+            "@reviewer:gulls.ai",
+            scopes=("agent:read",),
+        )
+
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token("sgc_not_an_agent_token")
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token(f"{issued.token}tampered")
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token(issued.token, required_scope="agent:post")
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token(issued.token, agent_handle="@researcher:gulls.ai")
+        with self.assertRaises(InvalidMessageError):
+            self.service.issue_agent_token(
+                "@reviewer:gulls.ai",
+                scopes=("messages:write",),
+            )
+
+        expired = self.service.issue_agent_token(
+            "@reviewer:gulls.ai",
+            scopes=("agent:read",),
+            expires_at=datetime(2026, 6, 12, tzinfo=timezone.utc) + timedelta(seconds=1),
+        )
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token(expired.token, required_scope="agent:read")
+
+        revoked = self.service.issue_agent_token(
+            "@reviewer:gulls.ai",
+            scopes=("agent:read",),
+        )
+        revoked_record = self.service.revoke_agent_token(revoked.record.token_id)
+        self.assertIsNotNone(revoked_record.revoked_at)
+        with self.assertRaises(AgentTokenVerificationError):
+            self.service.verify_agent_token(revoked.token, required_scope="agent:read")
 
     def test_local_payload_storage_compresses_and_hashes_payload(self) -> None:
         content = ("Large local payload.\n" * 500).encode("utf-8")

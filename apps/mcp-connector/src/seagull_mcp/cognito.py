@@ -5,10 +5,11 @@ import binascii
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Any, Protocol
 from urllib import request
 
+from seagull_mcp._compat import dataclass
 from seagull_mcp.auth import (
     PermissionDeniedError,
     Principal,

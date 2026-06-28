@@ -5,6 +5,7 @@ from typing import Protocol
 
 from message_hub.domain.models import (
     Agent,
+    AgentTokenRecord,
     Delivery,
     Message,
     StoredPayload,
@@ -32,6 +33,18 @@ class MessageHubRepository(Protocol):
 
     def get_agent_by_handle(self, handle: str) -> Agent | None:
         """Return an agent by normalized handle."""
+
+    def put_agent_token(self, token: AgentTokenRecord) -> None:
+        """Persist a scoped agent-runtime token record."""
+
+    def get_agent_token(self, token_id: str) -> AgentTokenRecord | None:
+        """Return a scoped agent-runtime token record by token ID."""
+
+    def update_agent_token(self, token: AgentTokenRecord) -> None:
+        """Replace a scoped agent-runtime token record."""
+
+    def list_agent_tokens_by_agent(self, agent_id: str) -> tuple[AgentTokenRecord, ...]:
+        """Return agent-runtime token records for one agent in newest-first order."""
 
     def put_message(self, message: Message) -> None:
         """Persist an immutable message."""

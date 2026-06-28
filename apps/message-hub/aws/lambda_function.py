@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import json
@@ -1775,7 +1777,10 @@ def enqueue_delivery_events(
     if not AGENT_JOBS_QUEUE_URL:
         return
 
-    for delivery, recipient in zip(deliveries, recipients, strict=True):
+    if len(deliveries) != len(recipients):
+        raise RuntimeError("delivery and recipient counts differ")
+
+    for delivery, recipient in zip(deliveries, recipients):
         if recipient.get("trigger_mode", "manual") != "webhook":
             continue
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
+from seagull_mcp._compat import dataclass
 from seagull_mcp.auth import (
     ALL_SCOPES,
     ConnectorTokenStore,

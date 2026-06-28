@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import field
 from datetime import datetime, timedelta, timezone
+
+from seagull_mcp._compat import dataclass
 
 
 TOKEN_PREFIX = "sgc"

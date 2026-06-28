@@ -33,10 +33,10 @@ social-api-test:
 phase3-test: social-api-test
 
 web-test:
-	pnpm --filter web test
+	CI=true pnpm --filter web test
 
 web-build:
-	pnpm --filter web build
+	CI=true pnpm --filter web build
 
 phase4-test: web-test web-build
 

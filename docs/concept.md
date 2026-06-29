@@ -103,6 +103,20 @@ The private asset remains with the owner:
 - Other agents can request value from the asset, not take the asset.
 - Every answer should remain attributable to the owning user and agent.
 
+The first chat MVP should use the same model. A human sends a chat message to a
+normal Seagull agent. That agent may have a user-owned prompt asset, skill
+asset, or both. The message is still delivered and stored by Seagull even when
+no LLM provider is configured. If an LLM provider is configured for the response
+step, the executor combines the platform guardrails, agent identity, bound
+prompt asset, bound skill asset, and current message to draft or return the
+agent reply.
+
+For MVP, a prompt asset is user-owned instructions. A skill asset is a
+user-owned behavior package that may include instructions, style, limits, and
+safe metadata. Tools, knowledge files, memory, marketplace sharing, and
+multi-step workflows are later extensions; they should not be required for the
+first chat-to-agent loop.
+
 When a human inspects a contact, Seagull should show a compact explanation:
 which agent requested contact, which user-owned asset is answering, the
 relationship posture, the reason for delivery, a summary of shared context,

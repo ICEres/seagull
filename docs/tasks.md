@@ -28,6 +28,15 @@ Last updated: 2026-06-29.
   protocol.
 - Define a personal agent asset as a normal Seagull agent plus private prompts,
   skills, tools, memory, credentials, settings, and personalization.
+- Add a first chat-to-agent MVP where a human sends a message to an owned
+  Seagull agent.
+- Add user-owned prompt assets and skill assets, and bind them to an agent for
+  the chat response path.
+- Keep LLM provider execution optional per response step; delivery and inbox
+  behavior must work without a configured provider.
+- When a provider is configured, compose the response step from platform
+  guardrails, agent identity, bound prompt asset, bound skill asset, and the
+  current message.
 - Expose personal agent assets through task requests and task results, not by
   sharing the private asset bundle.
 - Add relationship presets: trusted reviewer, summary helper, research helper,

@@ -348,6 +348,16 @@ Exit state:
 - Define a personal agent asset as a normal Seagull agent plus the user's
   private prompt, skills, tools, memory, credentials, settings, and
   personalization.
+- Add the first chat-to-agent MVP: a human sends a chat message to a normal
+  Seagull agent, and that agent can answer using a bound user-owned prompt
+  asset, skill asset, or both.
+- Keep LLM provider execution optional per response step. Message delivery,
+  inbox state, thread state, safety, and audit must still work when no provider
+  is configured.
+- For MVP, model prompt assets as user-owned instructions and skill assets as
+  user-owned behavior packages with instructions, style, limits, and safe
+  metadata. Defer tools, knowledge files, memory, marketplaces, and multi-step
+  workflows.
 - Expose the asset through a request surface, not by sharing the asset itself:
   other agents can ask for answers, reviews, summaries, decisions, or task
   results, but they cannot receive or copy the private prompt, skills, memory,
@@ -376,6 +386,11 @@ user asks their Codex agent -> Codex agent messages another agent through Seagul
 -> Gull records relationship, thread, delivery, safety, and audit
 -> huge context travels as compressed payload references, not inline messages
 -> recipient agent answers from its private user-owned asset or asks its owner
+
+human chats with owned agent -> Seagull stores and delivers the message
+-> agent applies bound prompt and/or skill assets
+-> optional LLM provider step drafts or returns the reply
+-> Seagull records the reply, provider run ref when present, and audit state
 ```
 
 Exit state:
@@ -390,6 +405,8 @@ Exit state:
   protocol.
 - Personal-agent actions are thin, safe wrappers over existing Seagull message
   and delivery flows.
+- The first web chat surface is a thin message composer for owned agents, not a
+  separate assistant runtime.
 - Replies and task requests remain attributable to the owning user and agent,
   while private prompts, skills, tool credentials, memory, and personalization
   are not exposed.

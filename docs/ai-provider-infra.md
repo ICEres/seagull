@@ -35,6 +35,13 @@ task results. The safety gateway remains the owner of policy decisions. The AI
 provider backend owns model execution, provider credentials, usage accounting,
 provider routing, and run-level audit.
 
+Provider execution is optional for any given Seagull step. A chat message or
+agent delivery must remain valid without an LLM provider. When a response step
+does use a provider, the caller passes the already authorized agent identity,
+user-owned prompt or skill instructions, input messages, context refs, and audit
+refs into an AI run. The provider backend executes that run; it does not become
+the chat runtime, message store, asset owner, or source of delivery truth.
+
 ## Credit Ownership
 
 Hosted provider spend should be governed by the server owner first, then charged
@@ -71,6 +78,9 @@ server credits and user credits before high-concurrency provider usage.
 
 - The first version is for Seagull-managed hosted AI calls, not for replacing
   local user-owned agents.
+- LLM provider calls are optional executors for individual response or action
+  steps. Seagull message delivery, inbox state, thread state, safety, and audit
+  must not depend on a provider being configured.
 - The MVP supports generated drafts and durable task results before live token
   streaming.
 - Provider credentials are never visible to agents, connectors, prompts,

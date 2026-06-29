@@ -18,34 +18,52 @@ curl -fsS "$API_URL/health"
 echo
 echo
 
-echo "Register sender:"
+echo "Register sender and issue runtime token:"
 curl -fsS \
-  -X POST "$API_URL/agents" \
+  -X POST "$API_URL/agent-registrations" \
   -H "content-type: application/json" \
   -d '{
     "handle": "@researcher:seagull.local",
-    "display_name": "Researcher"
-  }'
+    "display_name": "Researcher",
+    "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+    "name": "researcher smoke runtime",
+    "node_id": "aws-smoke"
+  }' | tee .local/aws-smoke-sender-registration.json
 echo
 echo
 
-echo "Register recipient:"
+echo "Register recipient and issue runtime token:"
 curl -fsS \
-  -X POST "$API_URL/agents" \
+  -X POST "$API_URL/agent-registrations" \
   -H "content-type: application/json" \
   -d '{
     "handle": "@reviewer:seagull.local",
-    "display_name": "Reviewer"
-  }'
+    "display_name": "Reviewer",
+    "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+    "name": "reviewer smoke runtime",
+    "node_id": "aws-smoke"
+  }' | tee .local/aws-smoke-recipient-registration.json
 echo
 echo
 
-echo "Create message:"
+SENDER_TOKEN="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-sender-registration.json")); print(data["token"])')"
+RECIPIENT_TOKEN="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-recipient-registration.json")); print(data["token"])')"
+python3 -c 'import json; data=json.load(open(".local/aws-smoke-recipient-registration.json")); assert "token_hash" not in data["record"]; assert data["token"].startswith("sga_")'
+
+echo "Agent me:"
 curl -fsS \
-  -X POST "$API_URL/messages" \
+  "$API_URL/agent/me" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" | tee .local/aws-smoke-agent-me.json
+echo
+echo
+
+echo "Create runtime post:"
+curl -fsS \
+  -X POST "$API_URL/agent/posts" \
   -H "content-type: application/json" \
+  -H "authorization: Bearer $SENDER_TOKEN" \
   -d '{
-    "sender_handle": "@researcher:seagull.local",
+    "sender_handle": "@spoofed:seagull.local",
     "recipient_handles": ["@reviewer:seagull.local"],
     "intent": "message",
     "visibility": "direct",
@@ -56,63 +74,41 @@ echo
 
 MESSAGE_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); print(data["message_id"])')"
 THREAD_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); print(data["thread_id"])')"
-RECIPIENT_PATH="$(python3 -c 'import urllib.parse; print(urllib.parse.quote("@reviewer:seagull.local", safe=""))')"
-SENDER_PATH="$(python3 -c 'import urllib.parse; print(urllib.parse.quote("@researcher:seagull.local", safe=""))')"
+DELIVERY_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); print(data["deliveries"][0]["delivery_id"])')"
 
-python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); assert data["message"]["safety_status"] == "approved"'
+python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); assert data["message"]["safety_status"] == "approved"; assert data["message"]["sender_handle"] == "@researcher:seagull.local"'
 
-echo "Inbox:"
-curl -fsS "$API_URL/agents/$RECIPIENT_PATH/inbox?limit=5"
-echo
-echo
-
-echo "Sent:"
-curl -fsS "$API_URL/agents/$SENDER_PATH/sent?limit=5"
-echo
-echo
-
-echo "Thread:"
-curl -fsS "$API_URL/threads/$THREAD_ID?limit=10" | tee .local/aws-smoke-thread-before-reply.json
-echo
-echo
-
-echo "Thread context:"
-curl -fsS "$API_URL/threads/$THREAD_ID/context?limit=5"
-echo
-echo
-
-echo "Create reply:"
+echo "Runtime inbox:"
 curl -fsS \
-  -X POST "$API_URL/messages" \
+  "$API_URL/agent/inbox?limit=5" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" | tee .local/aws-smoke-inbox.json
+echo
+echo
+
+MESSAGE_ID="$MESSAGE_ID" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-inbox.json")); ids=[item["message"]["message_id"] for item in data["items"]]; assert os.environ["MESSAGE_ID"] in ids'
+
+echo "Runtime delivery decision reply:"
+curl -fsS \
+  -X POST "$API_URL/agent/deliveries/$DELIVERY_ID/decision" \
   -H "content-type: application/json" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" \
   -d "{
-    \"sender_handle\": \"@reviewer:seagull.local\",
-    \"recipient_handles\": [\"@researcher:seagull.local\"],
-    \"intent\": \"reply\",
-    \"visibility\": \"direct\",
-    \"thread_id\": \"$THREAD_ID\",
+    \"agent_handle\": \"@spoofed:seagull.local\",
+    \"decision\": \"reply\",
     \"content\": \"Reply from the Seagull AWS Phase 1 loop.\"
-  }" | tee .local/aws-smoke-reply.json
+  }" | tee .local/aws-smoke-decision.json
 echo
 echo
 
-REPLY_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-reply.json")); print(data["message_id"])')"
+THREAD_ID="$THREAD_ID" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-decision.json")); assert data["delivery"]["status"] == "replied"; assert data["reply"]["thread_id"] == os.environ["THREAD_ID"]; assert data["reply"]["message"]["sender_handle"] == "@reviewer:seagull.local"'
 
-echo "Thread after reply:"
-curl -fsS "$API_URL/threads/$THREAD_ID?limit=10" | tee .local/aws-smoke-thread-after-reply.json
-echo
-echo
-
-MESSAGE_ID="$MESSAGE_ID" REPLY_ID="$REPLY_ID" python3 -c 'import json, os; thread=json.load(open(".local/aws-smoke-thread-after-reply.json")); ids=[m["message_id"] for m in thread["messages"]]; assert os.environ["MESSAGE_ID"] in ids and os.environ["REPLY_ID"] in ids'
-
-echo "Ack:"
+echo "Runtime ack:"
 curl -fsS \
-  -X POST "$API_URL/messages/$MESSAGE_ID/ack" \
-  -H "content-type: application/json" \
-  -d '{
-    "recipient_handle": "@reviewer:seagull.local"
-  }'
+  -X POST "$API_URL/agent/deliveries/$DELIVERY_ID/ack" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" | tee .local/aws-smoke-ack.json
 echo
+
+python3 -c 'import json; data=json.load(open(".local/aws-smoke-ack.json")); assert data["delivery"]["status"] == "acked"'
 
 echo
 echo "Blocked safety check:"
@@ -120,10 +116,10 @@ BLOCKED_STATUS="$(
   curl -sS \
     -o .local/aws-smoke-blocked.json \
     -w "%{http_code}" \
-    -X POST "$API_URL/messages" \
+    -X POST "$API_URL/agent/posts" \
     -H "content-type: application/json" \
+    -H "authorization: Bearer $SENDER_TOKEN" \
     -d '{
-      "sender_handle": "@researcher:seagull.local",
       "recipient_handles": ["@reviewer:seagull.local"],
       "intent": "message",
       "visibility": "direct",

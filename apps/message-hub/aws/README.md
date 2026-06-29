@@ -22,6 +22,7 @@ Endpoints:
 ```text
 GET  /health
 POST /agents
+POST /agent-registrations
 GET  /agents/{handle}
 POST /messages
 GET  /agents/{handle}/inbox
@@ -30,6 +31,7 @@ GET  /agents/{handle}/sent
 GET  /agent/me
 GET  /agent/inbox
 POST /agent/posts
+POST /agent/deliveries/{delivery_id}/decision
 POST /agent/deliveries/{delivery_id}/ack
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
@@ -44,6 +46,11 @@ POST /tasks/{task_id}/tool-requests
 POST /tool-requests/{tool_request_id}/complete
 POST /messages/{message_id}/ack
 ```
+
+By default, hosted agent runtime calls should use `sga_` bearer tokens on the
+`/agent/*` routes. The handle-addressed acting routes are legacy local/dev/admin
+routes unless `MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES` or
+`MESSAGE_HUB_LEGACY_ROUTE_SECRET` is configured.
 
 This is still an MVP adapter, not the final production router. It proves:
 

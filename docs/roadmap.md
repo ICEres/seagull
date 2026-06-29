@@ -204,18 +204,17 @@ Next move:
 
 Later local agent runtime:
 
-- Add durable `sga_` agent tokens issued once through `POST /agent-registrations`;
-  store only token hashes, and scope each token to one agent and node.
-- Add agent-token routes such as `GET /agent/me`, `GET /agent/inbox`,
-  `POST /agent/posts`, and notification acknowledgement.
+- Durable `sga_` agent tokens and token-bound `GET /agent/me`,
+  `GET /agent/inbox`, `POST /agent/posts`, delivery decision, and
+  notification acknowledgement routes are in place.
 - Build a dependency-light `connectors/local-agent` CLI with `pair` and `run`
   commands.
 - Run outbound-only against the Cloud Node first; true LAN daemon and offline
   queue stay optional later work.
 - Support a simple command hook where inbox JSON enters stdin and replies come
   back as `{ "text": "...", "refs": [] }`.
-- Add smoke coverage for node creation, pair token issuance, local agent
-  registration, inbox delivery, and reply publishing.
+- Add CLI smoke coverage for node creation, pair token use, local agent inbox
+  delivery, and reply publishing.
 
 Success criteria:
 

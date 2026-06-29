@@ -5,9 +5,11 @@ from typing import Any
 
 from message_hub._compat import dataclass
 from message_hub.domain import (
+    AGENT_TOKEN_SCOPES,
     ActionRequest,
-    AgentDecisionResult,
     Agent,
+    AgentDecisionResult,
+    AgentTokenRecord,
     AgentTokenVerificationError,
     ContactExplanation,
     ContextBudget,
@@ -191,6 +193,43 @@ class LocalMessageHubApi:
 
         return {"created": True, "agent": agent_to_dict(agent)}
 
+    def agent_registration(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            try:
+                agent = self._service.get_agent(required_string(body, "handle"))
+                created = False
+            except NotFoundError:
+                agent = self._service.register_agent(
+                    required_string(body, "handle"),
+                    display_name=optional_string(body, "display_name"),
+                    capabilities=string_list(body.get("capabilities", ()), "capabilities"),
+                    response_rules=response_rules_object(body.get("response_rules")),
+                    trigger_mode=optional_string(body, "trigger_mode") or "manual",
+                    webhook_url=optional_string(body, "webhook_url"),
+                )
+                created = True
+            issued = self._service.issue_agent_token(
+                agent.handle,
+                scopes=agent_registration_scopes(body),
+                name=optional_string(body, "name"),
+                owner_user_id=optional_string(body, "owner_user_id"),
+                node_id=optional_string(body, "node_id"),
+                expires_at=optional_datetime(body, "expires_at"),
+            )
+        except DuplicateAgentHandleError as exc:
+            raise ApiError(409, "conflict", str(exc)) from exc
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "created": created,
+            "agent": agent_to_dict(agent),
+            "token": issued.token,
+            "record": agent_token_record_to_dict(issued.record),
+        }
+
     def create_message(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
             result = self._service.send_message(
@@ -277,6 +316,11 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return {"delivery": delivery_to_dict(delivery)}
+
+    def agent_decide_delivery(self, authorization: str | None, delivery_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        wrapped = {**body, "agent_handle": principal.agent_handle}
+        return self.submit_delivery_decision(delivery_id, wrapped)
 
     def personal_agent_send(self, handle: str, body: dict[str, Any]) -> dict[str, Any]:
         wrapped = {**body, "sender_handle": handle}
@@ -996,6 +1040,28 @@ def agent_token_principal_to_dict(principal: Any) -> dict[str, Any]:
         "owner_user_id": principal.owner_user_id,
         "node_id": principal.node_id,
     }
+
+
+def agent_token_record_to_dict(record: AgentTokenRecord) -> dict[str, Any]:
+    return {
+        "token_id": record.token_id,
+        "agent_id": record.agent_id,
+        "agent_handle": record.agent_handle,
+        "scopes": sorted(record.scopes),
+        "name": record.name,
+        "owner_user_id": record.owner_user_id,
+        "node_id": record.node_id,
+        "created_at": datetime_to_string(record.created_at),
+        "expires_at": datetime_to_string(record.expires_at),
+        "last_used_at": datetime_to_string(record.last_used_at),
+        "revoked_at": datetime_to_string(record.revoked_at),
+    }
+
+
+def agent_registration_scopes(body: dict[str, Any]) -> tuple[str, ...]:
+    if body.get("scopes") is None:
+        return tuple(sorted(AGENT_TOKEN_SCOPES))
+    return string_list(body.get("scopes"), "scopes")
 
 
 def bearer_token_from_authorization(authorization: str | None) -> str:

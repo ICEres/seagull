@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
 CONTACT_EXPLANATION_SUMMARY_CHARS = 280
 AGENT_TOKEN_PREFIX = "sga"
 AGENT_TOKEN_SCOPES = frozenset({"agent:read", "agent:inbox", "agent:post", "agent:ack"})
+DEFAULT_AGENT_TOKEN_SCOPES = tuple(sorted(AGENT_TOKEN_SCOPES))
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -69,6 +71,12 @@ TASKS_TABLE = os.environ.get("TASKS_TABLE")
 TOOL_REQUESTS_TABLE = os.environ.get("TOOL_REQUESTS_TABLE")
 TASK_RESULTS_TABLE = os.environ.get("TASK_RESULTS_TABLE")
 AGENT_JOBS_QUEUE_URL = os.environ.get("AGENT_JOBS_QUEUE_URL")
+ALLOW_LEGACY_HANDLE_AGENT_ROUTES = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+LEGACY_HANDLE_ROUTE_SECRET = os.environ.get("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
 
 dynamodb = boto3.resource("dynamodb")
 sqs = boto3.client("sqs")
@@ -120,6 +128,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "POST" and path == "/agents":
             return register_agent(event)
 
+        if method == "POST" and path == "/agent-registrations":
+            return create_agent_registration(event)
+
+        if path == "/agent" or path.startswith("/agent/"):
+            return route_agent_runtime(method, path, event)
+
+        if method == "GET" and public_agent_profile_path(path):
+            handle = unquote(path.removeprefix("/agents/").strip("/"))
+            return read_agent(handle)
+
+        require_legacy_handle_routes_enabled(event)
+
         if method == "POST" and path == "/routing-rules":
             return create_routing_rule(event)
 
@@ -138,15 +158,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             handle = path_param(path, "/agents/", "/sent")
             return read_sent_messages(handle, event)
 
-        if method == "GET" and path.startswith("/agents/"):
-            handle = unquote(path.removeprefix("/agents/").strip("/"))
-            return read_agent(handle)
-
         if method == "POST" and path == "/messages":
             return create_message(event)
-
-        if path == "/agent" or path.startswith("/agent/"):
-            return route_agent_runtime(method, path, event)
 
         if path.startswith("/personal-agents/"):
             return route_personal_agent(method, path, event)
@@ -230,12 +243,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 def register_agent(event: dict[str, Any]) -> dict[str, Any]:
     body = parse_body(event)
+    agent, created = get_or_create_agent_from_body(body)
+    return response(201 if created else 200, {"created": created, "agent": public_agent(agent)})
+
+
+def create_agent_registration(event: dict[str, Any]) -> dict[str, Any]:
+    body = parse_body(event)
+    agent, created = get_or_create_agent_from_body(body)
+    issued = issue_agent_token(agent, body)
+    return response(
+        201,
+        {
+            "created": created,
+            "agent": public_agent(agent),
+            "token": issued["token"],
+            "record": public_agent_token_record(issued["record"]),
+        },
+    )
+
+
+def get_or_create_agent_from_body(body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     handle = normalize_handle(required(body, "handle"))
     now = now_iso()
 
     existing_agent = get_agent_by_handle(handle)
     if existing_agent is not None:
-        return response(200, {"created": False, "agent": public_agent(existing_agent)})
+        return existing_agent, False
 
     agent = {
         "agent_id": agent_id_for_handle(handle),
@@ -267,9 +300,33 @@ def register_agent(event: dict[str, Any]) -> dict[str, Any]:
         existing_agent = get_agent_by_handle(handle)
         if existing_agent is None:
             raise Conflict(f"agent already exists: {handle}") from exc
-        return response(200, {"created": False, "agent": public_agent(existing_agent)})
+        return existing_agent, False
 
-    return response(201, {"created": True, "agent": public_agent(agent)})
+    return agent, True
+
+
+def issue_agent_token(agent: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    require_agent_tokens_table()
+    token_id = secrets.token_hex(12)
+    secret = secrets.token_hex(32)
+    token = f"{AGENT_TOKEN_PREFIX}_{token_id}_{secret}"
+    now = now_iso()
+    record = without_none(
+        {
+            "token_id": token_id,
+            "token_hash": hash_token_parts(token_id, secret),
+            "agent_id": agent["agent_id"],
+            "agent_handle": agent["handle"],
+            "scopes": agent_token_scopes(body.get("scopes")),
+            "name": optional_string(body, "name"),
+            "owner_user_id": optional_string(body, "owner_user_id"),
+            "node_id": optional_string(body, "node_id"),
+            "created_at": now,
+            "expires_at": optional_datetime_string(body, "expires_at"),
+        }
+    )
+    agent_tokens_table.put_item(Item=record, ConditionExpression="attribute_not_exists(token_id)")
+    return {"token": token, "record": record}
 
 
 def read_agent(handle: str) -> dict[str, Any]:
@@ -521,6 +578,12 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
         body = parse_body(event)
         body["sender_handle"] = principal["agent_handle"]
         return create_message(event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "decision":
+        principal = require_agent_principal(event, "agent:post")
+        body = parse_body(event)
+        body["agent_handle"] = principal["agent_handle"]
+        return submit_delivery_decision(parts[2], event_with_json_body(body))
 
     if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
         principal = require_agent_principal(event, "agent:ack")
@@ -1586,6 +1649,27 @@ def require_agent_tokens_table() -> None:
         raise BadRequest("agent token table is not configured")
 
 
+def public_agent_profile_path(path: str) -> bool:
+    parts = [part for part in path.strip("/").split("/") if part]
+    return len(parts) == 2 and parts[0] == "agents"
+
+
+def require_legacy_handle_routes_enabled(event: dict[str, Any]) -> None:
+    if ALLOW_LEGACY_HANDLE_AGENT_ROUTES:
+        return
+    if LEGACY_HANDLE_ROUTE_SECRET:
+        headers = event.get("headers") or {}
+        provided = (
+            headers.get("x-seagull-legacy-secret")
+            or headers.get("X-Seagull-Legacy-Secret")
+            or headers.get("x-seagull-admin-secret")
+            or headers.get("X-Seagull-Admin-Secret")
+        )
+        if provided and hmac.compare_digest(provided, LEGACY_HANDLE_ROUTE_SECRET):
+            return
+    raise Unauthorized("legacy handle-based message hub routes are disabled; use /agent runtime routes")
+
+
 def require_agent_principal(event: dict[str, Any], required_scope: str) -> dict[str, Any]:
     require_agent_tokens_table()
     if required_scope not in AGENT_TOKEN_SCOPES:
@@ -2080,6 +2164,37 @@ def hash_token_parts(token_id: str, secret: str) -> str:
     return hashlib.sha256(f"{token_id}.{secret}".encode("utf-8")).hexdigest()
 
 
+def agent_token_scopes(value: Any) -> list[str]:
+    if value is None:
+        return list(DEFAULT_AGENT_TOKEN_SCOPES)
+    raw_scopes = string_list(value, "scopes")
+    normalized = sorted({scope.strip().lower() for scope in raw_scopes if scope.strip()})
+    if not normalized:
+        raise BadRequest("agent token scopes are required")
+    unknown = sorted(scope for scope in normalized if scope not in AGENT_TOKEN_SCOPES)
+    if unknown:
+        raise BadRequest(f"unknown agent token scope: {', '.join(unknown)}")
+    return normalized
+
+
+def optional_datetime_string(body: dict[str, Any], key: str) -> str | None:
+    value = optional_string(body, key)
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise BadRequest(f"{key} must be an ISO datetime") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise BadRequest(f"{key} must include a timezone")
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
+def public_agent_token_record(record: dict[str, Any]) -> dict[str, Any]:
+    public = {key: value for key, value in record.items() if key != "token_hash"}
+    return clean_item(public)
+
+
 def token_expired(expires_at: Any) -> bool:
     if expires_at is None:
         return False
@@ -2091,6 +2206,8 @@ def token_expired(expires_at: Any) -> bool:
         parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
     except ValueError as exc:
         raise Unauthorized("agent token expires_at is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise Unauthorized("agent token expires_at is invalid")
     return parsed <= datetime.now(timezone.utc)
 
 

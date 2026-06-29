@@ -793,20 +793,39 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual("agent_2", result["result"]["responder_agent_id"])
 
     def test_agent_runtime_api_requires_scoped_agent_tokens(self) -> None:
-        self.api.register_agent({"handle": "@researcher:seagull.local"})
-        self.api.register_agent({"handle": "@reviewer:seagull.local"})
-        researcher = self.service.issue_agent_token(
-            "@researcher:seagull.local",
-            scopes=("agent:read", "agent:post", "agent:ack"),
-            owner_user_id="user_researcher",
-            node_id="node_researcher",
+        researcher_registration = self.api.agent_registration(
+            {
+                "handle": "@researcher:seagull.local",
+                "scopes": ["agent:read", "agent:post", "agent:ack"],
+                "owner_user_id": "user_researcher",
+                "node_id": "node_researcher",
+            }
         )
-        reviewer = self.service.issue_agent_token(
-            "@reviewer:seagull.local",
-            scopes=("agent:read", "agent:inbox", "agent:ack"),
-            owner_user_id="user_reviewer",
-            node_id="node_reviewer",
+        reviewer_registration = self.api.agent_registration(
+            {
+                "handle": "@reviewer:seagull.local",
+                "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+                "name": "reviewer runtime",
+                "owner_user_id": "user_reviewer",
+                "node_id": "node_reviewer",
+            }
         )
+        repeat_registration = self.api.agent_registration(
+            {
+                "handle": "@reviewer:seagull.local",
+                "scopes": ["agent:read"],
+            }
+        )
+        self.assertTrue(researcher_registration["created"])
+        self.assertTrue(reviewer_registration["created"])
+        self.assertFalse(repeat_registration["created"])
+        self.assertTrue(researcher_registration["token"].startswith("sga_"))
+        self.assertEqual("@reviewer:seagull.local", reviewer_registration["record"]["agent_handle"])
+        self.assertEqual("reviewer runtime", reviewer_registration["record"]["name"])
+        self.assertNotIn("token_hash", reviewer_registration["record"])
+
+        researcher_token = researcher_registration["token"]
+        reviewer_token = reviewer_registration["token"]
         read_only = self.service.issue_agent_token(
             "@reviewer:seagull.local",
             scopes=("agent:read",),
@@ -844,30 +863,43 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual(403, wrong_scope.exception.status_code)
         self.assertEqual("forbidden", wrong_scope.exception.error)
 
-        me = self.api.agent_me(f"Bearer {reviewer.token}")
+        me = self.api.agent_me(f"Bearer {reviewer_token}")
         self.assertEqual("@reviewer:seagull.local", me["agent"]["handle"])
         self.assertEqual("agent_2", me["principal"]["agent_id"])
         self.assertEqual("user_reviewer", me["principal"]["owner_user_id"])
         self.assertEqual("node_reviewer", me["principal"]["node_id"])
 
         post = self.api.agent_post(
-            f"Bearer {researcher.token}",
+            f"Bearer {researcher_token}",
             {
                 "sender_handle": "@spoofed:seagull.local",
                 "recipient_handles": ["@reviewer:seagull.local"],
                 "content": "Runtime post ignores caller-supplied sender.",
             },
         )
-        inbox = self.api.agent_inbox(f"Bearer {reviewer.token}")
+        inbox = self.api.agent_inbox(f"Bearer {reviewer_token}")
         delivery_id = inbox["items"][0]["delivery"]["delivery_id"]
 
         self.assertEqual("agent_1", post["message"]["sender_agent_id"])
         self.assertEqual("message_1", inbox["items"][0]["message"]["message_id"])
 
+        decision = self.api.agent_decide_delivery(
+            f"Bearer {reviewer_token}",
+            delivery_id,
+            {
+                "agent_handle": "@spoofed:seagull.local",
+                "decision": "reply",
+                "content": "Runtime decision ignores caller-supplied agent handle.",
+            },
+        )
+        self.assertEqual("replied", decision["delivery"]["status"])
+        self.assertEqual("agent_2", decision["delivery"]["recipient_agent_id"])
+        self.assertEqual("agent_2", decision["reply"]["message"]["sender_agent_id"])
+
         with self.assertRaises(ApiError) as wrong_agent:
-            self.api.agent_ack_delivery(f"Bearer {researcher.token}", delivery_id)
+            self.api.agent_ack_delivery(f"Bearer {researcher_token}", delivery_id)
         self.assertEqual(403, wrong_agent.exception.status_code)
 
-        ack = self.api.agent_ack_delivery(f"Bearer {reviewer.token}", delivery_id)
+        ack = self.api.agent_ack_delivery(f"Bearer {reviewer_token}", delivery_id)
         self.assertEqual("acked", ack["delivery"]["status"])
         self.assertEqual("agent_2", ack["delivery"]["recipient_agent_id"])

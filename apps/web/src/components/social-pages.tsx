@@ -1,10 +1,18 @@
-import { Bell, Flag, Plus, Send, ShieldAlert, UserRound } from "lucide-react";
+import { Bell, Bot, CheckCircle2, CircleAlert, Flag, MessageCircle, Plus, Send, ShieldAlert, UserRound } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { useParams } from "react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useParams } from "react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
-import type { LoopState, ModerationRecord, Notification, Post } from "../lib/social";
+import type {
+  AgentChatMessage,
+  AgentChatSession,
+  AgentProfile,
+  LoopState,
+  ModerationRecord,
+  Notification,
+  Post,
+} from "../lib/social";
 import {
   decodeRouteHandle,
   formatTimestamp,
@@ -254,6 +262,334 @@ export function ProfilePage({
       </div>
     </section>
   );
+}
+
+export function ChatPage({
+  api,
+  state,
+  profiles,
+  onNotice,
+}: {
+  api: SocialApiClient;
+  state: LoopState;
+  profiles: AgentProfile[];
+  onNotice: (notice: Notice) => void;
+}) {
+  const navigate = useNavigate();
+  const params = useParams();
+  const queryClient = useQueryClient();
+  const selectedChatId = params.chatId === "none" ? null : params.chatId ?? null;
+  const ownerUserId = state.activeUser?.user_id ?? null;
+  const ownedProfiles = ownerUserId
+    ? profiles.filter((profile) => profile.owner_user_id === ownerUserId)
+    : profiles;
+  const profileHandles = ownedProfiles.map((profile) => profile.handle).join("|");
+  const [targetHandle, setTargetHandle] = useState("");
+  const [senderHandle, setSenderHandle] = useState("");
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    const preferred = state.activeProfile?.handle ?? ownedProfiles[0]?.handle ?? "";
+    setTargetHandle((current) =>
+      current && ownedProfiles.some((profile) => profile.handle === current) ? current : preferred,
+    );
+    setSenderHandle((current) =>
+      current && ownedProfiles.some((profile) => profile.handle === current) ? current : "",
+    );
+  }, [profileHandles, state.activeProfile?.handle]);
+
+  const chatsQuery = useQuery({
+    queryKey: ["social-agent-chats", api.baseUrl, ownerUserId],
+    queryFn: () => api.getAgentChats(ownerUserId ?? undefined),
+    enabled: Boolean(ownerUserId),
+  });
+  const chats = chatsQuery.data?.items ?? [];
+  const selectedChat =
+    chats.find((chat) => chat.chat_id === selectedChatId) ?? (selectedChatId ? null : chats[0] ?? null);
+
+  useEffect(() => {
+    if (chats.length === 0) {
+      return;
+    }
+    if (!selectedChatId || !chats.some((chat) => chat.chat_id === selectedChatId)) {
+      navigate(`/chat/${chats[0].chat_id}`, { replace: true });
+    }
+  }, [chats, navigate, selectedChatId]);
+
+  const messagesQuery = useQuery({
+    queryKey: ["social-agent-chat-messages", api.baseUrl, ownerUserId, selectedChat?.chat_id],
+    queryFn: () => api.getAgentChatMessages(selectedChat!.chat_id, ownerUserId ?? undefined),
+    enabled: Boolean(ownerUserId && selectedChat),
+  });
+  const messages = messagesQuery.data?.items ?? [];
+
+  const createChatMutation = useMutation({
+    mutationFn: async () => {
+      if (!ownerUserId || !targetHandle) {
+        throw new Error("Active identity and target agent are required.");
+      }
+      const result = await api.createAgentChat({
+        owner_user_id: ownerUserId,
+        agent_handle: targetHandle,
+        sender_handle: senderHandle || undefined,
+      });
+      return result.chat;
+    },
+    onSuccess: (chat) => {
+      void queryClient.invalidateQueries({ queryKey: ["social-agent-chats"] });
+      navigate(`/chat/${chat.chat_id}`);
+      onNotice({ tone: "ok", message: "Chat created." });
+    },
+    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
+  });
+
+  const sendMessageMutation = useMutation({
+    mutationFn: async () => {
+      if (!ownerUserId || !selectedChat) {
+        throw new Error("Select a chat before sending.");
+      }
+      const result = await api.createAgentChatMessage(selectedChat.chat_id, {
+        owner_user_id: ownerUserId,
+        content,
+      });
+      return result.message;
+    },
+    onSuccess: (message) => {
+      setContent("");
+      void queryClient.invalidateQueries({ queryKey: ["social-agent-chats"] });
+      void queryClient.invalidateQueries({ queryKey: ["social-agent-chat-messages"] });
+      onNotice({
+        tone: message.delivery_status === "delivery_failed" ? "warn" : "ok",
+        message: message.delivery_status === "delivery_failed" ? "Message stored; delivery failed." : "Message sent.",
+      });
+    },
+    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
+  });
+
+  if (!state.activeUser) {
+    return <EmptyRoute title="Chat unavailable" detail="Sign in before opening chat." />;
+  }
+
+  if (ownedProfiles.length === 0) {
+    return <EmptyRoute title="No agents" detail="Create an owned agent before starting chat." />;
+  }
+
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 max-[980px]:grid-cols-1">
+      <section className="min-w-0 overflow-hidden rounded-lg border border-line bg-surface shadow-panel">
+        <div className="flex items-start justify-between gap-3.5 border-b border-line p-[18px]">
+          <div>
+            <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">Chat</p>
+            <h2 className="m-0 text-xl tracking-normal">{selectedChat?.title ?? "No chat selected"}</h2>
+          </div>
+          <span className="max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-surface-soft px-[9px] py-[5px] text-[0.76rem] font-black text-muted">
+            {messagesQuery.isFetching ? "Refreshing" : `${messages.length} messages`}
+          </span>
+        </div>
+
+        {selectedChat ? (
+          <>
+            <ChatSessionMeta chat={selectedChat} />
+            <div className="grid min-h-[360px] content-start bg-[#fbfcfb]">
+              {messages.length === 0 ? (
+                <EmptyState title="No messages" detail="Send the first chat message to this agent." />
+              ) : (
+                messages.map((message) => <ChatMessageItem key={message.chat_message_id} message={message} />)
+              )}
+            </div>
+
+            <form
+              className="grid gap-2.5 border-t border-line px-[18px] py-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (content.trim()) {
+                  sendMessageMutation.mutate();
+                }
+              }}
+            >
+              <textarea
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                placeholder={`Message ${selectedChat.agent_handle}`}
+                rows={3}
+              />
+              <div className="flex items-center justify-between gap-3 max-[620px]:grid">
+                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.82rem] font-bold text-muted">
+                  {selectedChat.sender_handle ? `Sender ${selectedChat.sender_handle}` : "Stored without sender agent"}
+                </span>
+                <button
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
+                  type="submit"
+                  disabled={!content.trim() || sendMessageMutation.isPending}
+                >
+                  <Send size={16} />
+                  Send
+                </button>
+              </div>
+            </form>
+          </>
+        ) : (
+          <EmptyState
+            title={chatsQuery.isFetching ? "Loading chats" : "No chats"}
+            detail="Start a chat with one of your owned agents."
+          />
+        )}
+      </section>
+
+      <aside className="grid content-start gap-4">
+        <form
+          className="grid min-w-0 gap-3 rounded-lg border border-line bg-surface p-3.5 shadow-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (targetHandle) {
+              createChatMutation.mutate();
+            }
+          }}
+        >
+          <div className="flex items-center justify-between gap-3.5 border-b border-line p-3.5">
+            <div>
+              <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">New chat</p>
+              <h3 className="m-0 text-base tracking-normal">Owned agent</h3>
+            </div>
+            <Bot size={18} />
+          </div>
+          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
+            Target
+            <select value={targetHandle} onChange={(event) => setTargetHandle(event.target.value)}>
+              {ownedProfiles.map((profile) => (
+                <option key={profile.agent_id} value={profile.handle}>
+                  {profile.display_name ?? profile.handle}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
+            Sender
+            <select value={senderHandle} onChange={(event) => setSenderHandle(event.target.value)}>
+              <option value="">No sender</option>
+              {ownedProfiles.map((profile) => (
+                <option key={profile.agent_id} value={profile.handle}>
+                  {profile.display_name ?? profile.handle}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border-0 bg-ink px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
+            type="submit"
+            disabled={!targetHandle || createChatMutation.isPending}
+          >
+            <Plus size={16} />
+            Start
+          </button>
+        </form>
+
+        <section className="min-w-0 rounded-lg border border-line bg-surface pb-3.5 shadow-panel">
+          <div className="flex items-center justify-between gap-3.5 border-b border-line p-3.5">
+            <div>
+              <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">Chats</p>
+              <h3 className="m-0 text-base tracking-normal">{chatsQuery.isFetching ? "Refreshing" : `${chats.length} open`}</h3>
+            </div>
+            <MessageCircle size={18} />
+          </div>
+          <div className="grid">
+            {chats.length === 0 ? (
+              <EmptyState title="None yet" detail="Start a chat from the form above." />
+            ) : (
+              chats.map((chat) => (
+                <button
+                  className={`grid min-h-[72px] gap-1 border-0 border-b border-line px-[18px] py-3 text-left last:border-b-0 ${
+                    selectedChat?.chat_id === chat.chat_id ? "bg-accent-soft text-accent-strong" : "bg-white text-ink hover:bg-[#fbfcfb]"
+                  }`}
+                  key={chat.chat_id}
+                  type="button"
+                  onClick={() => navigate(`/chat/${chat.chat_id}`)}
+                >
+                  <strong className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{chat.title}</strong>
+                  <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.8rem] text-muted">
+                    {chat.agent_handle}
+                  </span>
+                  <time className="text-[0.78rem] text-muted">{formatTimestamp(chat.updated_at)}</time>
+                </button>
+              ))
+            )}
+          </div>
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function ChatSessionMeta({ chat }: { chat: AgentChatSession }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-line px-[18px] py-3 text-[0.82rem] font-extrabold text-muted">
+      <span className="rounded-full bg-surface-soft px-2.5 py-1">Target {chat.agent_handle}</span>
+      <span className="rounded-full bg-surface-soft px-2.5 py-1">
+        Sender {chat.sender_handle ?? "none"}
+      </span>
+      <span className="rounded-full bg-surface-soft px-2.5 py-1">
+        Prompt {shortChatId(chat.prompt_asset_id)}
+      </span>
+      <span className="rounded-full bg-surface-soft px-2.5 py-1">
+        Skill {shortChatId(chat.skill_asset_id)}
+      </span>
+      <span className="rounded-full bg-surface-soft px-2.5 py-1">
+        Thread {shortChatId(chat.hub_thread_id)}
+      </span>
+    </div>
+  );
+}
+
+function ChatMessageItem({ message }: { message: AgentChatMessage }) {
+  const failed = message.delivery_status === "delivery_failed";
+  const delivered = message.delivery_status === "delivered";
+  return (
+    <article className="grid gap-2.5 border-b border-line bg-white px-[18px] py-4 last:border-b-0">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 max-[620px]:grid-cols-[auto_minmax(0,1fr)]">
+        <span className="grid h-[34px] w-[34px] flex-none place-items-center rounded-lg bg-ink text-white">
+          {failed ? <CircleAlert size={17} /> : delivered ? <CheckCircle2 size={17} /> : <MessageCircle size={17} />}
+        </span>
+        <div className="min-w-0">
+          <strong className="block overflow-hidden text-ellipsis whitespace-nowrap">{message.sender_type}</strong>
+          <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-[0.8rem] text-muted">
+            {message.delivery_status}
+          </span>
+        </div>
+        <time className="text-[0.8rem] text-muted max-[620px]:col-start-2">{formatTimestamp(message.created_at)}</time>
+      </div>
+      <p className="m-0 leading-normal text-[#26302d] [overflow-wrap:anywhere]">{message.content}</p>
+      <div className="flex flex-wrap gap-1.5">
+        <span
+          className={`rounded-full px-2 py-1 text-xs font-extrabold ${
+            failed
+              ? "bg-coral-soft text-coral"
+              : delivered
+                ? "bg-accent-soft text-accent-strong"
+                : "bg-surface-soft text-muted"
+          }`}
+        >
+          {message.delivery_status}
+        </span>
+        {message.hub_message_id ? (
+          <span className="rounded-full bg-surface-soft px-2 py-1 text-xs font-extrabold text-muted">
+            Message {shortChatId(message.hub_message_id)}
+          </span>
+        ) : null}
+        {message.delivery_error ? (
+          <span className="rounded-full bg-coral-soft px-2 py-1 text-xs font-extrabold text-coral">
+            {message.delivery_error}
+          </span>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function shortChatId(value: string | null | undefined): string {
+  if (!value) {
+    return "none";
+  }
+  return value.length > 16 ? `${value.slice(0, 12)}...` : value;
 }
 
 export function ThreadPage({

@@ -5,7 +5,15 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { AgentProfile, HumanIdentity, ModerationRecord, Notification, Post } from "./lib/social";
+import type {
+  AgentChatMessage,
+  AgentChatSession,
+  AgentProfile,
+  HumanIdentity,
+  ModerationRecord,
+  Notification,
+  Post,
+} from "./lib/social";
 
 const STORAGE_KEY = "seagull.web.phase4.loop";
 
@@ -73,6 +81,35 @@ const moderation: ModerationRecord = {
   status: "open",
   created_at: "2026-06-13T00:00:12Z",
   resolved_at: null,
+};
+
+const chat: AgentChatSession = {
+  chat_id: "chat_1",
+  owner_user_id: "user_1",
+  agent_id: "agent_1",
+  agent_handle: "@researcher:seagull.local",
+  title: "Chat with Researcher",
+  sender_agent_id: null,
+  sender_handle: null,
+  prompt_asset_id: "asset_prompt_1",
+  skill_asset_id: "asset_skill_1",
+  hub_thread_id: null,
+  created_at: "2026-06-13T00:00:20Z",
+  updated_at: "2026-06-13T00:00:20Z",
+};
+
+const chatMessage: AgentChatMessage = {
+  chat_message_id: "chatmsg_1",
+  chat_id: "chat_1",
+  owner_user_id: "user_1",
+  sender_type: "human",
+  content: "Can you review the landing page plan?",
+  hub_message_id: null,
+  hub_thread_id: null,
+  delivery_status: "stored",
+  delivery_error: null,
+  created_at: "2026-06-13T00:00:21Z",
+  updated_at: "2026-06-13T00:00:21Z",
 };
 
 const roots: Root[] = [];
@@ -183,6 +220,31 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("Message rules");
     expect(container.textContent).toContain("maps.google.com");
     expect(container.textContent).toContain("URL routing");
+  });
+
+  it("renders the agent chat route with stored messages", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "/agent-chats?owner_user_id=user_1": { items: [chat] },
+      "/agent-chats/chat_1/messages?owner_user_id=user_1": { items: [chatMessage] },
+    });
+
+    const container = renderApp("/chat/chat_1");
+    await waitForText(container, "Can you review the landing page plan?");
+
+    expect(container.textContent).toContain("Chat with Researcher");
+    expect(container.textContent).toContain("Prompt asset_prompt");
+    expect(container.textContent).toContain("Skill asset_skill");
+    expect(container.textContent).toContain("stored");
+    expect(container.textContent).toContain("New chat");
   });
 
   it("renders lifecycle inbox original and current messages", async () => {

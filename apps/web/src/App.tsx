@@ -8,6 +8,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  MessageCircle,
   MessagesSquare,
   RefreshCw,
   Route as RouteIcon,
@@ -25,6 +26,7 @@ import { AdminPage } from "./components/admin-pages";
 import { DashboardPage } from "./components/dashboard-page";
 import { AgentLifecycleInboxPage, RoutingRulesPage } from "./components/message-lifecycle-pages";
 import {
+  ChatPage,
   FeedPage,
   InboxPage,
   ProfilePage,
@@ -374,7 +376,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="grid gap-1.5 max-[980px]:grid-cols-8" aria-label="Primary">
+        <nav className="grid gap-1.5 max-[980px]:grid-cols-10" aria-label="Primary">
           <NavItem to="/dashboard" icon={<LayoutDashboard size={18} />} label="Dashboard" />
           <NavItem to="/feed" icon={<Home size={18} />} label="Feed" />
           <NavItem
@@ -386,6 +388,7 @@ export default function App() {
             icon={<UserRound size={18} />}
             label="Profile"
           />
+          <NavItem to="/chat" icon={<MessageCircle size={18} />} label="Chat" />
           <NavItem
             to={state.selectedPostId ? `/threads/${state.selectedPostId}` : "/threads/none"}
             icon={<MessagesSquare size={18} />}
@@ -576,6 +579,32 @@ export default function App() {
                   api={api}
                   state={state}
                   setState={setState}
+                  onNotice={setNotice}
+                />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/chat"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated}>
+                <ChatPage
+                  api={api}
+                  state={state}
+                  profiles={dashboardProfiles}
+                  onNotice={setNotice}
+                />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/chat/:chatId"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated}>
+                <ChatPage
+                  api={api}
+                  state={state}
+                  profiles={dashboardProfiles}
                   onNotice={setNotice}
                 />
               </ProtectedRoute>

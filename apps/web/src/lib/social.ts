@@ -68,6 +68,35 @@ export type AgentAssetBinding = {
   updated_at: string;
 };
 
+export type AgentChatSession = {
+  chat_id: string;
+  owner_user_id: string;
+  agent_id: string;
+  agent_handle: string;
+  title: string;
+  sender_agent_id: string | null;
+  sender_handle: string | null;
+  prompt_asset_id: string | null;
+  skill_asset_id: string | null;
+  hub_thread_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentChatMessage = {
+  chat_message_id: string;
+  chat_id: string;
+  owner_user_id: string;
+  sender_type: string;
+  content: string;
+  hub_message_id: string | null;
+  hub_thread_id: string | null;
+  delivery_status: string;
+  delivery_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type NodeRecord = {
   node_id: string;
   owner_user_id: string;

@@ -43,6 +43,35 @@ class ManualClock:
         self.now += delta
 
 
+class FakeMessageHubSender:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    def send_message(
+        self,
+        *,
+        sender_handle: str,
+        recipient_handle: str,
+        content: str,
+        thread_id: str | None = None,
+    ) -> dict[str, object]:
+        self.sent.append(
+            {
+                "sender_handle": sender_handle,
+                "recipient_handle": recipient_handle,
+                "content": content,
+                "thread_id": thread_id,
+            }
+        )
+        return {
+            "thread_id": thread_id or "thread_1",
+            "message": {
+                "message_id": f"message_{len(self.sent)}",
+                "thread_id": thread_id or "thread_1",
+            },
+        }
+
+
 class SocialApiServiceTest(TestCase):
     def setUp(self) -> None:
         self.repository = InMemorySocialRepository()
@@ -370,6 +399,77 @@ class SocialApiServiceTest(TestCase):
                 skill_asset_id=alice_prompt.asset_id,
             )
 
+    def test_agent_chat_snapshots_binding_and_stores_messages(self) -> None:
+        sender = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@alice:seagull.local",
+        )
+        assistant = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@assistant:seagull.local",
+            display_name="Assistant",
+        )
+        prompt = self.service.create_personal_agent_asset(
+            owner_user_id=self.alice.user_id,
+            asset_type="prompt",
+            name="Concise assistant",
+            instructions="Answer directly.",
+        )
+        skill = self.service.create_personal_agent_asset(
+            owner_user_id=self.alice.user_id,
+            asset_type="skill",
+            name="Planning skill",
+            instructions="Plan in steps.",
+        )
+        self.service.set_agent_asset_binding(
+            owner_user_id=self.alice.user_id,
+            agent_handle=assistant.handle,
+            prompt_asset_id=prompt.asset_id,
+            skill_asset_id=skill.asset_id,
+        )
+
+        chat = self.service.create_agent_chat(
+            owner_user_id=self.alice.user_id,
+            agent_handle=assistant.handle,
+            sender_handle=sender.handle,
+        )
+        message = self.service.create_agent_chat_message(
+            owner_user_id=self.alice.user_id,
+            chat_id=chat.chat_id,
+            content="Plan the MVP.",
+        )
+        delivered = self.service.record_agent_chat_message_delivery(
+            owner_user_id=self.alice.user_id,
+            chat_message_id=message.chat_message_id,
+            delivery_status="delivered",
+            hub_message_id="message_1",
+            hub_thread_id="thread_1",
+        )
+
+        self.assertEqual("chat_1", chat.chat_id)
+        self.assertEqual(assistant.agent_id, chat.agent_id)
+        self.assertEqual(sender.agent_id, chat.sender_agent_id)
+        self.assertEqual(prompt.asset_id, chat.prompt_asset_id)
+        self.assertEqual(skill.asset_id, chat.skill_asset_id)
+        self.assertEqual("Plan the MVP.", message.content)
+        self.assertEqual("stored", message.delivery_status)
+        self.assertEqual("delivered", delivered.delivery_status)
+        self.assertEqual("message_1", delivered.hub_message_id)
+        self.assertEqual((delivered,), self.service.list_agent_chat_messages(owner_user_id=self.alice.user_id, chat_id=chat.chat_id))
+        self.assertEqual("thread_1", self.service.get_agent_chat(owner_user_id=self.alice.user_id, chat_id=chat.chat_id).hub_thread_id)
+
+    def test_agent_chat_enforces_owner(self) -> None:
+        assistant = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@assistant:seagull.local",
+        )
+
+        with self.assertRaises(PermissionDeniedError):
+            self.service.create_agent_chat(
+                owner_user_id=self.bob.user_id,
+                agent_handle=assistant.handle,
+            )
+
     def test_relationship_presets_derive_profile_policy_defaults(self) -> None:
         helper = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -602,6 +702,56 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual(skill["asset_id"], binding["skill_asset_id"])
         self.assertEqual([prompt["asset_id"]], [asset["asset_id"] for asset in prompt_assets])
         self.assertEqual(binding, read_binding)
+
+    def test_local_api_chat_message_can_deliver_through_message_hub_sender(self) -> None:
+        hub = FakeMessageHubSender()
+        api = LocalSocialApi.in_memory(auth_required=True, message_hub_sender=hub)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+        sender = api.create_agent_profile(
+            {
+                "handle": "@alice:seagull.local",
+            },
+            principal,
+        )["profile"]
+        assistant = api.create_agent_profile(
+            {
+                "handle": "@assistant:seagull.local",
+                "display_name": "Assistant",
+            },
+            principal,
+        )["profile"]
+        chat = api.create_agent_chat(
+            {
+                "agent_handle": assistant["handle"],
+                "sender_handle": sender["handle"],
+            },
+            principal,
+        )["chat"]
+
+        message = api.create_agent_chat_message(
+            chat["chat_id"],
+            {"content": "Plan the MVP."},
+            principal,
+        )["message"]
+        messages = api.list_agent_chat_messages(chat["chat_id"], principal=principal)["items"]
+        updated_chat = api.read_agent_chat(chat["chat_id"], principal=principal)["chat"]
+
+        self.assertEqual(
+            [
+                {
+                    "sender_handle": "@alice:seagull.local",
+                    "recipient_handle": "@assistant:seagull.local",
+                    "content": "Plan the MVP.",
+                    "thread_id": None,
+                }
+            ],
+            hub.sent,
+        )
+        self.assertEqual("delivered", message["delivery_status"])
+        self.assertEqual("message_1", message["hub_message_id"])
+        self.assertEqual("thread_1", message["hub_thread_id"])
+        self.assertEqual([message["chat_message_id"]], [item["chat_message_id"] for item in messages])
+        self.assertEqual("thread_1", updated_chat["hub_thread_id"])
 
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

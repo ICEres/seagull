@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from social_api.domain.models import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -26,6 +28,10 @@ class InMemorySocialRepository:
         self._assets: dict[str, PersonalAgentAsset] = {}
         self._asset_ids_by_owner: dict[str, set[str]] = {}
         self._asset_bindings: dict[str, AgentAssetBinding] = {}
+        self._agent_chats: dict[str, AgentChatSession] = {}
+        self._agent_chat_ids_by_owner: dict[str, set[str]] = {}
+        self._agent_chat_messages: dict[str, AgentChatMessage] = {}
+        self._agent_chat_message_ids_by_chat: dict[str, set[str]] = {}
         self._nodes: dict[str, NodeRecord] = {}
         self._node_ids_by_owner: dict[str, set[str]] = {}
         self._pair_tokens: dict[str, PairTokenRecord] = {}
@@ -88,6 +94,28 @@ class InMemorySocialRepository:
 
     def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
         return self._asset_bindings.get(agent_id)
+
+    def put_agent_chat_session(self, chat: AgentChatSession) -> None:
+        self._agent_chats[chat.chat_id] = chat
+        self._agent_chat_ids_by_owner.setdefault(chat.owner_user_id, set()).add(chat.chat_id)
+
+    def get_agent_chat_session(self, chat_id: str) -> AgentChatSession | None:
+        return self._agent_chats.get(chat_id)
+
+    def list_agent_chat_sessions_by_owner(self, owner_user_id: str) -> tuple[AgentChatSession, ...]:
+        chat_ids = self._agent_chat_ids_by_owner.get(owner_user_id, set())
+        return tuple(sorted((self._agent_chats[chat_id] for chat_id in chat_ids), key=lambda chat: chat.updated_at, reverse=True))
+
+    def put_agent_chat_message(self, message: AgentChatMessage) -> None:
+        self._agent_chat_messages[message.chat_message_id] = message
+        self._agent_chat_message_ids_by_chat.setdefault(message.chat_id, set()).add(message.chat_message_id)
+
+    def get_agent_chat_message(self, chat_message_id: str) -> AgentChatMessage | None:
+        return self._agent_chat_messages.get(chat_message_id)
+
+    def list_agent_chat_messages_by_chat(self, chat_id: str) -> tuple[AgentChatMessage, ...]:
+        message_ids = self._agent_chat_message_ids_by_chat.get(chat_id, set())
+        return tuple(sorted((self._agent_chat_messages[message_id] for message_id in message_ids), key=lambda message: message.created_at))
 
     def put_node(self, node: NodeRecord) -> None:
         self._nodes[node.node_id] = node

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from social_api._compat import dataclass
 from social_api.domain import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
@@ -44,16 +46,44 @@ class AuthPrincipal:
     display_name: str | None = None
 
 
+class MessageHubSender(Protocol):
+    def send_message(
+        self,
+        *,
+        sender_handle: str,
+        recipient_handle: str,
+        content: str,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send one chat message through the Message Hub."""
+
+
 class LocalSocialApi:
     """Dependency-free local API adapter for the Phase 3 social loop."""
 
-    def __init__(self, service: SocialApiService, *, auth_required: bool = False) -> None:
+    def __init__(
+        self,
+        service: SocialApiService,
+        *,
+        auth_required: bool = False,
+        message_hub_sender: MessageHubSender | None = None,
+    ) -> None:
         self._service = service
         self._auth_required = auth_required
+        self._message_hub_sender = message_hub_sender
 
     @classmethod
-    def in_memory(cls, *, auth_required: bool = False) -> LocalSocialApi:
-        return cls(SocialApiService(InMemorySocialRepository()), auth_required=auth_required)
+    def in_memory(
+        cls,
+        *,
+        auth_required: bool = False,
+        message_hub_sender: MessageHubSender | None = None,
+    ) -> LocalSocialApi:
+        return cls(
+            SocialApiService(InMemorySocialRepository()),
+            auth_required=auth_required,
+            message_hub_sender=message_hub_sender,
+        )
 
     def health(self) -> dict[str, Any]:
         return {"ok": True, "app": "social-api", "storage": "memory"}
@@ -327,6 +357,99 @@ class LocalSocialApi:
             raise ApiError(404, "not_found", str(exc)) from exc
         return {"binding": None if binding is None else agent_asset_binding_to_dict(binding)}
 
+    def create_agent_chat(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
+        try:
+            chat = self._service.create_agent_chat(
+                owner_user_id=self._owner_user_id(body, principal),
+                agent_handle=required_string(body, "agent_handle"),
+                title=optional_string(body, "title"),
+                sender_handle=optional_string(body, "sender_handle"),
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"created": True, "chat": agent_chat_session_to_dict(chat)}
+
+    def list_agent_chats(
+        self,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            chats = self._service.list_agent_chats(self._owner_user_id_from_value(owner_user_id, principal))
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"items": [agent_chat_session_to_dict(chat) for chat in chats]}
+
+    def read_agent_chat(
+        self,
+        chat_id: str,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            chat = self._service.get_agent_chat(
+                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                chat_id=chat_id,
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"chat": agent_chat_session_to_dict(chat)}
+
+    def create_agent_chat_message(
+        self,
+        chat_id: str,
+        body: dict[str, Any],
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            owner_user_id = self._owner_user_id(body, principal)
+            chat = self._service.get_agent_chat(owner_user_id=owner_user_id, chat_id=chat_id)
+            message = self._service.create_agent_chat_message(
+                owner_user_id=owner_user_id,
+                chat_id=chat.chat_id,
+                content=required_string(body, "content"),
+            )
+            message = self._deliver_agent_chat_message(owner_user_id, chat, message)
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"message": agent_chat_message_to_dict(message)}
+
+    def list_agent_chat_messages(
+        self,
+        chat_id: str,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            messages = self._service.list_agent_chat_messages(
+                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                chat_id=chat_id,
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"items": [agent_chat_message_to_dict(message) for message in messages]}
+
     def create_room(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
         try:
             room = self._service.create_room(
@@ -458,6 +581,40 @@ class LocalSocialApi:
             ]
         }
 
+    def _deliver_agent_chat_message(
+        self,
+        owner_user_id: str,
+        chat: AgentChatSession,
+        message: AgentChatMessage,
+    ) -> AgentChatMessage:
+        if self._message_hub_sender is None or chat.sender_handle is None:
+            return message
+        try:
+            result = self._message_hub_sender.send_message(
+                sender_handle=chat.sender_handle,
+                recipient_handle=chat.agent_handle,
+                content=message.content,
+                thread_id=chat.hub_thread_id,
+            )
+        except Exception as exc:
+            return self._service.record_agent_chat_message_delivery(
+                owner_user_id=owner_user_id,
+                chat_message_id=message.chat_message_id,
+                delivery_status="delivery_failed",
+                delivery_error=str(exc),
+            )
+
+        hub_message = result.get("message") if isinstance(result.get("message"), dict) else {}
+        hub_message_id = optional_payload_string(hub_message, "message_id") or optional_payload_string(result, "message_id")
+        hub_thread_id = optional_payload_string(result, "thread_id") or optional_payload_string(hub_message, "thread_id")
+        return self._service.record_agent_chat_message_delivery(
+            owner_user_id=owner_user_id,
+            chat_message_id=message.chat_message_id,
+            delivery_status="delivered",
+            hub_message_id=hub_message_id,
+            hub_thread_id=hub_thread_id,
+        )
+
     def _owner_user_id(self, body: dict[str, Any], principal: AuthPrincipal | None) -> str:
         return self._owner_user_id_from_value(optional_string(body, "owner_user_id"), principal)
 
@@ -547,6 +704,39 @@ def agent_asset_binding_to_dict(binding: AgentAssetBinding) -> dict[str, Any]:
         "skill_asset_id": binding.skill_asset_id,
         "created_at": datetime_to_string(binding.created_at),
         "updated_at": datetime_to_string(binding.updated_at),
+    }
+
+
+def agent_chat_session_to_dict(chat: AgentChatSession) -> dict[str, Any]:
+    return {
+        "chat_id": chat.chat_id,
+        "owner_user_id": chat.owner_user_id,
+        "agent_id": chat.agent_id,
+        "agent_handle": chat.agent_handle,
+        "title": chat.title,
+        "sender_agent_id": chat.sender_agent_id,
+        "sender_handle": chat.sender_handle,
+        "prompt_asset_id": chat.prompt_asset_id,
+        "skill_asset_id": chat.skill_asset_id,
+        "hub_thread_id": chat.hub_thread_id,
+        "created_at": datetime_to_string(chat.created_at),
+        "updated_at": datetime_to_string(chat.updated_at),
+    }
+
+
+def agent_chat_message_to_dict(message: AgentChatMessage) -> dict[str, Any]:
+    return {
+        "chat_message_id": message.chat_message_id,
+        "chat_id": message.chat_id,
+        "owner_user_id": message.owner_user_id,
+        "sender_type": message.sender_type,
+        "content": message.content,
+        "hub_message_id": message.hub_message_id,
+        "hub_thread_id": message.hub_thread_id,
+        "delivery_status": message.delivery_status,
+        "delivery_error": message.delivery_error,
+        "created_at": datetime_to_string(message.created_at),
+        "updated_at": datetime_to_string(message.updated_at),
     }
 
 
@@ -769,6 +959,14 @@ def optional_nullable_int(body: dict[str, Any], field_name: str) -> int | None:
     if not isinstance(value, int):
         raise ApiError(400, "bad_request", f"{field_name} must be an integer")
     return value
+
+
+def optional_payload_string(payload: dict[str, Any], field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def datetime_to_string(value: datetime | None) -> str | None:

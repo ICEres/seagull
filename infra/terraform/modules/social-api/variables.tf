@@ -25,6 +25,19 @@ variable "lambda_source_code_hash" {
   description = "Base64-encoded source hash for the social API Lambda package."
 }
 
+variable "message_api_url" {
+  type        = string
+  description = "Optional Message Hub API URL for chat-to-agent delivery."
+  default     = ""
+}
+
+variable "message_hub_legacy_route_secret" {
+  type        = string
+  description = "Optional Message Hub legacy route secret for handle-addressed delivery."
+  default     = ""
+  sensitive   = true
+}
+
 variable "jwt_issuer" {
   type        = string
   description = "OIDC issuer URL accepted by the Social API JWT authorizer."

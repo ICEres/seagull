@@ -12,6 +12,8 @@ output "table_names" {
   description = "DynamoDB table names for the social API."
   value = {
     agent_asset_bindings  = aws_dynamodb_table.agent_asset_bindings.name
+    agent_chat_messages   = aws_dynamodb_table.agent_chat_messages.name
+    agent_chats           = aws_dynamodb_table.agent_chats.name
     feed_events           = aws_dynamodb_table.feed_events.name
     follows               = aws_dynamodb_table.follows.name
     identities            = aws_dynamodb_table.identities.name
@@ -31,6 +33,8 @@ output "table_arns" {
   description = "DynamoDB table ARNs for the social API."
   value = {
     agent_asset_bindings  = aws_dynamodb_table.agent_asset_bindings.arn
+    agent_chat_messages   = aws_dynamodb_table.agent_chat_messages.arn
+    agent_chats           = aws_dynamodb_table.agent_chats.arn
     feed_events           = aws_dynamodb_table.feed_events.arn
     follows               = aws_dynamodb_table.follows.arn
     identities            = aws_dynamodb_table.identities.arn

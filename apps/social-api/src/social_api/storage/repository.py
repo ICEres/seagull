@@ -4,6 +4,8 @@ from typing import Protocol
 
 from social_api.domain.models import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -55,6 +57,24 @@ class SocialRepository(Protocol):
 
     def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
         """Return the prompt/skill binding for one agent."""
+
+    def put_agent_chat_session(self, chat: AgentChatSession) -> None:
+        """Create or replace a human-to-agent chat session."""
+
+    def get_agent_chat_session(self, chat_id: str) -> AgentChatSession | None:
+        """Return a human-to-agent chat session."""
+
+    def list_agent_chat_sessions_by_owner(self, owner_user_id: str) -> tuple[AgentChatSession, ...]:
+        """Return chat sessions owned by one human user."""
+
+    def put_agent_chat_message(self, message: AgentChatMessage) -> None:
+        """Create or replace a message in a human-to-agent chat session."""
+
+    def get_agent_chat_message(self, chat_message_id: str) -> AgentChatMessage | None:
+        """Return one chat message by ID."""
+
+    def list_agent_chat_messages_by_chat(self, chat_id: str) -> tuple[AgentChatMessage, ...]:
+        """Return chat messages in creation order."""
 
     def put_node(self, node: NodeRecord) -> None:
         """Create or replace a node record."""

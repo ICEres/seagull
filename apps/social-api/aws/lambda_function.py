@@ -3,11 +3,15 @@ import json
 import os
 from typing import Any
 from urllib.parse import unquote
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import boto3
 
 from social_api.api.local import (
     agent_asset_binding_to_dict,
+    agent_chat_message_to_dict,
+    agent_chat_session_to_dict,
     agent_profile_to_dict,
     dashboard_summary_to_dict,
     follow_to_dict,
@@ -42,6 +46,8 @@ repository = DynamoDbSocialRepository(
     profiles_table=dynamodb.Table(os.environ["PROFILES_TABLE"]),
     personal_agent_assets_table=dynamodb.Table(os.environ["PERSONAL_AGENT_ASSETS_TABLE"]),
     agent_asset_bindings_table=dynamodb.Table(os.environ["AGENT_ASSET_BINDINGS_TABLE"]),
+    agent_chats_table=dynamodb.Table(os.environ["AGENT_CHATS_TABLE"]),
+    agent_chat_messages_table=dynamodb.Table(os.environ["AGENT_CHAT_MESSAGES_TABLE"]),
     nodes_table=dynamodb.Table(os.environ["NODES_TABLE"]),
     pair_tokens_table=dynamodb.Table(os.environ["PAIR_TOKENS_TABLE"]),
     rooms_table=dynamodb.Table(os.environ["ROOMS_TABLE"]),
@@ -228,6 +234,52 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 {"binding": None if binding is None else agent_asset_binding_to_dict(binding)},
             )
 
+        if method == "POST" and path == "/agent-chats":
+            body = parse_body(event)
+            chat = service.create_agent_chat(
+                owner_user_id=owner_user_id_from_body(event, body),
+                agent_handle=required_string(body, "agent_handle"),
+                title=optional_string(body, "title"),
+                sender_handle=optional_string(body, "sender_handle"),
+            )
+            return response(200, {"created": True, "chat": agent_chat_session_to_dict(chat)})
+
+        if method == "GET" and path == "/agent-chats":
+            query = event.get("queryStringParameters") or {}
+            chats = service.list_agent_chats(owner_user_id_from_query(event, query))
+            return response(200, {"items": [agent_chat_session_to_dict(chat) for chat in chats]})
+
+        if method == "GET" and path.startswith("/agent-chats/") and not path.endswith("/messages"):
+            query = event.get("queryStringParameters") or {}
+            chat_id = unquote(path.removeprefix("/agent-chats/").strip("/"))
+            chat = service.get_agent_chat(
+                owner_user_id=owner_user_id_from_query(event, query),
+                chat_id=chat_id,
+            )
+            return response(200, {"chat": agent_chat_session_to_dict(chat)})
+
+        if method == "POST" and path.startswith("/agent-chats/") and path.endswith("/messages"):
+            body = parse_body(event)
+            chat_id = path_param(path, "/agent-chats/", "/messages")
+            owner_user_id = owner_user_id_from_body(event, body)
+            chat = service.get_agent_chat(owner_user_id=owner_user_id, chat_id=chat_id)
+            message = service.create_agent_chat_message(
+                owner_user_id=owner_user_id,
+                chat_id=chat.chat_id,
+                content=required_string(body, "content"),
+            )
+            message = deliver_agent_chat_message(owner_user_id, chat, message)
+            return response(200, {"message": agent_chat_message_to_dict(message)})
+
+        if method == "GET" and path.startswith("/agent-chats/") and path.endswith("/messages"):
+            query = event.get("queryStringParameters") or {}
+            chat_id = path_param(path, "/agent-chats/", "/messages")
+            messages = service.list_agent_chat_messages(
+                owner_user_id=owner_user_id_from_query(event, query),
+                chat_id=chat_id,
+            )
+            return response(200, {"items": [agent_chat_message_to_dict(message) for message in messages]})
+
         if method == "PATCH" and path.startswith("/profiles/"):
             body = parse_body(event)
             handle = unquote(path.removeprefix("/profiles/").strip("/"))
@@ -340,6 +392,78 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
         return response(500, {"error": "internal_error"})
+
+
+def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> Any:
+    if not chat.sender_handle:
+        return message
+    message_api_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+    if not message_api_url:
+        return message
+
+    try:
+        register_message_hub_agent(message_api_url, chat.sender_handle)
+        register_message_hub_agent(message_api_url, chat.agent_handle)
+        result = post_message_hub_json(
+            message_api_url,
+            "/messages",
+            {
+                "sender_handle": chat.sender_handle,
+                "recipient_handles": [chat.agent_handle],
+                "content": message.content,
+                "thread_id": chat.hub_thread_id,
+                "intent": "chat",
+                "visibility": "direct",
+            },
+        )
+    except Exception as exc:
+        return service.record_agent_chat_message_delivery(
+            owner_user_id=owner_user_id,
+            chat_message_id=message.chat_message_id,
+            delivery_status="delivery_failed",
+            delivery_error=str(exc),
+        )
+
+    hub_message = result.get("message") if isinstance(result.get("message"), dict) else {}
+    return service.record_agent_chat_message_delivery(
+        owner_user_id=owner_user_id,
+        chat_message_id=message.chat_message_id,
+        delivery_status="delivered",
+        hub_message_id=optional_payload_string(hub_message, "message_id") or optional_payload_string(result, "message_id"),
+        hub_thread_id=optional_payload_string(result, "thread_id") or optional_payload_string(hub_message, "thread_id"),
+    )
+
+
+def register_message_hub_agent(base_url: str, handle: str) -> None:
+    try:
+        post_message_hub_json(base_url, "/agents", {"handle": handle})
+    except HTTPError as exc:
+        if exc.code == 409:
+            return
+        raise
+
+
+def post_message_hub_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    payload = json.dumps({key: value for key, value in body.items() if value is not None}).encode("utf-8")
+    headers = {"content-type": "application/json"}
+    legacy_secret = os.environ.get("MESSAGE_HUB_LEGACY_ROUTE_SECRET", "").strip()
+    if legacy_secret:
+        headers["x-seagull-legacy-secret"] = legacy_secret
+    request = Request(f"{base_url}{path}", data=payload, headers=headers, method="POST")
+    with urlopen(request, timeout=5) as result:
+        raw = result.read().decode("utf-8")
+    parsed = json.loads(raw or "{}")
+    if not isinstance(parsed, dict):
+        raise BadRequest("message hub response must be a JSON object")
+    return parsed
+
+
+def optional_payload_string(payload: dict[str, Any], field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def parse_body(event: dict[str, Any]) -> dict[str, Any]:

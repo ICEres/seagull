@@ -17,6 +17,8 @@ from seagull_protocol import (
 
 from social_api.domain.models import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -40,6 +42,7 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DELIVERY_MODES = {"pull", "webhook", "pull_webhook"}
 NODE_TYPES = {"cloud", "lan"}
 PERSONAL_AGENT_ASSET_TYPES = {"prompt", "skill"}
+CHAT_DELIVERY_STATUSES = {"stored", "delivered", "delivery_failed"}
 
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
@@ -345,6 +348,118 @@ class SocialApiService:
         profile = self._require_profile_by_handle(agent_handle)
         self._require_owner(owner_user_id, profile)
         return self._repository.get_agent_asset_binding(profile.agent_id)
+
+    def create_agent_chat(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+        title: str | None = None,
+        sender_handle: str | None = None,
+    ) -> AgentChatSession:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        sender = None
+        if sender_handle is not None:
+            sender = self._require_profile_by_handle(sender_handle)
+            self._require_owner(owner_user_id, sender)
+
+        binding = self._repository.get_agent_asset_binding(profile.agent_id)
+        now = self._clock()
+        chat = AgentChatSession(
+            chat_id=self._new_id("chat"),
+            owner_user_id=owner_user_id,
+            agent_id=profile.agent_id,
+            agent_handle=profile.handle,
+            title=clean_optional(title) or f"Chat with {profile.display_name or profile.handle}",
+            sender_agent_id=None if sender is None else sender.agent_id,
+            sender_handle=None if sender is None else sender.handle,
+            prompt_asset_id=None if binding is None else binding.prompt_asset_id,
+            skill_asset_id=None if binding is None else binding.skill_asset_id,
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_agent_chat_session(chat)
+        return chat
+
+    def list_agent_chats(self, owner_user_id: str) -> tuple[AgentChatSession, ...]:
+        self._require_identity(owner_user_id)
+        return self._repository.list_agent_chat_sessions_by_owner(owner_user_id)
+
+    def get_agent_chat(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+    ) -> AgentChatSession:
+        chat = self._require_agent_chat(chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        return chat
+
+    def create_agent_chat_message(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+        content: str,
+    ) -> AgentChatMessage:
+        chat = self._require_agent_chat(chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        now = self._clock()
+        message = AgentChatMessage(
+            chat_message_id=self._new_id("chatmsg"),
+            chat_id=chat.chat_id,
+            owner_user_id=owner_user_id,
+            sender_type="human",
+            content=normalized_required(content, "content"),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_agent_chat_message(message)
+        self._repository.put_agent_chat_session(replace(chat, updated_at=now))
+        return message
+
+    def list_agent_chat_messages(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+    ) -> tuple[AgentChatMessage, ...]:
+        chat = self._require_agent_chat(chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        return self._repository.list_agent_chat_messages_by_chat(chat.chat_id)
+
+    def record_agent_chat_message_delivery(
+        self,
+        *,
+        owner_user_id: str,
+        chat_message_id: str,
+        delivery_status: str,
+        hub_message_id: str | None = None,
+        hub_thread_id: str | None = None,
+        delivery_error: str | None = None,
+    ) -> AgentChatMessage:
+        message = self._require_agent_chat_message(chat_message_id)
+        chat = self._require_agent_chat(message.chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        now = self._clock()
+        updated = replace(
+            message,
+            hub_message_id=clean_optional(hub_message_id),
+            hub_thread_id=clean_optional(hub_thread_id),
+            delivery_status=normalize_chat_delivery_status(delivery_status),
+            delivery_error=clean_optional(delivery_error),
+            updated_at=now,
+        )
+        self._repository.put_agent_chat_message(updated)
+        self._repository.put_agent_chat_session(
+            replace(
+                chat,
+                hub_thread_id=updated.hub_thread_id or chat.hub_thread_id,
+                updated_at=now,
+            )
+        )
+        return updated
 
     def create_node(
         self,
@@ -691,6 +806,20 @@ class SocialApiService:
             raise InvalidSocialRequestError(f"{expected_asset_type}_asset_id must reference a {expected_asset_type} asset")
         return asset
 
+    def _require_agent_chat(self, chat_id: str) -> AgentChatSession:
+        normalized_chat_id = normalized_required(chat_id, "chat_id")
+        chat = self._repository.get_agent_chat_session(normalized_chat_id)
+        if chat is None:
+            raise NotFoundError(f"agent chat not found: {normalized_chat_id}")
+        return chat
+
+    def _require_agent_chat_message(self, chat_message_id: str) -> AgentChatMessage:
+        normalized_message_id = normalized_required(chat_message_id, "chat_message_id")
+        message = self._repository.get_agent_chat_message(normalized_message_id)
+        if message is None:
+            raise NotFoundError(f"agent chat message not found: {normalized_message_id}")
+        return message
+
     def _require_room_by_slug(self, slug: str) -> Room:
         normalized_slug = normalize_slug(slug)
         room = self._repository.get_room_by_slug(normalized_slug)
@@ -714,6 +843,11 @@ class SocialApiService:
     def _require_asset_owner(owner_user_id: str, asset: PersonalAgentAsset) -> None:
         if asset.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
             raise PermissionDeniedError(f"user does not own personal agent asset: {asset.asset_id}")
+
+    @staticmethod
+    def _require_chat_owner(owner_user_id: str, chat: AgentChatSession) -> None:
+        if chat.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
+            raise PermissionDeniedError(f"user does not own agent chat: {chat.chat_id}")
 
     @staticmethod
     def _require_node_owner(owner_user_id: str, node: NodeRecord) -> None:
@@ -794,6 +928,13 @@ def normalize_personal_agent_asset_type(asset_type: str) -> str:
     normalized = normalized_required(asset_type, "asset_type").lower()
     if normalized not in PERSONAL_AGENT_ASSET_TYPES:
         raise InvalidSocialRequestError("asset_type must be prompt or skill")
+    return normalized
+
+
+def normalize_chat_delivery_status(status: str) -> str:
+    normalized = normalized_required(status, "delivery_status").lower()
+    if normalized not in CHAT_DELIVERY_STATUSES:
+        raise InvalidSocialRequestError("delivery_status must be stored, delivered, or delivery_failed")
     return normalized
 
 

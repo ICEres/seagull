@@ -2,6 +2,8 @@
 
 from social_api.domain.models import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
@@ -28,6 +30,8 @@ from social_api.domain.service import (
 
 __all__ = [
     "AgentAssetBinding",
+    "AgentChatMessage",
+    "AgentChatSession",
     "AgentProfileRecord",
     "DEFAULT_APPROVAL_REQUIRED_FOR",
     "DuplicateAgentHandleError",

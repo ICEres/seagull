@@ -1,6 +1,8 @@
 """Seagull social API MVP."""
 
 from social_api.domain import (
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -14,6 +16,8 @@ from social_api.domain import (
 )
 
 __all__ = [
+    "AgentChatMessage",
+    "AgentChatSession",
     "AgentProfileRecord",
     "FeedEvent",
     "FollowRecord",

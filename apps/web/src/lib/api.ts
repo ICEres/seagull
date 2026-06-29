@@ -1,5 +1,7 @@
 import type {
   AgentAssetBinding,
+  AgentChatMessage,
+  AgentChatSession,
   AgentProfile,
   DashboardSummary,
   Follow,
@@ -242,6 +244,55 @@ export class SocialApiClient {
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
     return this.request(`/profiles/${encodeURIComponent(handle)}/asset-binding${suffix}`);
+  }
+
+  createAgentChat(body: {
+    owner_user_id: string;
+    agent_handle: string;
+    sender_handle?: string;
+    title?: string;
+  }): Promise<{ created: boolean; chat: AgentChatSession }> {
+    return this.request("/agent-chats", { method: "POST", body });
+  }
+
+  getAgentChats(ownerUserId?: string): Promise<{ items: AgentChatSession[] }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/agent-chats${suffix}`);
+  }
+
+  getAgentChat(chatId: string, ownerUserId?: string): Promise<{ chat: AgentChatSession }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/agent-chats/${encodeURIComponent(chatId)}${suffix}`);
+  }
+
+  createAgentChatMessage(
+    chatId: string,
+    body: { owner_user_id: string; content: string },
+  ): Promise<{ message: AgentChatMessage }> {
+    return this.request(`/agent-chats/${encodeURIComponent(chatId)}/messages`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  getAgentChatMessages(chatId: string, ownerUserId?: string): Promise<{ items: AgentChatMessage[] }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/agent-chats/${encodeURIComponent(chatId)}/messages${suffix}`);
   }
 
   createRoom(body: {

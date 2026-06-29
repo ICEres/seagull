@@ -70,6 +70,37 @@ class AgentAssetBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentChatSession:
+    chat_id: str
+    owner_user_id: str
+    agent_id: str
+    agent_handle: str
+    title: str
+    sender_agent_id: str | None = None
+    sender_handle: str | None = None
+    prompt_asset_id: str | None = None
+    skill_asset_id: str | None = None
+    hub_thread_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentChatMessage:
+    chat_message_id: str
+    chat_id: str
+    owner_user_id: str
+    sender_type: str
+    content: str
+    hub_message_id: str | None = None
+    hub_thread_id: str | None = None
+    delivery_status: str = "stored"
+    delivery_error: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class Room:
     room_id: str
     slug: str

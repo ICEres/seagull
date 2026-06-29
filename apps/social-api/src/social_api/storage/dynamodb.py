@@ -7,6 +7,8 @@ from boto3.dynamodb.conditions import Key
 
 from social_api.domain.models import (
     AgentAssetBinding,
+    AgentChatMessage,
+    AgentChatSession,
     AgentProfileRecord,
     DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
@@ -32,6 +34,8 @@ class DynamoDbSocialRepository:
         profiles_table: Any,
         personal_agent_assets_table: Any,
         agent_asset_bindings_table: Any,
+        agent_chats_table: Any,
+        agent_chat_messages_table: Any,
         nodes_table: Any,
         pair_tokens_table: Any,
         rooms_table: Any,
@@ -46,6 +50,8 @@ class DynamoDbSocialRepository:
         self._profiles_table = profiles_table
         self._personal_agent_assets_table = personal_agent_assets_table
         self._agent_asset_bindings_table = agent_asset_bindings_table
+        self._agent_chats_table = agent_chats_table
+        self._agent_chat_messages_table = agent_chat_messages_table
         self._nodes_table = nodes_table
         self._pair_tokens_table = pair_tokens_table
         self._rooms_table = rooms_table
@@ -129,6 +135,40 @@ class DynamoDbSocialRepository:
             self._agent_asset_bindings_table.get_item(Key={"agent_id": agent_id}).get("Item"),
             item_to_agent_asset_binding,
         )
+
+    def put_agent_chat_session(self, chat: AgentChatSession) -> None:
+        self._agent_chats_table.put_item(Item=agent_chat_session_to_item(chat))
+
+    def get_agent_chat_session(self, chat_id: str) -> AgentChatSession | None:
+        return optional_item(
+            self._agent_chats_table.get_item(Key={"chat_id": chat_id}).get("Item"),
+            item_to_agent_chat_session,
+        )
+
+    def list_agent_chat_sessions_by_owner(self, owner_user_id: str) -> tuple[AgentChatSession, ...]:
+        result = self._agent_chats_table.query(
+            IndexName="owner-updated-at-index",
+            KeyConditionExpression=Key("owner_user_id").eq(owner_user_id),
+            ScanIndexForward=False,
+        )
+        return tuple(item_to_agent_chat_session(item) for item in result.get("Items", []))
+
+    def put_agent_chat_message(self, message: AgentChatMessage) -> None:
+        self._agent_chat_messages_table.put_item(Item=agent_chat_message_to_item(message))
+
+    def get_agent_chat_message(self, chat_message_id: str) -> AgentChatMessage | None:
+        return optional_item(
+            self._agent_chat_messages_table.get_item(Key={"chat_message_id": chat_message_id}).get("Item"),
+            item_to_agent_chat_message,
+        )
+
+    def list_agent_chat_messages_by_chat(self, chat_id: str) -> tuple[AgentChatMessage, ...]:
+        result = self._agent_chat_messages_table.query(
+            IndexName="chat-created-at-index",
+            KeyConditionExpression=Key("chat_id").eq(chat_id),
+            ScanIndexForward=True,
+        )
+        return tuple(item_to_agent_chat_message(item) for item in result.get("Items", []))
 
     def put_node(self, node: NodeRecord) -> None:
         self._nodes_table.put_item(Item=node_to_item(node))
@@ -406,6 +446,76 @@ def item_to_agent_asset_binding(item: dict[str, Any]) -> AgentAssetBinding:
         owner_user_id=item["owner_user_id"],
         prompt_asset_id=item.get("prompt_asset_id"),
         skill_asset_id=item.get("skill_asset_id"),
+        created_at=datetime.fromisoformat(item["created_at"]),
+        updated_at=datetime.fromisoformat(item["updated_at"]),
+    )
+
+
+def agent_chat_session_to_item(chat: AgentChatSession) -> dict[str, Any]:
+    return without_none(
+        {
+            "chat_id": chat.chat_id,
+            "owner_user_id": chat.owner_user_id,
+            "agent_id": chat.agent_id,
+            "agent_handle": chat.agent_handle,
+            "title": chat.title,
+            "sender_agent_id": chat.sender_agent_id,
+            "sender_handle": chat.sender_handle,
+            "prompt_asset_id": chat.prompt_asset_id,
+            "skill_asset_id": chat.skill_asset_id,
+            "hub_thread_id": chat.hub_thread_id,
+            "created_at": chat.created_at.isoformat(),
+            "updated_at": chat.updated_at.isoformat(),
+        }
+    )
+
+
+def item_to_agent_chat_session(item: dict[str, Any]) -> AgentChatSession:
+    return AgentChatSession(
+        chat_id=item["chat_id"],
+        owner_user_id=item["owner_user_id"],
+        agent_id=item["agent_id"],
+        agent_handle=item["agent_handle"],
+        title=item["title"],
+        sender_agent_id=item.get("sender_agent_id"),
+        sender_handle=item.get("sender_handle"),
+        prompt_asset_id=item.get("prompt_asset_id"),
+        skill_asset_id=item.get("skill_asset_id"),
+        hub_thread_id=item.get("hub_thread_id"),
+        created_at=datetime.fromisoformat(item["created_at"]),
+        updated_at=datetime.fromisoformat(item["updated_at"]),
+    )
+
+
+def agent_chat_message_to_item(message: AgentChatMessage) -> dict[str, Any]:
+    return without_none(
+        {
+            "chat_message_id": message.chat_message_id,
+            "chat_id": message.chat_id,
+            "owner_user_id": message.owner_user_id,
+            "sender_type": message.sender_type,
+            "content": message.content,
+            "hub_message_id": message.hub_message_id,
+            "hub_thread_id": message.hub_thread_id,
+            "delivery_status": message.delivery_status,
+            "delivery_error": message.delivery_error,
+            "created_at": message.created_at.isoformat(),
+            "updated_at": message.updated_at.isoformat(),
+        }
+    )
+
+
+def item_to_agent_chat_message(item: dict[str, Any]) -> AgentChatMessage:
+    return AgentChatMessage(
+        chat_message_id=item["chat_message_id"],
+        chat_id=item["chat_id"],
+        owner_user_id=item["owner_user_id"],
+        sender_type=item.get("sender_type", "human"),
+        content=item["content"],
+        hub_message_id=item.get("hub_message_id"),
+        hub_thread_id=item.get("hub_thread_id"),
+        delivery_status=item.get("delivery_status", "stored"),
+        delivery_error=item.get("delivery_error"),
         created_at=datetime.fromisoformat(item["created_at"]),
         updated_at=datetime.fromisoformat(item["updated_at"]),
     )

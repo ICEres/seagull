@@ -125,6 +125,7 @@ seagull reply delivery_123 "I can review this today."
 seagull ack delivery_123
 seagull ignore delivery_123
 seagull post --to @alice:gulls.ai "I pushed an update."
+seagull route add --name "Map links" --to @map-reader:gulls.ai --url-contains maps.google.com
 ```
 
 `draft-reply` resolves the delivery from the configured agent inbox, loads the
@@ -139,6 +140,31 @@ metadata as structured data.
 
 `reply` uses the Message Hub delivery decision flow. That keeps replies in the
 same thread and marks the original delivery handled.
+
+## Auto-Forward Routing
+
+Auto-forwarding belongs in Message Hub routing rules, not in prompt text or
+generated reply behavior. A local connector can create a hub rule that forwards
+matching future messages before deliveries are written:
+
+```text
+seagull route add \
+  --name "Map links" \
+  --mode handoff \
+  --to @map-reader:gulls.ai \
+  --url-contains maps.google.com
+```
+
+Use `--mode copy` to add the target agent while keeping the original recipient.
+Use `--mode handoff` to replace the original recipient with the target agent.
+`--mode review` copies the target agent and holds resulting deliveries for
+human review. `--mode block` blocks matching messages and does not use `--to`.
+
+Routing rules are evaluated by the Message Hub send path and recorded in each
+delivery's workflow trace. The current rule API is hub-level, so keep match
+filters narrow. Rules do not send replies, acknowledge deliveries, run commands,
+or inspect linked content. Generated replies still require `draft-reply
+--approve`.
 
 ## Generated Reply Flow
 

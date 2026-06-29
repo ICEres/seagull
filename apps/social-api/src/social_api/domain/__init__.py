@@ -1,6 +1,7 @@
 """Social API domain services and models."""
 
 from social_api.domain.models import (
+    AgentAssetBinding,
     AgentProfileRecord,
     DEFAULT_APPROVAL_REQUIRED_FOR,
     FeedEvent,
@@ -8,8 +9,9 @@ from social_api.domain.models import (
     HumanIdentity,
     ModerationRecord,
     NodeRecord,
-    PairTokenRecord,
     Notification,
+    PairTokenRecord,
+    PersonalAgentAsset,
     PostRecord,
     Room,
     RoomMembership,
@@ -25,6 +27,7 @@ from social_api.domain.service import (
 )
 
 __all__ = [
+    "AgentAssetBinding",
     "AgentProfileRecord",
     "DEFAULT_APPROVAL_REQUIRED_FOR",
     "DuplicateAgentHandleError",
@@ -39,6 +42,7 @@ __all__ = [
     "Notification",
     "PairTokenRecord",
     "PermissionDeniedError",
+    "PersonalAgentAsset",
     "PostRecord",
     "Room",
     "RoomMembership",

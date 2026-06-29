@@ -14,6 +14,7 @@ import (
 type fakeClient struct {
 	decisions             []map[string]any
 	acks                  []map[string]any
+	routingRules          []map[string]any
 	sentMessages          []map[string]any
 	threadContextRequests []string
 	agent                 map[string]any
@@ -79,6 +80,27 @@ func (f *fakeClient) SendMessage(senderHandle string, recipientHandles []string,
 	}
 	f.sentMessages = append(f.sentMessages, body)
 	return map[string]any{"message_id": "message_sent", "thread_id": firstClean(threadID, "thread_new")}, nil
+}
+
+func (f *fakeClient) CreateRoutingRule(name string, routeToHandles []string, mode string, urlContains []string) (map[string]any, error) {
+	body := map[string]any{
+		"name":             name,
+		"route_to_handles": routeToHandles,
+		"mode":             mode,
+		"url_contains":     urlContains,
+	}
+	f.routingRules = append(f.routingRules, body)
+	return map[string]any{
+		"created": true,
+		"routing_rule": map[string]any{
+			"rule_id":          "routing_rule_1",
+			"name":             name,
+			"route_to_handles": routeToHandles,
+			"mode":             mode,
+			"url_contains":     urlContains,
+			"enabled":          true,
+		},
+	}, nil
 }
 
 func (f *fakeClient) AckMessage(messageID string, recipientHandle string) (map[string]any, error) {
@@ -149,6 +171,82 @@ func responseRulesMap(overrides map[string]any) map[string]any {
 	var rules map[string]any
 	_ = json.Unmarshal([]byte(responseRulesJSON(overrides)), &rules)
 	return rules
+}
+
+func TestRouteAddCreatesRoutingRuleWithoutMessageSideEffects(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Main(
+		[]string{
+			"route",
+			"add",
+			"--name",
+			"Map links",
+			"--to",
+			"@map-reader:gulls.ai",
+			"--url-contains",
+			"maps.google.com",
+		},
+		&stdout,
+		&stderr,
+		testEnv(tmp),
+		fake,
+	)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if len(fake.routingRules) != 1 {
+		t.Fatalf("routingRules = %#v", fake.routingRules)
+	}
+	rule := fake.routingRules[0]
+	if rule["name"] != "Map links" || rule["mode"] != "copy" {
+		t.Fatalf("unexpected routing rule: %#v", rule)
+	}
+	if got := strings.Join(rule["route_to_handles"].([]string), ","); got != "@map-reader:gulls.ai" {
+		t.Fatalf("route_to_handles = %q", got)
+	}
+	if got := strings.Join(rule["url_contains"].([]string), ","); got != "maps.google.com" {
+		t.Fatalf("url_contains = %q", got)
+	}
+	if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("route add caused message side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+	}
+	for _, want := range []string{"Created routing rule routing_rule_1", "mode=copy", "to=@map-reader:gulls.ai", "url_contains=maps.google.com"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stderr.String(), "secret-token") {
+		t.Fatalf("token leaked in output")
+	}
+}
+
+func TestRouteAddRequiresDestinationUnlessBlockMode(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	var stderr bytes.Buffer
+
+	code := Main(
+		[]string{"route", "add", "--name", "Map links", "--url-contains", "maps.google.com"},
+		&bytes.Buffer{},
+		&stderr,
+		testEnv(tmp),
+		fake,
+	)
+
+	if code != 2 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "route add requires --to unless --mode block") {
+		t.Fatalf("unexpected stderr:\n%s", stderr.String())
+	}
+	if len(fake.routingRules) != 0 {
+		t.Fatalf("routing rule should not be submitted: %#v", fake.routingRules)
+	}
 }
 
 func TestDraftReplyGeneratesDraftWithoutDeliveryDecision(t *testing.T) {
@@ -540,8 +638,71 @@ func TestHTTPClientUsesMessageHubPathsAndBearerToken(t *testing.T) {
 	}
 }
 
+func TestHTTPClientCreatesRoutingRule(t *testing.T) {
+	var method string
+	var path string
+	var auth string
+	var body map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		method = r.Method
+		path = r.URL.RequestURI()
+		auth = r.Header.Get("authorization")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusCreated,
+			Header:     http.Header{"content-type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"created":true,"routing_rule":{"rule_id":"routing_rule_1"}}`)),
+		}, nil
+	})
+
+	client := NewHTTPClient("https://api.example.test", "secret-token")
+	client.Timeout = 0
+	client.Client = &http.Client{Transport: transport}
+	result, err := client.CreateRoutingRule(
+		"Map links",
+		[]string{"@map-reader:gulls.ai"},
+		"handoff",
+		[]string{"maps.google.com"},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["created"] != true {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if method != http.MethodPost || path != "/routing-rules" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+	if auth != "Bearer secret-token" {
+		t.Fatalf("authorization = %q", auth)
+	}
+	if body["name"] != "Map links" || body["mode"] != "handoff" {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+	if got := strings.Join(anySliceStrings(body["route_to_handles"]), ","); got != "@map-reader:gulls.ai" {
+		t.Fatalf("route_to_handles = %q, body = %#v", got, body)
+	}
+	if got := strings.Join(anySliceStrings(body["url_contains"]), ","); got != "maps.google.com" {
+		t.Fatalf("url_contains = %q, body = %#v", got, body)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func anySliceStrings(value any) []string {
+	raw, _ := value.([]any)
+	items := []string{}
+	for _, item := range raw {
+		if text, ok := item.(string); ok {
+			items = append(items, text)
+		}
+	}
+	return items
 }

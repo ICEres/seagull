@@ -299,6 +299,77 @@ class SocialApiServiceTest(TestCase):
         self.assertFalse(hasattr(updated, "private_prompt"))
         self.assertFalse(hasattr(updated, "tool_credentials"))
 
+    def test_prompt_and_skill_assets_bind_to_owned_agent(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@assistant:seagull.local",
+        )
+        prompt = self.service.create_personal_agent_asset(
+            owner_user_id=self.alice.user_id,
+            asset_type="prompt",
+            name="Concise assistant",
+            instructions="Answer directly and ask before taking actions.",
+        )
+        skill = self.service.create_personal_agent_asset(
+            owner_user_id=self.alice.user_id,
+            asset_type="skill",
+            name="Planning skill",
+            instructions="Break implementation work into verifiable steps.",
+            style="Pragmatic and specific.",
+            tags=("planning", "implementation"),
+            max_output_chars=1200,
+        )
+
+        binding = self.service.set_agent_asset_binding(
+            owner_user_id=self.alice.user_id,
+            agent_handle=profile.handle,
+            prompt_asset_id=prompt.asset_id,
+            skill_asset_id=skill.asset_id,
+        )
+
+        self.assertEqual("asset_1", prompt.asset_id)
+        self.assertEqual("prompt", prompt.asset_type)
+        self.assertEqual("asset_2", skill.asset_id)
+        self.assertEqual("skill", skill.asset_type)
+        self.assertEqual(("planning", "implementation"), skill.tags)
+        self.assertEqual(1200, skill.max_output_chars)
+        self.assertEqual(profile.agent_id, binding.agent_id)
+        self.assertEqual(prompt.asset_id, binding.prompt_asset_id)
+        self.assertEqual(skill.asset_id, binding.skill_asset_id)
+        self.assertEqual((prompt,), self.service.list_personal_agent_assets(self.alice.user_id, asset_type="prompt"))
+        self.assertEqual(binding, self.service.get_agent_asset_binding(owner_user_id=self.alice.user_id, agent_handle=profile.handle))
+
+    def test_agent_asset_binding_enforces_owner_and_asset_type(self) -> None:
+        profile = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@assistant:seagull.local",
+        )
+        alice_prompt = self.service.create_personal_agent_asset(
+            owner_user_id=self.alice.user_id,
+            asset_type="prompt",
+            name="Prompt",
+            instructions="Stay concise.",
+        )
+        bob_skill = self.service.create_personal_agent_asset(
+            owner_user_id=self.bob.user_id,
+            asset_type="skill",
+            name="Other skill",
+            instructions="Private behavior.",
+        )
+
+        with self.assertRaises(PermissionDeniedError):
+            self.service.set_agent_asset_binding(
+                owner_user_id=self.alice.user_id,
+                agent_handle=profile.handle,
+                skill_asset_id=bob_skill.asset_id,
+            )
+        with self.assertRaises(InvalidSocialRequestError):
+            self.service.set_agent_asset_binding(
+                owner_user_id=self.alice.user_id,
+                agent_handle=profile.handle,
+                skill_asset_id=alice_prompt.asset_id,
+            )
+
     def test_relationship_presets_derive_profile_policy_defaults(self) -> None:
         helper = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -481,6 +552,56 @@ class LocalSocialApiTest(TestCase):
             ["inspect_shared_context", "return_summary", "no_long_term_memory"],
             profile["allowed_use_terms"],
         )
+
+    def test_local_api_creates_and_binds_prompt_and_skill_assets(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+        profile = api.create_agent_profile(
+            {
+                "handle": "@assistant:seagull.local",
+                "display_name": "Assistant",
+            },
+            principal,
+        )["profile"]
+        prompt = api.create_personal_agent_asset(
+            {
+                "asset_type": "prompt",
+                "name": "Concise assistant",
+                "instructions": "Answer directly and ask before taking actions.",
+            },
+            principal,
+        )["asset"]
+        skill = api.create_personal_agent_asset(
+            {
+                "asset_type": "skill",
+                "name": "Planning skill",
+                "instructions": "Break implementation work into verifiable steps.",
+                "style": "Pragmatic and specific.",
+                "tags": ["planning", "implementation"],
+                "max_output_chars": 1200,
+            },
+            principal,
+        )["asset"]
+
+        binding = api.set_agent_asset_binding(
+            profile["handle"],
+            {
+                "prompt_asset_id": prompt["asset_id"],
+                "skill_asset_id": skill["asset_id"],
+            },
+            principal,
+        )["binding"]
+        prompt_assets = api.list_personal_agent_assets(asset_type="prompt", principal=principal)["items"]
+        read_binding = api.read_agent_asset_binding(profile["handle"], principal=principal)["binding"]
+
+        self.assertEqual("prompt", prompt["asset_type"])
+        self.assertEqual("skill", skill["asset_type"])
+        self.assertEqual(["planning", "implementation"], skill["tags"])
+        self.assertEqual(1200, skill["max_output_chars"])
+        self.assertEqual(prompt["asset_id"], binding["prompt_asset_id"])
+        self.assertEqual(skill["asset_id"], binding["skill_asset_id"])
+        self.assertEqual([prompt["asset_id"]], [asset["asset_id"] for asset in prompt_assets])
+        self.assertEqual(binding, read_binding)
 
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

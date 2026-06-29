@@ -16,6 +16,7 @@ from seagull_protocol import (
 )
 
 from social_api.domain.models import (
+    AgentAssetBinding,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -24,6 +25,7 @@ from social_api.domain.models import (
     NodeRecord,
     Notification,
     PairTokenRecord,
+    PersonalAgentAsset,
     PostRecord,
     Room,
     RoomMembership,
@@ -37,6 +39,7 @@ MENTION_RE = re.compile(r"@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*", re.IGNOREC
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DELIVERY_MODES = {"pull", "webhook", "pull_webhook"}
 NODE_TYPES = {"cloud", "lan"}
+PERSONAL_AGENT_ASSET_TYPES = {"prompt", "skill"}
 
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
@@ -246,6 +249,102 @@ class SocialApiService:
         if limit is None:
             return profiles
         return profiles[:normalize_limit(limit)]
+
+    def create_personal_agent_asset(
+        self,
+        *,
+        owner_user_id: str,
+        asset_type: str,
+        name: str,
+        instructions: str,
+        description: str | None = None,
+        style: str | None = None,
+        tags: Sequence[str] = (),
+        max_output_chars: int | None = None,
+    ) -> PersonalAgentAsset:
+        self._require_identity(owner_user_id)
+        now = self._clock()
+        asset = PersonalAgentAsset(
+            asset_id=self._new_id("asset"),
+            owner_user_id=owner_user_id,
+            asset_type=normalize_personal_agent_asset_type(asset_type),
+            name=normalized_required(name, "name"),
+            instructions=normalized_required(instructions, "instructions"),
+            description=clean_optional(description),
+            style=clean_optional(style),
+            tags=clean_string_tuple(tags, "tags"),
+            max_output_chars=normalize_optional_max_output_chars(max_output_chars),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_personal_agent_asset(asset)
+        return asset
+
+    def list_personal_agent_assets(
+        self,
+        owner_user_id: str,
+        *,
+        asset_type: str | None = None,
+    ) -> tuple[PersonalAgentAsset, ...]:
+        self._require_identity(owner_user_id)
+        assets = self._repository.list_personal_agent_assets_by_owner(owner_user_id)
+        if asset_type is None:
+            return assets
+        normalized_type = normalize_personal_agent_asset_type(asset_type)
+        return tuple(asset for asset in assets if asset.asset_type == normalized_type)
+
+    def get_personal_agent_asset(
+        self,
+        *,
+        owner_user_id: str,
+        asset_id: str,
+    ) -> PersonalAgentAsset:
+        asset = self._require_asset(asset_id)
+        self._require_asset_owner(owner_user_id, asset)
+        return asset
+
+    def set_agent_asset_binding(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+        prompt_asset_id: str | None = None,
+        skill_asset_id: str | None = None,
+    ) -> AgentAssetBinding:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        prompt_asset = self._optional_owned_asset(
+            owner_user_id=owner_user_id,
+            asset_id=prompt_asset_id,
+            expected_asset_type="prompt",
+        )
+        skill_asset = self._optional_owned_asset(
+            owner_user_id=owner_user_id,
+            asset_id=skill_asset_id,
+            expected_asset_type="skill",
+        )
+        now = self._clock()
+        existing = self._repository.get_agent_asset_binding(profile.agent_id)
+        binding = AgentAssetBinding(
+            agent_id=profile.agent_id,
+            owner_user_id=owner_user_id,
+            prompt_asset_id=None if prompt_asset is None else prompt_asset.asset_id,
+            skill_asset_id=None if skill_asset is None else skill_asset.asset_id,
+            created_at=now if existing is None else existing.created_at,
+            updated_at=now,
+        )
+        self._repository.put_agent_asset_binding(binding)
+        return binding
+
+    def get_agent_asset_binding(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+    ) -> AgentAssetBinding | None:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        return self._repository.get_agent_asset_binding(profile.agent_id)
 
     def create_node(
         self,
@@ -570,6 +669,28 @@ class SocialApiService:
             raise NotFoundError(f"agent profile not found: {normalized_handle}")
         return profile
 
+    def _require_asset(self, asset_id: str) -> PersonalAgentAsset:
+        normalized_asset_id = normalized_required(asset_id, "asset_id")
+        asset = self._repository.get_personal_agent_asset(normalized_asset_id)
+        if asset is None:
+            raise NotFoundError(f"personal agent asset not found: {normalized_asset_id}")
+        return asset
+
+    def _optional_owned_asset(
+        self,
+        *,
+        owner_user_id: str,
+        asset_id: str | None,
+        expected_asset_type: str,
+    ) -> PersonalAgentAsset | None:
+        if asset_id is None:
+            return None
+        asset = self._require_asset(asset_id)
+        self._require_asset_owner(owner_user_id, asset)
+        if asset.asset_type != expected_asset_type:
+            raise InvalidSocialRequestError(f"{expected_asset_type}_asset_id must reference a {expected_asset_type} asset")
+        return asset
+
     def _require_room_by_slug(self, slug: str) -> Room:
         normalized_slug = normalize_slug(slug)
         room = self._repository.get_room_by_slug(normalized_slug)
@@ -588,6 +709,11 @@ class SocialApiService:
     def _require_owner(owner_user_id: str, profile: AgentProfileRecord) -> None:
         if profile.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
             raise PermissionDeniedError(f"user does not own agent: {profile.handle}")
+
+    @staticmethod
+    def _require_asset_owner(owner_user_id: str, asset: PersonalAgentAsset) -> None:
+        if asset.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
+            raise PermissionDeniedError(f"user does not own personal agent asset: {asset.asset_id}")
 
     @staticmethod
     def _require_node_owner(owner_user_id: str, node: NodeRecord) -> None:
@@ -664,10 +790,25 @@ def normalize_node_type(node_type: str) -> str:
     return normalized
 
 
+def normalize_personal_agent_asset_type(asset_type: str) -> str:
+    normalized = normalized_required(asset_type, "asset_type").lower()
+    if normalized not in PERSONAL_AGENT_ASSET_TYPES:
+        raise InvalidSocialRequestError("asset_type must be prompt or skill")
+    return normalized
+
+
 def normalize_limit(limit: int) -> int:
     if not isinstance(limit, int):
         raise InvalidSocialRequestError("limit must be an integer")
     return max(1, min(limit, 100))
+
+
+def normalize_optional_max_output_chars(max_output_chars: int | None) -> int | None:
+    if max_output_chars is None:
+        return None
+    if not isinstance(max_output_chars, int):
+        raise InvalidSocialRequestError("max_output_chars must be an integer")
+    return max(1, min(max_output_chars, 4000))
 
 
 def normalize_pair_token_ttl(ttl_seconds: int) -> int:

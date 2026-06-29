@@ -7,6 +7,7 @@ from urllib.parse import unquote
 import boto3
 
 from social_api.api.local import (
+    agent_asset_binding_to_dict,
     agent_profile_to_dict,
     dashboard_summary_to_dict,
     follow_to_dict,
@@ -15,6 +16,7 @@ from social_api.api.local import (
     node_to_dict,
     notification_to_dict,
     pair_token_to_dict,
+    personal_agent_asset_to_dict,
     post_to_dict,
     room_membership_to_dict,
     room_to_dict,
@@ -38,6 +40,8 @@ dynamodb = boto3.resource("dynamodb")
 repository = DynamoDbSocialRepository(
     identities_table=dynamodb.Table(os.environ["IDENTITIES_TABLE"]),
     profiles_table=dynamodb.Table(os.environ["PROFILES_TABLE"]),
+    personal_agent_assets_table=dynamodb.Table(os.environ["PERSONAL_AGENT_ASSETS_TABLE"]),
+    agent_asset_bindings_table=dynamodb.Table(os.environ["AGENT_ASSET_BINDINGS_TABLE"]),
     nodes_table=dynamodb.Table(os.environ["NODES_TABLE"]),
     pair_tokens_table=dynamodb.Table(os.environ["PAIR_TOKENS_TABLE"]),
     rooms_table=dynamodb.Table(os.environ["ROOMS_TABLE"]),
@@ -169,6 +173,60 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 node_id=optional_query_string(query, "node_id"),
             )
             return response(200, {"items": [agent_profile_to_dict(profile) for profile in profiles]})
+
+        if method == "POST" and path == "/personal-agent-assets":
+            body = parse_body(event)
+            asset = service.create_personal_agent_asset(
+                owner_user_id=owner_user_id_from_body(event, body),
+                asset_type=required_string(body, "asset_type"),
+                name=required_string(body, "name"),
+                instructions=required_string(body, "instructions"),
+                description=optional_string(body, "description"),
+                style=optional_string(body, "style"),
+                tags=string_list(body.get("tags", ()), "tags"),
+                max_output_chars=optional_nullable_body_int(body, "max_output_chars"),
+            )
+            return response(200, {"created": True, "asset": personal_agent_asset_to_dict(asset)})
+
+        if method == "GET" and path == "/personal-agent-assets":
+            query = event.get("queryStringParameters") or {}
+            assets = service.list_personal_agent_assets(
+                owner_user_id_from_query(event, query),
+                asset_type=optional_query_string(query, "asset_type"),
+            )
+            return response(200, {"items": [personal_agent_asset_to_dict(asset) for asset in assets]})
+
+        if method == "GET" and path.startswith("/personal-agent-assets/"):
+            query = event.get("queryStringParameters") or {}
+            asset_id = unquote(path.removeprefix("/personal-agent-assets/").strip("/"))
+            asset = service.get_personal_agent_asset(
+                owner_user_id=owner_user_id_from_query(event, query),
+                asset_id=asset_id,
+            )
+            return response(200, {"asset": personal_agent_asset_to_dict(asset)})
+
+        if method == "PUT" and path.startswith("/profiles/") and path.endswith("/asset-binding"):
+            body = parse_body(event)
+            handle = path_param(path, "/profiles/", "/asset-binding")
+            binding = service.set_agent_asset_binding(
+                owner_user_id=owner_user_id_from_body(event, body),
+                agent_handle=handle,
+                prompt_asset_id=optional_string(body, "prompt_asset_id"),
+                skill_asset_id=optional_string(body, "skill_asset_id"),
+            )
+            return response(200, {"binding": agent_asset_binding_to_dict(binding)})
+
+        if method == "GET" and path.startswith("/profiles/") and path.endswith("/asset-binding"):
+            query = event.get("queryStringParameters") or {}
+            handle = path_param(path, "/profiles/", "/asset-binding")
+            binding = service.get_agent_asset_binding(
+                owner_user_id=owner_user_id_from_query(event, query),
+                agent_handle=handle,
+            )
+            return response(
+                200,
+                {"binding": None if binding is None else agent_asset_binding_to_dict(binding)},
+            )
 
         if method == "PATCH" and path.startswith("/profiles/"):
             body = parse_body(event)
@@ -388,7 +446,7 @@ def cors_response() -> dict[str, Any]:
 def cors_headers() -> dict[str, str]:
     return {
         "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,OPTIONS,PATCH,POST",
+        "access-control-allow-methods": "GET,OPTIONS,PATCH,POST,PUT",
         "access-control-allow-headers": "authorization,content-type",
         "access-control-max-age": "300",
     }
@@ -445,6 +503,15 @@ def optional_body_int(body: dict[str, Any], field_name: str, *, default: int) ->
     value = body.get(field_name)
     if value is None:
         return default
+    if not isinstance(value, int):
+        raise BadRequest(f"{field_name} must be an integer")
+    return value
+
+
+def optional_nullable_body_int(body: dict[str, Any], field_name: str) -> int | None:
+    value = body.get(field_name)
+    if value is None:
+        return None
     if not isinstance(value, int):
         raise BadRequest(f"{field_name} must be an integer")
     return value

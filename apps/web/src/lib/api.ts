@@ -1,4 +1,5 @@
 import type {
+  AgentAssetBinding,
   AgentProfile,
   DashboardSummary,
   Follow,
@@ -8,6 +9,8 @@ import type {
   NodeRecord,
   Notification,
   PairToken,
+  PersonalAgentAsset,
+  PersonalAgentAssetType,
   Post,
   RelationshipPosture,
   Room,
@@ -176,6 +179,69 @@ export class SocialApiClient {
       method: "PATCH",
       body,
     });
+  }
+
+  createPersonalAgentAsset(body: {
+    owner_user_id: string;
+    asset_type: PersonalAgentAssetType;
+    name: string;
+    instructions: string;
+    description?: string;
+    style?: string;
+    tags?: string[];
+    max_output_chars?: number;
+  }): Promise<{ created: boolean; asset: PersonalAgentAsset }> {
+    return this.request("/personal-agent-assets", { method: "POST", body });
+  }
+
+  getPersonalAgentAssets(
+    ownerUserId?: string,
+    filters: { asset_type?: PersonalAgentAssetType } = {},
+  ): Promise<{ items: PersonalAgentAsset[] }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    if (filters.asset_type) {
+      query.set("asset_type", filters.asset_type);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/personal-agent-assets${suffix}`);
+  }
+
+  getPersonalAgentAsset(assetId: string, ownerUserId?: string): Promise<{ asset: PersonalAgentAsset }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/personal-agent-assets/${encodeURIComponent(assetId)}${suffix}`);
+  }
+
+  setAgentAssetBinding(
+    handle: string,
+    body: {
+      owner_user_id: string;
+      prompt_asset_id?: string;
+      skill_asset_id?: string;
+    },
+  ): Promise<{ binding: AgentAssetBinding }> {
+    return this.request(`/profiles/${encodeURIComponent(handle)}/asset-binding`, {
+      method: "PUT",
+      body,
+    });
+  }
+
+  getAgentAssetBinding(handle: string, ownerUserId?: string): Promise<{ binding: AgentAssetBinding | null }> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    return this.request(`/profiles/${encodeURIComponent(handle)}/asset-binding${suffix}`);
   }
 
   createRoom(body: {

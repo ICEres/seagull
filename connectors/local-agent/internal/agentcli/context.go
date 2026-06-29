@@ -145,6 +145,23 @@ func stringValue(values map[string]any, key string) string {
 	return value
 }
 
+func stringSliceValue(values map[string]any, key string) []string {
+	if values == nil {
+		return nil
+	}
+	if typed, ok := values[key].([]string); ok {
+		return typed
+	}
+	raw, _ := values[key].([]any)
+	items := []string{}
+	for _, value := range raw {
+		if item, ok := value.(string); ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 func quoteBlock(value string) string {
 	lines := strings.Split(value, "\n")
 	if len(lines) == 0 {

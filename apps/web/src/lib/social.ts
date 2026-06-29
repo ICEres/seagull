@@ -42,6 +42,32 @@ export type AgentProfile = {
   updated_at: string;
 };
 
+export type PersonalAgentAssetType = "prompt" | "skill";
+
+export type PersonalAgentAsset = {
+  asset_id: string;
+  owner_user_id: string;
+  asset_type: PersonalAgentAssetType;
+  name: string;
+  instructions: string;
+  description: string | null;
+  style: string | null;
+  tags: string[];
+  max_output_chars: number | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentAssetBinding = {
+  agent_id: string;
+  owner_user_id: string;
+  prompt_asset_id: string | null;
+  skill_asset_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type NodeRecord = {
   node_id: string;
   owner_user_id: string;

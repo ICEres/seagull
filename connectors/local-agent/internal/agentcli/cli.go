@@ -291,6 +291,52 @@ func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client
 		}
 		printJSONOrText(stdout, global.JSON, result, fmt.Sprintf("Sent %v in %v.", result["message_id"], result["thread_id"]))
 		return 0, nil
+	case "route":
+		if len(commandArgs) == 0 {
+			return 0, usage("route requires subcommand: add")
+		}
+		switch commandArgs[0] {
+		case "add":
+			fs := commandFlagSet("route add", stderr)
+			routeTo := stringList{}
+			urlContains := stringList{}
+			name := fs.String("name", "", "routing rule name")
+			mode := fs.String("mode", "copy", "routing mode: direct, copy, handoff, review, or block")
+			fs.Var(&routeTo, "to", "agent handle to route to")
+			fs.Var(&urlContains, "url-contains", "case-insensitive URL substring to match")
+			if err := parseCommand(fs, commandArgs[1:]); err != nil {
+				return 0, err
+			}
+			if strings.TrimSpace(*name) == "" {
+				return 0, usage("route add requires --name")
+			}
+			normalizedMode := strings.ToLower(strings.TrimSpace(*mode))
+			if normalizedMode == "" {
+				return 0, usage("route add requires --mode")
+			}
+			if len(urlContains) == 0 {
+				return 0, usage("route add requires --url-contains")
+			}
+			if normalizedMode == "block" {
+				if len(routeTo) != 0 {
+					return 0, usage("route add with --mode block does not use --to")
+				}
+			} else if len(routeTo) == 0 {
+				return 0, usage("route add requires --to unless --mode block")
+			}
+			_, client, err := loadRuntime(global, env, client, nil)
+			if err != nil {
+				return 0, err
+			}
+			result, err := client.CreateRoutingRule(strings.TrimSpace(*name), routeTo, normalizedMode, urlContains)
+			if err != nil {
+				return 0, err
+			}
+			printJSONOrText(stdout, global.JSON, result, formatRoutingRule(result))
+			return 0, nil
+		default:
+			return 0, fmt.Errorf("unknown route subcommand: %s", commandArgs[0])
+		}
 	case "watch":
 		fs := commandFlagSet("watch", stderr)
 		limit := fs.Int("limit", 20, "maximum inbox deliveries")
@@ -444,6 +490,22 @@ func formatDecision(result map[string]any, verb string) string {
 		return fmt.Sprintf("%s %s; status=%s; reply=%s.", verb, deliveryID, status, stringValue(reply, "message_id"))
 	}
 	return fmt.Sprintf("%s %s; status=%s.", verb, deliveryID, status)
+}
+
+func formatRoutingRule(result map[string]any) string {
+	rule := objectValue(result, "routing_rule")
+	ruleID := firstClean(stringValue(rule, "rule_id"), "unknown")
+	name := firstClean(stringValue(rule, "name"), "unnamed")
+	mode := firstClean(stringValue(rule, "mode"), "copy")
+	routeTo := strings.Join(stringSliceValue(rule, "route_to_handles"), ", ")
+	matches := strings.Join(stringSliceValue(rule, "url_contains"), ", ")
+	if routeTo == "" {
+		routeTo = "(none)"
+	}
+	if matches == "" {
+		matches = "(no URL filters)"
+	}
+	return fmt.Sprintf("Created routing rule %s: %s; mode=%s; to=%s; url_contains=%s.", ruleID, name, mode, routeTo, matches)
 }
 
 func formatDraftResult(result DraftResult) string {

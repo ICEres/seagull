@@ -5,6 +5,7 @@ from typing import Any
 
 from social_api._compat import dataclass
 from social_api.domain import (
+    AgentAssetBinding,
     AgentProfileRecord,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
@@ -18,6 +19,7 @@ from social_api.domain import (
     Notification,
     PairTokenRecord,
     PermissionDeniedError,
+    PersonalAgentAsset,
     PostRecord,
     Room,
     RoomMembership,
@@ -228,6 +230,103 @@ class LocalSocialApi:
             raise ApiError(404, "not_found", str(exc)) from exc
         return {"items": [agent_profile_to_dict(profile) for profile in profiles]}
 
+    def create_personal_agent_asset(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
+        try:
+            asset = self._service.create_personal_agent_asset(
+                owner_user_id=self._owner_user_id(body, principal),
+                asset_type=required_string(body, "asset_type"),
+                name=required_string(body, "name"),
+                instructions=required_string(body, "instructions"),
+                description=optional_string(body, "description"),
+                style=optional_string(body, "style"),
+                tags=string_list(body.get("tags", ()), "tags"),
+                max_output_chars=optional_nullable_int(body, "max_output_chars"),
+            )
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"created": True, "asset": personal_agent_asset_to_dict(asset)}
+
+    def list_personal_agent_assets(
+        self,
+        *,
+        owner_user_id: str | None = None,
+        asset_type: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            assets = self._service.list_personal_agent_assets(
+                self._owner_user_id_from_value(owner_user_id, principal),
+                asset_type=asset_type,
+            )
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"items": [personal_agent_asset_to_dict(asset) for asset in assets]}
+
+    def read_personal_agent_asset(
+        self,
+        asset_id: str,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            asset = self._service.get_personal_agent_asset(
+                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                asset_id=asset_id,
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"asset": personal_agent_asset_to_dict(asset)}
+
+    def set_agent_asset_binding(
+        self,
+        agent_handle: str,
+        body: dict[str, Any],
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            binding = self._service.set_agent_asset_binding(
+                owner_user_id=self._owner_user_id(body, principal),
+                agent_handle=agent_handle,
+                prompt_asset_id=optional_string(body, "prompt_asset_id"),
+                skill_asset_id=optional_string(body, "skill_asset_id"),
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"binding": agent_asset_binding_to_dict(binding)}
+
+    def read_agent_asset_binding(
+        self,
+        agent_handle: str,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            binding = self._service.get_agent_asset_binding(
+                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                agent_handle=agent_handle,
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"binding": None if binding is None else agent_asset_binding_to_dict(binding)}
+
     def create_room(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
         try:
             room = self._service.create_room(
@@ -420,6 +519,34 @@ def agent_profile_to_dict(profile: AgentProfileRecord) -> dict[str, Any]:
         "last_seen_at": datetime_to_string(profile.last_seen_at),
         "created_at": datetime_to_string(profile.created_at),
         "updated_at": datetime_to_string(profile.updated_at),
+    }
+
+
+def personal_agent_asset_to_dict(asset: PersonalAgentAsset) -> dict[str, Any]:
+    return {
+        "asset_id": asset.asset_id,
+        "owner_user_id": asset.owner_user_id,
+        "asset_type": asset.asset_type,
+        "name": asset.name,
+        "instructions": asset.instructions,
+        "description": asset.description,
+        "style": asset.style,
+        "tags": list(asset.tags),
+        "max_output_chars": asset.max_output_chars,
+        "status": asset.status,
+        "created_at": datetime_to_string(asset.created_at),
+        "updated_at": datetime_to_string(asset.updated_at),
+    }
+
+
+def agent_asset_binding_to_dict(binding: AgentAssetBinding) -> dict[str, Any]:
+    return {
+        "agent_id": binding.agent_id,
+        "owner_user_id": binding.owner_user_id,
+        "prompt_asset_id": binding.prompt_asset_id,
+        "skill_asset_id": binding.skill_asset_id,
+        "created_at": datetime_to_string(binding.created_at),
+        "updated_at": datetime_to_string(binding.updated_at),
     }
 
 
@@ -630,6 +757,15 @@ def optional_int(body: dict[str, Any], field_name: str, *, default: int) -> int:
     value = body.get(field_name)
     if value is None:
         return default
+    if not isinstance(value, int):
+        raise ApiError(400, "bad_request", f"{field_name} must be an integer")
+    return value
+
+
+def optional_nullable_int(body: dict[str, Any], field_name: str) -> int | None:
+    value = body.get(field_name)
+    if value is None:
+        return None
     if not isinstance(value, int):
         raise ApiError(400, "bad_request", f"{field_name} must be an integer")
     return value

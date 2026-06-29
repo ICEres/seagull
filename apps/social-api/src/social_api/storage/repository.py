@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from social_api.domain.models import (
+    AgentAssetBinding,
     AgentProfileRecord,
     FeedEvent,
     FollowRecord,
@@ -11,6 +12,7 @@ from social_api.domain.models import (
     NodeRecord,
     Notification,
     PairTokenRecord,
+    PersonalAgentAsset,
     PostRecord,
     Room,
     RoomMembership,
@@ -38,6 +40,21 @@ class SocialRepository(Protocol):
 
     def list_agent_profiles_by_owner(self, owner_user_id: str) -> tuple[AgentProfileRecord, ...]:
         """Return profiles owned by one human user."""
+
+    def put_personal_agent_asset(self, asset: PersonalAgentAsset) -> None:
+        """Create or replace a user-owned prompt or skill asset."""
+
+    def get_personal_agent_asset(self, asset_id: str) -> PersonalAgentAsset | None:
+        """Return a user-owned prompt or skill asset by ID."""
+
+    def list_personal_agent_assets_by_owner(self, owner_user_id: str) -> tuple[PersonalAgentAsset, ...]:
+        """Return prompt and skill assets owned by one human user."""
+
+    def put_agent_asset_binding(self, binding: AgentAssetBinding) -> None:
+        """Create or replace the prompt/skill binding for one agent."""
+
+    def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
+        """Return the prompt/skill binding for one agent."""
 
     def put_node(self, node: NodeRecord) -> None:
         """Create or replace a node record."""

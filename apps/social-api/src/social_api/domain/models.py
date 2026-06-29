@@ -44,6 +44,32 @@ class AgentProfileRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PersonalAgentAsset:
+    asset_id: str
+    owner_user_id: str
+    asset_type: str
+    name: str
+    instructions: str
+    description: str | None = None
+    style: str | None = None
+    tags: tuple[str, ...] = ()
+    max_output_chars: int | None = None
+    status: str = "active"
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAssetBinding:
+    agent_id: str
+    owner_user_id: str
+    prompt_asset_id: str | None = None
+    skill_asset_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class Room:
     room_id: str
     slug: str

@@ -18,6 +18,7 @@ type Client interface {
 	GetThread(threadID string, limit int) (map[string]any, error)
 	GetThreadContext(threadID string) (map[string]any, error)
 	SendMessage(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string) (map[string]any, error)
+	CreateRoutingRule(name string, routeToHandles []string, mode string, urlContains []string) (map[string]any, error)
 	AckMessage(messageID string, recipientHandle string) (map[string]any, error)
 	DecideDelivery(deliveryID string, agentHandle string, decision string, content string, note string) (map[string]any, error)
 }
@@ -68,6 +69,15 @@ func (c *HTTPClient) SendMessage(senderHandle string, recipientHandles []string,
 		body["thread_id"] = threadID
 	}
 	return c.request(http.MethodPost, "/messages", body)
+}
+
+func (c *HTTPClient) CreateRoutingRule(name string, routeToHandles []string, mode string, urlContains []string) (map[string]any, error) {
+	return c.request(http.MethodPost, "/routing-rules", map[string]any{
+		"name":             name,
+		"route_to_handles": routeToHandles,
+		"mode":             mode,
+		"url_contains":     urlContains,
+	})
 }
 
 func (c *HTTPClient) AckMessage(messageID string, recipientHandle string) (map[string]any, error) {

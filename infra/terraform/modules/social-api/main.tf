@@ -9,6 +9,8 @@ locals {
   table_arns = [
     aws_dynamodb_table.identities.arn,
     aws_dynamodb_table.profiles.arn,
+    aws_dynamodb_table.personal_agent_assets.arn,
+    aws_dynamodb_table.agent_asset_bindings.arn,
     aws_dynamodb_table.nodes.arn,
     aws_dynamodb_table.pair_tokens.arn,
     aws_dynamodb_table.rooms.arn,
@@ -96,6 +98,67 @@ resource "aws_dynamodb_table" "profiles" {
     hash_key        = "owner_user_id"
     range_key       = "created_at"
     projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "personal_agent_assets" {
+  name                        = "${var.name_prefix}-personal-agent-assets"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "asset_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "asset_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "owner_user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "owner-created-at-index"
+    hash_key        = "owner_user_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "agent_asset_bindings" {
+  name                        = "${var.name_prefix}-agent-asset-bindings"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "agent_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "agent_id"
+    type = "S"
   }
 
   point_in_time_recovery {
@@ -442,19 +505,21 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      APP_NAME               = var.name_prefix
-      FEED_EVENTS_TABLE      = aws_dynamodb_table.feed_events.name
-      FOLLOWS_TABLE          = aws_dynamodb_table.follows.name
-      IDENTITIES_TABLE       = aws_dynamodb_table.identities.name
-      MODERATION_TABLE       = aws_dynamodb_table.moderation_records.name
-      NODES_TABLE            = aws_dynamodb_table.nodes.name
-      NOTIFICATIONS_TABLE    = aws_dynamodb_table.notifications.name
-      PAIR_TOKENS_TABLE      = aws_dynamodb_table.pair_tokens.name
-      POSTS_TABLE            = aws_dynamodb_table.posts.name
-      PROFILES_TABLE         = aws_dynamodb_table.profiles.name
-      ROOM_MEMBERSHIPS_TABLE = aws_dynamodb_table.room_memberships.name
-      ROOMS_TABLE            = aws_dynamodb_table.rooms.name
-      SOCIAL_AUTH_REQUIRED   = "true"
+      AGENT_ASSET_BINDINGS_TABLE  = aws_dynamodb_table.agent_asset_bindings.name
+      APP_NAME                    = var.name_prefix
+      FEED_EVENTS_TABLE           = aws_dynamodb_table.feed_events.name
+      FOLLOWS_TABLE               = aws_dynamodb_table.follows.name
+      IDENTITIES_TABLE            = aws_dynamodb_table.identities.name
+      MODERATION_TABLE            = aws_dynamodb_table.moderation_records.name
+      NODES_TABLE                 = aws_dynamodb_table.nodes.name
+      NOTIFICATIONS_TABLE         = aws_dynamodb_table.notifications.name
+      PAIR_TOKENS_TABLE           = aws_dynamodb_table.pair_tokens.name
+      PERSONAL_AGENT_ASSETS_TABLE = aws_dynamodb_table.personal_agent_assets.name
+      POSTS_TABLE                 = aws_dynamodb_table.posts.name
+      PROFILES_TABLE              = aws_dynamodb_table.profiles.name
+      ROOM_MEMBERSHIPS_TABLE      = aws_dynamodb_table.room_memberships.name
+      ROOMS_TABLE                 = aws_dynamodb_table.rooms.name
+      SOCIAL_AUTH_REQUIRED        = "true"
     }
   }
 
@@ -472,7 +537,7 @@ resource "aws_apigatewayv2_api" "http" {
 
   cors_configuration {
     allow_headers = ["authorization", "content-type"]
-    allow_methods = ["GET", "PATCH", "POST", "OPTIONS"]
+    allow_methods = ["GET", "PATCH", "POST", "PUT", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
   }

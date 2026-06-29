@@ -19,7 +19,7 @@ locals {
     for name in distinct(compact([var.admin_domain_name, var.landing_domain_name])) : name
     if name != var.domain_name
   ]
-  domain_aliases = distinct(compact([var.domain_name, var.admin_domain_name, var.landing_domain_name]))
+  domain_aliases = distinct(compact([var.domain_name, var.admin_domain_name]))
   landing_files  = var.landing_dist_dir == "" ? toset([]) : fileset(var.landing_dist_dir, "**")
   origin_id      = "${var.name_prefix}-s3-origin"
   dist_files     = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
@@ -191,33 +191,6 @@ resource "aws_cloudfront_cache_policy" "assets" {
   }
 }
 
-resource "aws_cloudfront_function" "landing_router" {
-  count = var.landing_domain_name == "" ? 0 : 1
-
-  name    = "${var.name_prefix}-landing-router"
-  runtime = "cloudfront-js-2.0"
-  comment = "Route ${var.landing_domain_name} to the Seagull landing page."
-  publish = true
-  code    = <<-EOT
-function handler(event) {
-  var request = event.request;
-  var hostHeader = request.headers.host;
-  var host = hostHeader && hostHeader.value ? hostHeader.value.toLowerCase() : "";
-  if (host === "${lower(var.landing_domain_name)}") {
-    var uri = request.uri || "/";
-    var lastSegment = uri.split("/").pop();
-    var isFile = lastSegment.indexOf(".") >= 0;
-    if (uri === "/" || !isFile) {
-      request.uri = "/landing/index.html";
-    } else if (uri.indexOf("/landing/") !== 0) {
-      request.uri = "/landing" + uri;
-    }
-  }
-  return request;
-}
-EOT
-}
-
 resource "aws_cloudfront_distribution" "web" {
   aliases             = local.domain_aliases
   enabled             = true
@@ -239,15 +212,6 @@ resource "aws_cloudfront_distribution" "web" {
     compress               = true
     target_origin_id       = local.origin_id
     viewer_protocol_policy = "redirect-to-https"
-
-    dynamic "function_association" {
-      for_each = aws_cloudfront_function.landing_router
-
-      content {
-        event_type   = "viewer-request"
-        function_arn = function_association.value.arn
-      }
-    }
   }
 
   ordered_cache_behavior {
@@ -285,6 +249,62 @@ resource "aws_cloudfront_distribution" "web" {
     minimum_protocol_version = "TLSv1.2_2021"
     ssl_support_method       = "sni-only"
   }
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudfront_distribution" "landing" {
+  count = var.landing_domain_name == "" ? 0 : 1
+
+  aliases             = [var.landing_domain_name]
+  enabled             = true
+  is_ipv6_enabled     = true
+  comment             = "${var.name_prefix} landing"
+  default_root_object = "landing/index.html"
+  price_class         = "PriceClass_100"
+
+  origin {
+    domain_name              = aws_s3_bucket.web.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.web.id
+    origin_id                = local.origin_id
+  }
+
+  default_cache_behavior {
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = aws_cloudfront_cache_policy.app_shell.id
+    compress               = true
+    target_origin_id       = local.origin_id
+    viewer_protocol_policy = "redirect-to-https"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 0
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/landing/index.html"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 0
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/landing/index.html"
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    acm_certificate_arn      = aws_acm_certificate_validation.web.certificate_arn
+    minimum_protocol_version = "TLSv1.2_2021"
+    ssl_support_method       = "sni-only"
+  }
+
+  depends_on = [aws_cloudfront_distribution.web]
 
   tags = local.common_tags
 }
@@ -355,8 +375,8 @@ resource "aws_route53_record" "landing_web_ipv4" {
 
   alias {
     evaluate_target_health = false
-    name                   = aws_cloudfront_distribution.web.domain_name
-    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+    name                   = aws_cloudfront_distribution.landing[0].domain_name
+    zone_id                = aws_cloudfront_distribution.landing[0].hosted_zone_id
   }
 }
 
@@ -370,8 +390,8 @@ resource "aws_route53_record" "landing_web_ipv6" {
 
   alias {
     evaluate_target_health = false
-    name                   = aws_cloudfront_distribution.web.domain_name
-    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+    name                   = aws_cloudfront_distribution.landing[0].domain_name
+    zone_id                = aws_cloudfront_distribution.landing[0].hosted_zone_id
   }
 }
 
@@ -388,7 +408,10 @@ data "aws_iam_policy_document" "web" {
     condition {
       test     = "StringEquals"
       variable = "AWS:SourceArn"
-      values   = [aws_cloudfront_distribution.web.arn]
+      values = concat(
+        [aws_cloudfront_distribution.web.arn],
+        var.landing_domain_name == "" ? [] : [aws_cloudfront_distribution.landing[0].arn],
+      )
     }
   }
 }

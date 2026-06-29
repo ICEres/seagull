@@ -141,8 +141,8 @@ sea.gulls.ai
 -> private S3 bucket seagull-dev-web-<account-id>-<region>
 ```
 
-The apex landing page is served by the same CloudFront distribution with a
-host-based rewrite:
+The apex landing page is served by a separate CloudFront distribution that
+points at the landing page assets:
 
 ```text
 gulls.ai

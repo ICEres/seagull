@@ -148,6 +148,11 @@ output "web_domain_name" {
   value       = module.web.domain_name
 }
 
+output "admin_web_url" {
+  description = "Custom admin frontend URL."
+  value       = module.web.admin_url
+}
+
 output "mcp_connector_url" {
   description = "Public HTTPS URL for the hosted MCP connector service."
   value       = "https://${var.mcp_domain_name}"

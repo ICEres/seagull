@@ -271,6 +271,80 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("receive.before");
     expect(container.textContent).toContain("Apply hook");
   });
+
+  it("renders AI provider admin config", async () => {
+    window.SEAGULL_CONFIG = {
+      socialApiUrl: "https://api.example.test",
+      messageApiUrl: "https://message.example.test",
+      aiProviderApiUrl: "https://ai.example.test",
+      auth: { mode: "local" },
+    };
+    window.localStorage.setItem("seagull.web.ai_provider.admin_secret", "admin-secret");
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "https://ai.example.test/health": { ok: true, app: "ai-provider", storage: "dynamodb" },
+      "https://ai.example.test/admin/ai-providers": {
+        provider_configs: [
+          {
+            provider_config_id: "provider_config_fake",
+            provider: "fake",
+            enabled: true,
+            allowed_models: ["fake-small"],
+            secret_ref: null,
+            region: null,
+            created_at: "2026-06-29T00:00:00Z",
+            updated_at: "2026-06-29T00:00:00Z",
+          },
+        ],
+      },
+      "https://ai.example.test/admin/ai-credits/server-balance": {
+        balance: { available_credits: 12000 },
+      },
+      "https://ai.example.test/admin/ai-credits/server-ledger": {
+        entries: [
+          {
+            entry_id: "server_credit_1",
+            entry_type: "credit_grant",
+            credit_delta: 12000,
+            reason: "Initial pool",
+            admin_actor_id: "server-owner",
+            owner_user_id: null,
+            user_credit_entry_id: null,
+            created_at: "2026-06-29T00:00:00Z",
+          },
+        ],
+      },
+      "https://ai.example.test/admin/ai-audit-events": {
+        events: [
+          {
+            audit_id: "audit_1",
+            admin_actor_id: "server-owner",
+            action: "ai.provider_config_update",
+            target_type: "provider",
+            target_id: "fake",
+            reason: "Enable fake provider",
+            metadata: {},
+            created_at: "2026-06-29T00:00:00Z",
+          },
+        ],
+      },
+    });
+
+    const container = renderApp("/admin");
+    await waitForText(container, "fake-small");
+
+    expect(container.textContent).toContain("fake");
+    expect(container.textContent).toContain("fake-small");
+    expect(container.textContent).toContain("12000");
+    expect(container.textContent).toContain("ai.provider_config_update");
+  });
 });
 
 function renderApp(path: string): HTMLElement {
@@ -326,9 +400,10 @@ function mockApi(responses: Record<string, unknown>): void {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       const key = `${url.pathname}${url.search}`;
-      const body = responses[key] ?? { error: "not_found", message: key };
+      const fullKey = `${url.origin}${url.pathname}${url.search}`;
+      const body = responses[fullKey] ?? responses[key] ?? { error: "not_found", message: fullKey };
       return new Response(JSON.stringify(body), {
-        status: key in responses ? 200 : 404,
+        status: fullKey in responses || key in responses ? 200 : 404,
         headers: { "content-type": "application/json" },
       });
     }),

@@ -15,11 +15,14 @@ locals {
     },
   )
 
-  origin_id  = "${var.name_prefix}-s3-origin"
-  dist_files = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
+  domain_aliases = compact([var.domain_name, var.admin_domain_name])
+  origin_id      = "${var.name_prefix}-s3-origin"
+  dist_files     = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
   runtime_config = "window.SEAGULL_CONFIG = ${jsonencode({
-    socialApiUrl  = var.social_api_url
-    messageApiUrl = var.message_api_url
+    socialApiUrl     = var.social_api_url
+    messageApiUrl    = var.message_api_url
+    aiProviderApiUrl = var.ai_provider_api_url
+    adminDomainName  = var.admin_domain_name
     auth = {
       mode         = var.auth_mode
       issuer       = var.auth_issuer
@@ -49,8 +52,9 @@ locals {
 resource "aws_acm_certificate" "web" {
   provider = aws.us_east_1
 
-  domain_name       = var.domain_name
-  validation_method = "DNS"
+  domain_name               = var.domain_name
+  subject_alternative_names = var.admin_domain_name == "" ? [] : [var.admin_domain_name]
+  validation_method         = "DNS"
 
   lifecycle {
     create_before_destroy = true
@@ -183,7 +187,7 @@ resource "aws_cloudfront_cache_policy" "assets" {
 }
 
 resource "aws_cloudfront_distribution" "web" {
-  aliases             = [var.domain_name]
+  aliases             = local.domain_aliases
   enabled             = true
   is_ipv6_enabled     = true
   comment             = "${var.name_prefix} frontend"
@@ -260,6 +264,36 @@ resource "aws_route53_record" "web_ipv4" {
 resource "aws_route53_record" "web_ipv6" {
   allow_overwrite = true
   name            = var.domain_name
+  type            = "AAAA"
+  zone_id         = var.hosted_zone_id
+
+  alias {
+    evaluate_target_health = false
+    name                   = aws_cloudfront_distribution.web.domain_name
+    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+  }
+}
+
+resource "aws_route53_record" "admin_web_ipv4" {
+  count = var.admin_domain_name == "" ? 0 : 1
+
+  allow_overwrite = true
+  name            = var.admin_domain_name
+  type            = "A"
+  zone_id         = var.hosted_zone_id
+
+  alias {
+    evaluate_target_health = false
+    name                   = aws_cloudfront_distribution.web.domain_name
+    zone_id                = aws_cloudfront_distribution.web.hosted_zone_id
+  }
+}
+
+resource "aws_route53_record" "admin_web_ipv6" {
+  count = var.admin_domain_name == "" ? 0 : 1
+
+  allow_overwrite = true
+  name            = var.admin_domain_name
   type            = "AAAA"
   zone_id         = var.hosted_zone_id
 

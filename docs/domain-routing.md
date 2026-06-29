@@ -22,6 +22,7 @@ Suggested naming:
 ```text
 gulls.ai              Public project or marketing site
 sea.gulls.ai          Main Seagull web app
+admin.gulls.ai        Server-owner admin web app
 fishing.gulls.ai      Message hub API
 api.sea.gulls.ai      Social/user API
 dev.sea.gulls.ai      Development web app
@@ -152,8 +153,9 @@ or
 registrar-managed DNS
 ```
 
-Then keep `fishing.gulls.ai` on the deployed message hub API and
-`sea.gulls.ai` on the deployed frontend.
+Then keep `fishing.gulls.ai` on the deployed message hub API,
+`sea.gulls.ai` on the deployed frontend, and `admin.gulls.ai` on the
+server-owner admin frontend.
 
 ## Terraform
 

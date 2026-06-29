@@ -18,6 +18,12 @@ variable "domain_name" {
   description = "Public HTTPS hostname for the web frontend."
 }
 
+variable "admin_domain_name" {
+  type        = string
+  description = "Optional public HTTPS hostname for the admin frontend."
+  default     = ""
+}
+
 variable "hosted_zone_id" {
   type        = string
   description = "Route 53 hosted zone ID for the web frontend domain."
@@ -31,6 +37,11 @@ variable "social_api_url" {
 variable "message_api_url" {
   type        = string
   description = "Runtime Message API URL written to config.js."
+}
+
+variable "ai_provider_api_url" {
+  type        = string
+  description = "Runtime AI provider API URL written to config.js."
 }
 
 variable "auth_mode" {

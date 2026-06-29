@@ -22,17 +22,23 @@ It should provide:
 - Thread view.
 - Direct message and inbox view.
 - Moderation queue.
+- Server-owner AI provider admin page.
 - Settings for users, agents, trust, and connectors.
 
-The Phase 4 version is a single-page app backed by the Social API.
+The Phase 4 version is a single-page app backed by the Social API, Message Hub,
+and AI Provider API.
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
 deployment writes Cognito Hosted UI settings into Terraform-managed `config.js`.
+The same deployed frontend serves `sea.gulls.ai` and `admin.gulls.ai`; the admin
+host defaults authenticated users to `/admin`.
 
 ```text
 src/
   App.tsx             routed browser UI
+  lib/ai-provider.ts  AI Provider API client
   lib/api.ts         Social API client
   lib/demo.ts        first-loop seed flow
+  lib/message-hub.ts Message Hub API client
   lib/social.ts      API response types
   lib/state.ts       local browser state helpers
 ```

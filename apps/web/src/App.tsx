@@ -11,6 +11,7 @@ import {
   MessagesSquare,
   RefreshCw,
   Route as RouteIcon,
+  Settings,
   Trash2,
   UserRound,
   WandSparkles,
@@ -20,6 +21,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
+import { AdminPage } from "./components/admin-pages";
 import { DashboardPage } from "./components/dashboard-page";
 import { AgentLifecycleInboxPage, RoutingRulesPage } from "./components/message-lifecycle-pages";
 import {
@@ -37,6 +39,7 @@ import {
   type Notice,
 } from "./components/shared";
 import { SocialApiClient, SocialApiError, trimBaseUrl } from "./lib/api";
+import { configuredAiProviderApiUrl } from "./lib/ai-provider";
 import {
   clearAuthSession,
   configuredAuth,
@@ -73,6 +76,10 @@ export default function App() {
   const [apiDraft, setApiDraft] = useState(state.apiUrl);
   const [notice, setNotice] = useState<Notice | null>(null);
   const messageApiUrl = useMemo(() => configuredMessageApiUrl(), []);
+  const aiProviderApiUrl = useMemo(() => configuredAiProviderApiUrl(), []);
+  const adminDomainName = window.SEAGULL_CONFIG?.adminDomainName?.trim() ?? "";
+  const defaultAuthenticatedPath =
+    adminDomainName && window.location.hostname === adminDomainName ? "/admin" : "/dashboard";
   const activeAuthSession =
     authConfig.mode === "cognito" && isSessionActive(authSession) ? authSession : null;
   const isAuthenticated =
@@ -318,6 +325,7 @@ export default function App() {
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
+                postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
                 onCognitoIdentity={(session, identity, ownedProfiles) => {
                   setAuthSession(session);
@@ -336,6 +344,7 @@ export default function App() {
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
+                postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
                 onCognitoIdentity={(session, identity, ownedProfiles) => {
                   setAuthSession(session);
@@ -390,6 +399,7 @@ export default function App() {
           <NavItem to="/inbox" icon={<Inbox size={18} />} label="Inbox" />
           <NavItem to="/agent-inbox" icon={<GitBranch size={18} />} label="Agent inbox" />
           <NavItem to="/routing" icon={<RouteIcon size={18} />} label="Routing" />
+          <NavItem to="/admin" icon={<Settings size={18} />} label="Admin" />
         </nav>
 
         <div className="mt-auto grid gap-2.5 max-[980px]:mt-[18px] max-[980px]:grid-cols-2">
@@ -474,7 +484,7 @@ export default function App() {
         <Routes>
           <Route
             index
-            element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />}
+            element={<Navigate to={isAuthenticated ? defaultAuthenticatedPath : "/login"} replace />}
           />
           <Route
             path="/login"
@@ -484,6 +494,7 @@ export default function App() {
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
+                postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
                 onCognitoIdentity={(session, identity, ownedProfiles) => {
                   setAuthSession(session);
@@ -502,6 +513,7 @@ export default function App() {
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
+                postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
                 onCognitoIdentity={(session, identity, ownedProfiles) => {
                   setAuthSession(session);
@@ -640,6 +652,14 @@ export default function App() {
                   profiles={dashboardProfiles}
                   onNotice={setNotice}
                 />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated}>
+                <AdminPage aiProviderApiUrl={aiProviderApiUrl} onNotice={setNotice} />
               </ProtectedRoute>
             }
           />

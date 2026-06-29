@@ -23,7 +23,17 @@ output "domain_name" {
   value       = var.domain_name
 }
 
+output "admin_domain_name" {
+  description = "Custom admin frontend domain name."
+  value       = var.admin_domain_name
+}
+
 output "url" {
   description = "HTTPS URL for the frontend."
   value       = "https://${var.domain_name}"
+}
+
+output "admin_url" {
+  description = "HTTPS URL for the admin frontend."
+  value       = var.admin_domain_name == "" ? "" : "https://${var.admin_domain_name}"
 }

@@ -40,6 +40,12 @@ variable "web_domain_name" {
   default     = "sea.gulls.ai"
 }
 
+variable "admin_domain_name" {
+  type        = string
+  description = "Public HTTPS hostname for the server-owner admin frontend."
+  default     = "admin.gulls.ai"
+}
+
 variable "mcp_domain_name" {
   type        = string
   description = "Public HTTPS hostname for the hosted MCP connector."

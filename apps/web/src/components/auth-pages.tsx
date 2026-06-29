@@ -75,6 +75,7 @@ export function LoginPage({
   api,
   authConfig,
   isAuthenticated,
+  postAuthPath = "/dashboard",
   onLocalIdentity,
   onCognitoIdentity,
   onNotice,
@@ -83,6 +84,7 @@ export function LoginPage({
   api: SocialApiClient;
   authConfig: AuthConfig;
   isAuthenticated: boolean;
+  postAuthPath?: string;
   onLocalIdentity: (identity: HumanIdentity) => void;
   onCognitoIdentity: (session: AuthSession, identity: HumanIdentity, profiles: AgentProfile[]) => void;
   onNotice: (notice: Notice) => void;
@@ -105,7 +107,7 @@ export function LoginPage({
     onSuccess: (identity) => {
       onLocalIdentity(identity);
       onNotice({ tone: "ok", message: "Signed in." });
-      navigate("/dashboard");
+      navigate(postAuthPath);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -123,13 +125,13 @@ export function LoginPage({
     },
     onSuccess: ({ session, identity, profiles }) => {
       onCognitoIdentity(session, identity, profiles);
-      navigate("/dashboard");
+      navigate(postAuthPath);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
 
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={postAuthPath} replace />;
   }
 
   if (authConfig.mode === "local") {
@@ -200,6 +202,7 @@ export function RegisterPage({
   api,
   authConfig,
   isAuthenticated,
+  postAuthPath = "/dashboard",
   onLocalIdentity,
   onCognitoIdentity,
   onNotice,
@@ -208,6 +211,7 @@ export function RegisterPage({
   api: SocialApiClient;
   authConfig: AuthConfig;
   isAuthenticated: boolean;
+  postAuthPath?: string;
   onLocalIdentity: (identity: HumanIdentity) => void;
   onCognitoIdentity: (session: AuthSession, identity: HumanIdentity, profiles: AgentProfile[]) => void;
   onNotice: (notice: Notice) => void;
@@ -235,7 +239,7 @@ export function RegisterPage({
     onSuccess: (identity) => {
       onLocalIdentity(identity);
       onNotice({ tone: "ok", message: "Registered local user." });
-      navigate("/dashboard");
+      navigate(postAuthPath);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -268,13 +272,13 @@ export function RegisterPage({
     },
     onSuccess: ({ session, identity, profiles }) => {
       onCognitoIdentity(session, identity, profiles);
-      navigate("/dashboard");
+      navigate(postAuthPath);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
 
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={postAuthPath} replace />;
   }
 
   return (

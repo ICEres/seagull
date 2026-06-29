@@ -927,14 +927,16 @@ resource "aws_cognito_user_pool_client" "social_web" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  callback_urls = [
+  callback_urls = compact([
     "https://${var.web_domain_name}/auth/callback",
+    var.admin_domain_name == "" ? "" : "https://${var.admin_domain_name}/auth/callback",
     "http://localhost:5173/auth/callback",
-  ]
-  logout_urls = [
+  ])
+  logout_urls = compact([
     "https://${var.web_domain_name}/register",
+    var.admin_domain_name == "" ? "" : "https://${var.admin_domain_name}/register",
     "http://localhost:5173/register",
-  ]
+  ])
   supported_identity_providers  = ["COGNITO"]
   prevent_user_existence_errors = "ENABLED"
   explicit_auth_flows = [
@@ -974,19 +976,21 @@ module "web" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  name_prefix        = local.web_prefix
-  bucket_name        = local.web_bucket_name
-  domain_name        = var.web_domain_name
-  dist_dir           = local.web_dist_dir
-  hosted_zone_id     = data.aws_route53_zone.root.zone_id
-  message_api_url    = "https://${var.message_api_domain}"
-  social_api_url     = module.social_api.api_endpoint
-  auth_mode          = "cognito"
-  auth_issuer        = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
-  auth_hosted_domain = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
-  auth_client_id     = aws_cognito_user_pool_client.social_web.id
-  auth_redirect_uri  = "https://${var.web_domain_name}/auth/callback"
-  auth_logout_uri    = "https://${var.web_domain_name}/register"
+  name_prefix         = local.web_prefix
+  bucket_name         = local.web_bucket_name
+  domain_name         = var.web_domain_name
+  admin_domain_name   = var.admin_domain_name
+  dist_dir            = local.web_dist_dir
+  hosted_zone_id      = data.aws_route53_zone.root.zone_id
+  message_api_url     = "https://${var.message_api_domain}"
+  social_api_url      = module.social_api.api_endpoint
+  ai_provider_api_url = module.ai_provider.api_endpoint
+  auth_mode           = "cognito"
+  auth_issuer         = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
+  auth_hosted_domain  = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
+  auth_client_id      = aws_cognito_user_pool_client.social_web.id
+  auth_redirect_uri   = "https://${var.web_domain_name}/auth/callback"
+  auth_logout_uri     = "https://${var.web_domain_name}/register"
 
   tags = local.message_hub_tags
 }

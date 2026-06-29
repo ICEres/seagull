@@ -1,0 +1,364 @@
+import base64
+import json
+import os
+from typing import Any
+from urllib.parse import unquote
+
+import boto3
+
+from ai_provider.api.local import (
+    admin_audit_event_to_dict,
+    budget_limit_to_dict,
+    model_policy_to_dict,
+    provider_config_to_dict,
+    run_event_to_dict,
+    run_to_dict,
+    server_credit_balance_to_dict,
+    server_credit_ledger_entry_to_dict,
+    usage_record_to_dict,
+    user_credit_balance_to_dict,
+    user_credit_ledger_entry_to_dict,
+)
+from ai_provider.domain import AiProviderService, BudgetLimit, InvalidAiRunError, ModelPolicy
+from ai_provider.providers import FakeProviderAdapter
+from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
+
+
+APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
+ADMIN_SECRET = os.environ.get("AI_PROVIDER_ADMIN_SECRET", "")
+
+
+dynamodb = boto3.resource("dynamodb")
+repository = DynamoDbAiProviderRepository(
+    runs_table=dynamodb.Table(os.environ["AI_RUNS_TABLE"]),
+    run_events_table=dynamodb.Table(os.environ["AI_RUN_EVENTS_TABLE"]),
+    usage_table=dynamodb.Table(os.environ["AI_USAGE_LEDGER_TABLE"]),
+    user_credit_ledger_table=dynamodb.Table(os.environ["AI_USER_CREDIT_LEDGER_TABLE"]),
+    server_credit_ledger_table=dynamodb.Table(os.environ["AI_SERVER_CREDIT_LEDGER_TABLE"]),
+    provider_configs_table=dynamodb.Table(os.environ["AI_PROVIDER_CONFIGS_TABLE"]),
+    admin_audit_events_table=dynamodb.Table(os.environ["AI_ADMIN_AUDIT_EVENTS_TABLE"]),
+    model_policies_table=dynamodb.Table(os.environ["AI_MODEL_POLICIES_TABLE"]),
+    budget_limits_table=dynamodb.Table(os.environ["AI_BUDGET_LIMITS_TABLE"]),
+)
+service = AiProviderService(repository, {"fake": FakeProviderAdapter()})
+
+
+class BadRequest(ValueError):
+    pass
+
+
+class Unauthorized(ValueError):
+    pass
+
+
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
+    path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
+
+    try:
+        if method == "OPTIONS":
+            return cors_response()
+
+        if method == "GET" and path == "/health":
+            return response(200, {"ok": True, "app": APP_NAME, "storage": "dynamodb"})
+
+        if method == "POST" and path == "/ai-runs":
+            body = parse_body(event)
+            run = service.create_run(
+                provider=required_string(body, "provider"),
+                model=required_string(body, "model"),
+                actor_agent_id=required_string(body, "actor_agent_id"),
+                owner_user_id=required_string(body, "owner_user_id"),
+                input_messages=provider_messages(body.get("input_messages", ())),
+                system_instructions=optional_string(body, "system_instructions"),
+                system_instructions_ref=optional_string(body, "system_instructions_ref"),
+                context_refs=string_list(body.get("context_refs", ()), "context_refs"),
+                content_ref=optional_string(body, "content_ref"),
+                max_output_tokens=optional_int(body, "max_output_tokens", default=512),
+                temperature=optional_float(body, "temperature", default=0.2),
+                response_format=optional_string(body, "response_format") or "text",
+                tool_policy=optional_string(body, "tool_policy") or "disabled",
+                task_id=optional_string(body, "task_id"),
+                message_id=optional_string(body, "message_id"),
+                trace_id=optional_string(body, "trace_id"),
+                idempotency_key=optional_string(body, "idempotency_key"),
+            )
+            return response(200, {"run": run_to_dict(run)})
+
+        if method == "GET" and path.startswith("/ai-runs/") and path.endswith("/events"):
+            run_id = path_param(path, "/ai-runs/", "/events")
+            return response(
+                200,
+                {
+                    "run_id": run_id,
+                    "events": [run_event_to_dict(event) for event in service.list_run_events(run_id)],
+                },
+            )
+
+        if method == "GET" and path.startswith("/ai-runs/"):
+            run_id = unquote(path.removeprefix("/ai-runs/").strip("/"))
+            return response(200, {"run": run_to_dict(service.get_run(run_id))})
+
+        if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-usage"):
+            owner_user_id = path_param(path, "/owners/", "/ai-usage")
+            return response(
+                200,
+                {
+                    "owner_user_id": owner_user_id,
+                    "usage": [usage_record_to_dict(record) for record in service.list_usage_by_owner(owner_user_id)],
+                },
+            )
+
+        if method == "GET" and path.startswith("/agents/") and path.endswith("/ai-usage"):
+            agent_id = path_param(path, "/agents/", "/ai-usage")
+            return response(
+                200,
+                {
+                    "agent_id": agent_id,
+                    "usage": [usage_record_to_dict(record) for record in service.list_usage_by_agent(agent_id)],
+                },
+            )
+
+        if path.startswith("/admin/"):
+            require_admin(event)
+
+        if method == "POST" and path == "/admin/ai-credits/server-grants":
+            body = parse_body(event)
+            entry = service.grant_server_credits(
+                admin_actor_id=required_string(body, "admin_actor_id"),
+                credit_amount=required_int(body, "credit_amount"),
+                reason=optional_string(body, "reason") or "server credit grant",
+            )
+            return response(200, {"entry": server_credit_ledger_entry_to_dict(entry)})
+
+        if method == "GET" and path == "/admin/ai-credits/server-balance":
+            return response(200, {"balance": server_credit_balance_to_dict(service.get_server_credit_balance())})
+
+        if method == "GET" and path == "/admin/ai-credits/server-ledger":
+            return response(
+                200,
+                {"entries": [server_credit_ledger_entry_to_dict(entry) for entry in service.list_server_credit_ledger()]},
+            )
+
+        if method == "POST" and path.startswith("/owners/") and path.endswith("/ai-credits/grants"):
+            require_admin(event)
+            body = parse_body(event)
+            owner_user_id = path_param(path, "/owners/", "/ai-credits/grants")
+            entry = service.grant_user_credits(
+                admin_actor_id=required_string(body, "admin_actor_id"),
+                owner_user_id=owner_user_id,
+                credit_amount=required_int(body, "credit_amount"),
+                reason=optional_string(body, "reason") or "manual credit grant",
+            )
+            return response(200, {"entry": user_credit_ledger_entry_to_dict(entry)})
+
+        if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-credits/balance"):
+            owner_user_id = path_param(path, "/owners/", "/ai-credits/balance")
+            return response(200, {"balance": user_credit_balance_to_dict(service.get_user_credit_balance(owner_user_id))})
+
+        if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-credits/ledger"):
+            owner_user_id = path_param(path, "/owners/", "/ai-credits/ledger")
+            return response(
+                200,
+                {
+                    "owner_user_id": owner_user_id,
+                    "entries": [user_credit_ledger_entry_to_dict(entry) for entry in service.list_user_credit_ledger(owner_user_id)],
+                },
+            )
+
+        if method == "POST" and path.startswith("/admin/ai-providers/"):
+            body = parse_body(event)
+            provider = unquote(path.removeprefix("/admin/ai-providers/").strip("/"))
+            config = service.save_provider_config(
+                admin_actor_id=required_string(body, "admin_actor_id"),
+                provider=provider,
+                enabled=optional_bool(body, "enabled", default=True),
+                allowed_models=string_list(body.get("allowed_models", ()), "allowed_models"),
+                secret_ref=optional_string(body, "secret_ref"),
+                region=optional_string(body, "region"),
+                reason=optional_string(body, "reason") or "provider config update",
+            )
+            return response(200, {"provider_config": provider_config_to_dict(config)})
+
+        if method == "GET" and path == "/admin/ai-providers":
+            return response(
+                200,
+                {"provider_configs": [provider_config_to_dict(config) for config in service.list_provider_configs()]},
+            )
+
+        if method == "GET" and path == "/admin/ai-audit-events":
+            return response(
+                200,
+                {"events": [admin_audit_event_to_dict(event) for event in service.list_admin_audit_events()]},
+            )
+
+        if method == "POST" and path == "/admin/model-policies":
+            require_admin(event)
+            body = parse_body(event)
+            policy = ModelPolicy(
+                policy_id=required_string(body, "policy_id"),
+                scope_key=required_string(body, "scope_key"),
+                allowed_providers=string_list(body.get("allowed_providers", ()), "allowed_providers"),
+                allowed_models=string_list(body.get("allowed_models", ()), "allowed_models"),
+                max_output_tokens=optional_nullable_int(body, "max_output_tokens"),
+                enabled=optional_bool(body, "enabled", default=True),
+            )
+            service.put_model_policy(policy)
+            return response(200, {"policy": model_policy_to_dict(policy)})
+
+        if method == "POST" and path == "/admin/budget-limits":
+            require_admin(event)
+            body = parse_body(event)
+            limit = BudgetLimit(
+                budget_id=required_string(body, "budget_id"),
+                scope_key=required_string(body, "scope_key"),
+                max_total_tokens=required_int(body, "max_total_tokens"),
+            )
+            service.put_budget_limit(limit)
+            return response(200, {"budget_limit": budget_limit_to_dict(limit)})
+
+        return response(404, {"error": "not_found", "method": method, "path": path})
+    except Unauthorized as exc:
+        return response(401, {"error": "unauthorized", "message": str(exc)})
+    except BadRequest as exc:
+        return response(400, {"error": "bad_request", "message": str(exc)})
+    except InvalidAiRunError as exc:
+        return response(400, {"error": "bad_request", "message": str(exc)})
+    except Exception as exc:
+        print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
+        return response(500, {"error": "internal_error"})
+
+
+def parse_body(event: dict[str, Any]) -> dict[str, Any]:
+    raw_body = event.get("body")
+    if raw_body is None:
+        return {}
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise BadRequest("body must be valid JSON") from exc
+    if not isinstance(body, dict):
+        raise BadRequest("body must be a JSON object")
+    return body
+
+
+def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-headers": "content-type,x-seagull-admin-secret",
+            "access-control-allow-methods": "GET,POST,OPTIONS",
+        },
+        "body": json.dumps(body, separators=(",", ":"), default=str),
+    }
+
+
+def cors_response() -> dict[str, Any]:
+    return response(204, {})
+
+
+def require_admin(event: dict[str, Any]) -> None:
+    if not ADMIN_SECRET:
+        raise Unauthorized("admin API is not configured")
+    headers = {key.lower(): value for key, value in (event.get("headers") or {}).items()}
+    if headers.get("x-seagull-admin-secret") != ADMIN_SECRET:
+        raise Unauthorized("admin secret is required")
+
+
+def provider_messages(value: Any) -> tuple[dict[str, str], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise BadRequest("input_messages must be a list")
+    messages: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise BadRequest("input_messages must contain objects")
+        message = {
+            "role": required_string(item, "role"),
+            "content": required_string(item, "content"),
+        }
+        content_ref = optional_string(item, "content_ref")
+        if content_ref is not None:
+            message["content_ref"] = content_ref
+        messages.append(message)
+    return tuple(messages)
+
+
+def required_string(body: dict[str, Any], field_name: str) -> str:
+    value = optional_string(body, field_name)
+    if value is None:
+        raise BadRequest(f"{field_name} is required")
+    return value
+
+
+def optional_string(body: dict[str, Any], field_name: str) -> str | None:
+    value = body.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise BadRequest(f"{field_name} must be a string")
+    stripped = value.strip()
+    return stripped or None
+
+
+def string_list(value: Any, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise BadRequest(f"{field_name} must be a list")
+    if not all(isinstance(item, str) for item in value):
+        raise BadRequest(f"{field_name} must contain only strings")
+    return tuple(item.strip() for item in value if item.strip())
+
+
+def required_int(body: dict[str, Any], field_name: str) -> int:
+    value = optional_nullable_int(body, field_name)
+    if value is None:
+        raise BadRequest(f"{field_name} is required")
+    return value
+
+
+def optional_int(body: dict[str, Any], field_name: str, *, default: int) -> int:
+    value = optional_nullable_int(body, field_name)
+    return default if value is None else value
+
+
+def optional_nullable_int(body: dict[str, Any], field_name: str) -> int | None:
+    value = body.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise BadRequest(f"{field_name} must be an integer")
+    return value
+
+
+def optional_float(body: dict[str, Any], field_name: str, *, default: float) -> float:
+    value = body.get(field_name)
+    if value is None:
+        return default
+    if not isinstance(value, (int, float)):
+        raise BadRequest(f"{field_name} must be a number")
+    return float(value)
+
+
+def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
+    value = body.get(field_name)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise BadRequest(f"{field_name} must be a boolean")
+    return value
+
+
+def path_param(path: str, prefix: str, suffix: str) -> str:
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        raise BadRequest("invalid path")
+    value = path.removeprefix(prefix).removesuffix(suffix).strip("/")
+    if not value:
+        raise BadRequest("path parameter is required")
+    return unquote(value)

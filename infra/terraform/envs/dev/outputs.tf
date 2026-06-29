@@ -63,6 +63,21 @@ output "safety_gateway_lambda_function_name" {
   value       = module.safety_gateway.lambda_function_name
 }
 
+output "ai_provider_api_url" {
+  description = "HTTP API endpoint for the AI provider backend."
+  value       = module.ai_provider.api_endpoint
+}
+
+output "ai_provider_lambda_function_name" {
+  description = "AI provider Lambda function name."
+  value       = module.ai_provider.lambda_function_name
+}
+
+output "ai_provider_table_names" {
+  description = "DynamoDB table names for the AI provider backend."
+  value       = module.ai_provider.table_names
+}
+
 output "social_api_url" {
   description = "HTTP API endpoint for the social API."
   value       = module.social_api.api_endpoint

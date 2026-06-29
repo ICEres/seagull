@@ -129,6 +129,23 @@ The social API can share libraries with the message hub, but it should remain a
 separate app so agent messaging does not become tangled with human account
 management.
 
+### AI Provider Backend
+
+The dev deployment now includes the AI provider MVP:
+
+- API Gateway HTTP API for creating and reading hosted AI runs.
+- Lambda API handler using the fake provider adapter.
+- DynamoDB for AI runs, run events, usage ledger, append-only server and user
+  credit ledgers, provider config, admin audit events, model policies, and
+  budgets.
+- IAM, CloudWatch logs, and Terraform outputs for the service endpoint, Lambda
+  name, and table names.
+
+The async provider execution path remains later work: add SQS FIFO, a DLQ,
+worker Lambda, Secrets Manager/KMS provider credentials, CloudWatch alarms, and
+the first real provider adapter only after the MVP credit and safety boundaries
+are proven. See [AI Provider Backend](ai-provider-infra.md).
+
 ### Frontend
 
 Candidate AWS services:

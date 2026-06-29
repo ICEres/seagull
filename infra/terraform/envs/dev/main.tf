@@ -13,6 +13,7 @@ locals {
   message_api_prefix     = "${var.project}-${var.environment}-message-hub-api"
   message_hub_prefix     = "${var.project}-${var.environment}-message-hub"
   message_router_prefix  = "${var.project}-${var.environment}-message-router"
+  ai_provider_prefix     = "${var.project}-${var.environment}-ai-provider"
   mcp_connector_prefix   = "${var.project}-${var.environment}-mcp-connector"
   mcp_cognito_domain     = var.mcp_cognito_domain_prefix != "" ? var.mcp_cognito_domain_prefix : "${var.project}-${var.environment}-mcp-${data.aws_caller_identity.current.account_id}"
   safety_gateway_prefix  = "${var.project}-${var.environment}-safety-gateway"
@@ -25,6 +26,7 @@ locals {
   agent_worker_src       = "${path.module}/../../../../apps/message-hub/aws/agent_worker.py"
   router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
   mcp_connector_package  = "${path.module}/.terraform/build/mcp-connector/package"
+  ai_provider_package    = "${path.module}/.terraform/build/ai-provider/package"
   safety_gateway_package = "${path.module}/.terraform/build/safety-gateway/package"
   social_api_package     = "${path.module}/.terraform/build/social-api/package"
   message_hub_tags = {
@@ -66,6 +68,12 @@ data "archive_file" "mcp_connector" {
   type        = "zip"
   source_dir  = local.mcp_connector_package
   output_path = "${path.module}/.terraform/build/mcp-connector.zip"
+}
+
+data "archive_file" "ai_provider" {
+  type        = "zip"
+  source_dir  = local.ai_provider_package
+  output_path = "${path.module}/.terraform/build/ai-provider.zip"
 }
 
 data "archive_file" "safety_gateway" {
@@ -858,6 +866,18 @@ module "safety_gateway" {
   name_prefix             = local.safety_gateway_prefix
   lambda_package_path     = data.archive_file.safety_gateway.output_path
   lambda_source_code_hash = data.archive_file.safety_gateway.output_base64sha256
+
+  deletion_protection_enabled = false
+  tags                        = local.message_hub_tags
+}
+
+module "ai_provider" {
+  source = "../../modules/ai-provider"
+
+  name_prefix             = local.ai_provider_prefix
+  lambda_package_path     = data.archive_file.ai_provider.output_path
+  lambda_source_code_hash = data.archive_file.ai_provider.output_base64sha256
+  admin_secret            = var.ai_provider_admin_secret
 
   deletion_protection_enabled = false
   tags                        = local.message_hub_tags

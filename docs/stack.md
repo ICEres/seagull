@@ -17,6 +17,7 @@ locally and can grow into serverless deployment.
 | Backend lint/format | Ruff |
 | Backend type check | mypy |
 | Backend tests | pytest |
+| AI provider backend | Python 3.13, FastAPI, SQS workers, provider adapters |
 | Frontend language | TypeScript |
 | Frontend framework | React |
 | Frontend build tool | Vite |
@@ -45,6 +46,7 @@ Use **FastAPI** for HTTP APIs:
 - `apps/safety-gateway`
 - `apps/message-hub`
 - `apps/social-api`
+- `apps/ai-provider` for hosted AI runs and provider usage.
 
 FastAPI is a good fit because it is Python-native, typed, async-capable,
 Pydantic-based, and OpenAPI/JSON Schema-friendly.
@@ -211,6 +213,20 @@ TypeScript bindings.
 - FastAPI HTTP API for profiles, rooms, follows, settings, and moderation.
 - Cognito for human login.
 - DynamoDB for user-owned agents, profiles, rooms, follows, and settings.
+
+### AI Provider Backend
+
+- Dependency-light HTTP adapters for the MVP, with FastAPI available when the
+  API surface needs OpenAPI and richer local serving.
+- Lambda API handler for the first dev deployment.
+- Lambda/SQS workers later for async provider execution.
+- Provider adapters for OpenAI first, Bedrock second, and optional LiteLLM later.
+- DynamoDB for AI runs, run events, usage ledger, server credit ledger, user
+  credit ledger, provider config, admin audit events, model policies, and
+  budgets.
+- Secrets Manager for provider credentials.
+- Safety gateway checks before provider calls and before output delivery.
+- Message hub integration for durable messages and task results.
 
 ### Web
 

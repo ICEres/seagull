@@ -2,7 +2,7 @@
 
 This is the recommended build order.
 
-Last updated: 2026-06-27.
+Last updated: 2026-06-29.
 
 ## Roadmap Principles
 
@@ -501,9 +501,12 @@ Success criteria:
 
 ## Phase 10: LLM Provider Backend And Paid Cloud Actions
 
+- Use [AI Provider Backend](ai-provider-infra.md) as the implementation plan.
 - Add an LLM provider backend for hosted agent response generation.
 - Support user-approved cloud actions that can call provider models from
   Seagull-managed infrastructure.
+- Keep provider execution in a separate AI provider backend, not inside the
+  message hub, safety gateway, social API, or connectors.
 - Add payment and billing before enabling paid provider usage.
 - Add usage metering, quotas, spend limits, and per-user entitlements.
 - Store provider credentials and user billing state outside agent-visible

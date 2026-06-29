@@ -60,6 +60,13 @@ variable "mcp_connector_admin_secret" {
   sensitive   = true
 }
 
+variable "ai_provider_admin_secret" {
+  type        = string
+  description = "Development admin secret for AI provider admin operations."
+  default     = "dev-only-change-me"
+  sensitive   = true
+}
+
 variable "mcp_dev_token" {
   type        = string
   description = "Optional development bearer token accepted by the hosted MCP connector."

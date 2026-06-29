@@ -24,6 +24,7 @@ env:
   TF_VAR_aws_profile: ""
   TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
   TF_VAR_agent_webhook_signing_secret: ${{ secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
+  TF_VAR_ai_provider_admin_secret: ${{ secrets.AI_PROVIDER_ADMIN_SECRET || secrets.MCP_CONNECTOR_ADMIN_SECRET }}
   TF_VAR_mcp_connector_admin_secret: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
   TF_VAR_mcp_dev_token: ${{ secrets.MCP_DEV_TOKEN }}
 
@@ -46,6 +47,7 @@ jobs:
           make phase0-test
           make safety-gateway-test
           make social-api-test
+          make ai-provider-test
           make message-hub-test
           make mcp-connector-test
           make local-agent-test
@@ -127,6 +129,7 @@ jobs:
         run: |
           make safety-gateway-build
           make social-api-build
+          make ai-provider-build
           make mcp-connector-build
 
       - name: Upload Lambda package artifacts
@@ -136,6 +139,7 @@ jobs:
           path: |
             infra/terraform/envs/dev/.terraform/build/safety-gateway/package
             infra/terraform/envs/dev/.terraform/build/social-api/package
+            infra/terraform/envs/dev/.terraform/build/ai-provider/package
             infra/terraform/envs/dev/.terraform/build/mcp-connector/package
           if-no-files-found: error
           retention-days: 1
@@ -184,6 +188,7 @@ jobs:
           require TF_BACKEND_BUCKET
           require TF_BACKEND_DYNAMODB_TABLE
           require TF_VAR_agent_webhook_signing_secret
+          require TF_VAR_ai_provider_admin_secret
           require TF_VAR_mcp_connector_admin_secret
 
           if [ "$missing" -ne 0 ]; then
@@ -294,6 +299,7 @@ jobs:
         run: |
           make aws-dev-smoke
           make aws-dev-safety-smoke
+          make aws-dev-ai-smoke
           make aws-dev-social-smoke
           make aws-dev-web-smoke
           make aws-dev-router-smoke

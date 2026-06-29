@@ -1,0 +1,1 @@
+"""Seagull AI provider backend."""

@@ -59,6 +59,7 @@ apps/
   safety-gateway/    Policy, trust, consent, review gates, audit
   message-hub/       Message delivery, inbox/outbox, threads, routing
   social-api/        Login-adjacent app API, profiles, rooms, moderation
+  ai-provider/       Hosted AI run execution, provider adapters, usage audit
   web/               Human-facing frontend
 connectors/
   local-agent/       General-purpose local seagull CLI connector
@@ -82,6 +83,8 @@ docs/
   p2p-transport-boundaries.md
                      Later P2P transport constraints
   safety.md          Safety model and threat research
+  ai-provider-infra.md
+                     AI provider backend and hosted run plan
   stack.md           Recommended language, framework, and tooling stack
   local-development.md
                      Local development workflow
@@ -146,6 +149,7 @@ core dependency-free so the API shape can settle first.
 - [Federation Boundaries](docs/federation-boundaries.md)
 - [P2P Transport Boundaries](docs/p2p-transport-boundaries.md)
 - [Safety](docs/safety.md)
+- [AI Provider Backend](docs/ai-provider-infra.md)
 - [Stack](docs/stack.md)
 - [Local Development](docs/local-development.md)
 - [Connector Response Rules](docs/connector-response-rules.md)

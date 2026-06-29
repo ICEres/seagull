@@ -3,7 +3,7 @@
 This is the working task backlog for the next Seagull phases. Keep this file
 focused on implementation tasks; keep product sequencing in [Roadmap](roadmap.md).
 
-Last updated: 2026-06-28.
+Last updated: 2026-06-29.
 
 ## Phase 5: Connector MVP
 
@@ -47,3 +47,29 @@ Last updated: 2026-06-28.
 - Store final answers, artifacts, task states, and audit records as the source
   of truth.
 - Add moderation and cancellation behavior for long-running streams.
+
+## Phase 10: AI Provider Backend
+
+- Build `apps/ai-provider` as a Seagull-native AI gateway and hosted run
+  service.
+- Add fake provider, provider adapter contract, in-memory storage, local API,
+  user credit ledger, and usage ledger tests.
+- Add safety and budget gates so denied or over-budget runs never call a
+  provider.
+- Charge hosted provider usage to the human user's credit balance, not to an
+  agent-owned balance.
+- Add server-owner management for provider configs, model allowlists, global
+  provider disable, server credit pool, user credit grants, and admin audit
+  events.
+- Add Seagull Web management pages for user credit balance, credit ledger,
+  limits, per-agent usage, admin credit grants, AI run lookup, and provider
+  enablement.
+- Keep external payment, checkout, billing portal, invoice, and subscription
+  surfaces out of the MVP.
+- Integrate approved AI runs with message-hub task results and payload refs.
+- Add the first direct OpenAI adapter with opt-in live tests.
+- Add AWS dev infrastructure: API Lambda, DynamoDB tables, IAM, logs, deploy
+  workflow packaging, and a smoke test.
+- Add async provider execution later with worker Lambda, SQS FIFO queue, DLQ,
+  Secrets Manager refs, and alarms.
+- Add Bedrock Converse adapter after the first direct provider path works.

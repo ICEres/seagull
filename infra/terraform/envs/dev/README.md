@@ -21,6 +21,9 @@ The first deployable stack is intentionally small:
 - Safety gateway MVP Lambda.
 - Safety gateway HTTP API.
 - Safety audit DynamoDB table.
+- AI provider MVP Lambda.
+- AI provider HTTP API.
+- AI provider DynamoDB run, usage, credit, provider config, and audit tables.
 - Social API MVP Lambda.
 - Social API HTTP API.
 - Social API DynamoDB tables.
@@ -77,6 +80,7 @@ Configure these repository secrets:
 
 ```text
 AGENT_WEBHOOK_SIGNING_SECRET
+AI_PROVIDER_ADMIN_SECRET    # optional for MVP CI; falls back to MCP_CONNECTOR_ADMIN_SECRET
 MCP_CONNECTOR_ADMIN_SECRET
 MCP_DEV_TOKEN             # optional
 ```
@@ -89,6 +93,7 @@ make aws-dev-plan
 make aws-dev-apply
 make aws-dev-smoke
 make aws-dev-safety-smoke
+make aws-dev-ai-smoke
 make aws-dev-social-smoke
 make aws-dev-web-smoke
 make aws-dev-router-smoke

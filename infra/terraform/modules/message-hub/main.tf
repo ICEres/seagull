@@ -40,6 +40,45 @@ resource "aws_dynamodb_table" "agents" {
   tags = local.common_tags
 }
 
+resource "aws_dynamodb_table" "agent_tokens" {
+  name                        = "${var.name_prefix}-agent-tokens"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "token_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "token_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "agent-created-at-index"
+    hash_key        = "agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = local.common_tags
+}
+
 resource "aws_dynamodb_table" "messages" {
   name                        = "${var.name_prefix}-messages"
   billing_mode                = "PAY_PER_REQUEST"

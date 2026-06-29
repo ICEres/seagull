@@ -162,6 +162,7 @@ resource "aws_lambda_function" "message_hub_api" {
   environment {
     variables = {
       AGENTS_TABLE           = module.message_hub_storage.table_names.agents
+      AGENT_TOKENS_TABLE     = module.message_hub_storage.table_names.agent_tokens
       AGENT_JOBS_QUEUE_URL   = aws_sqs_queue.agent_jobs.url
       APP_NAME               = local.message_hub_prefix
       DELIVERIES_TABLE       = module.message_hub_storage.table_names.deliveries

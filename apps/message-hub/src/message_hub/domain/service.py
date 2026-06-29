@@ -206,6 +206,9 @@ class MessageHubService:
         self._repository.add_agent(agent)
         return agent
 
+    def get_agent(self, handle: str) -> Agent:
+        return self._require_agent_by_handle(handle)
+
     def issue_agent_token(
         self,
         agent_handle: str,
@@ -1926,6 +1929,23 @@ class MessageHubService:
             self._repository.update_delivery(delivery)
 
         return updated_deliveries
+
+    def ack_delivery(
+        self,
+        delivery_id: str,
+        *,
+        recipient_handle: str,
+    ) -> Delivery:
+        delivery = self._require_delivery_for_recipient(delivery_id, recipient_handle)
+        now = self._clock()
+        updated = replace(
+            delivery,
+            status=DeliveryStatus.ACKED,
+            updated_at=now,
+            acked_at=now,
+        )
+        self._repository.update_delivery(updated)
+        return updated
 
     def apply_hook_result(
         self,

@@ -791,3 +791,83 @@ class LocalMessageLoopTest(TestCase):
         )
         self.assertEqual("completed", result["state"])
         self.assertEqual("agent_2", result["result"]["responder_agent_id"])
+
+    def test_agent_runtime_api_requires_scoped_agent_tokens(self) -> None:
+        self.api.register_agent({"handle": "@researcher:seagull.local"})
+        self.api.register_agent({"handle": "@reviewer:seagull.local"})
+        researcher = self.service.issue_agent_token(
+            "@researcher:seagull.local",
+            scopes=("agent:read", "agent:post", "agent:ack"),
+            owner_user_id="user_researcher",
+            node_id="node_researcher",
+        )
+        reviewer = self.service.issue_agent_token(
+            "@reviewer:seagull.local",
+            scopes=("agent:read", "agent:inbox", "agent:ack"),
+            owner_user_id="user_reviewer",
+            node_id="node_reviewer",
+        )
+        read_only = self.service.issue_agent_token(
+            "@reviewer:seagull.local",
+            scopes=("agent:read",),
+        )
+        expired = self.service.issue_agent_token(
+            "@reviewer:seagull.local",
+            scopes=("agent:read",),
+            expires_at=datetime(2026, 6, 13, tzinfo=timezone.utc) + timedelta(seconds=1),
+        )
+        revoked = self.service.issue_agent_token(
+            "@reviewer:seagull.local",
+            scopes=("agent:read",),
+        )
+        self.service.revoke_agent_token(revoked.record.token_id)
+
+        with self.assertRaises(ApiError) as missing:
+            self.api.agent_me(None)
+        self.assertEqual(401, missing.exception.status_code)
+        self.assertEqual("unauthorized", missing.exception.error)
+
+        with self.assertRaises(ApiError) as malformed:
+            self.api.agent_me("Bearer sgc_not_an_agent_token")
+        self.assertEqual(401, malformed.exception.status_code)
+
+        with self.assertRaises(ApiError) as expired_error:
+            self.api.agent_me(f"Bearer {expired.token}")
+        self.assertEqual(401, expired_error.exception.status_code)
+
+        with self.assertRaises(ApiError) as revoked_error:
+            self.api.agent_me(f"Bearer {revoked.token}")
+        self.assertEqual(401, revoked_error.exception.status_code)
+
+        with self.assertRaises(ApiError) as wrong_scope:
+            self.api.agent_inbox(f"Bearer {read_only.token}")
+        self.assertEqual(403, wrong_scope.exception.status_code)
+        self.assertEqual("forbidden", wrong_scope.exception.error)
+
+        me = self.api.agent_me(f"Bearer {reviewer.token}")
+        self.assertEqual("@reviewer:seagull.local", me["agent"]["handle"])
+        self.assertEqual("agent_2", me["principal"]["agent_id"])
+        self.assertEqual("user_reviewer", me["principal"]["owner_user_id"])
+        self.assertEqual("node_reviewer", me["principal"]["node_id"])
+
+        post = self.api.agent_post(
+            f"Bearer {researcher.token}",
+            {
+                "sender_handle": "@spoofed:seagull.local",
+                "recipient_handles": ["@reviewer:seagull.local"],
+                "content": "Runtime post ignores caller-supplied sender.",
+            },
+        )
+        inbox = self.api.agent_inbox(f"Bearer {reviewer.token}")
+        delivery_id = inbox["items"][0]["delivery"]["delivery_id"]
+
+        self.assertEqual("agent_1", post["message"]["sender_agent_id"])
+        self.assertEqual("message_1", inbox["items"][0]["message"]["message_id"])
+
+        with self.assertRaises(ApiError) as wrong_agent:
+            self.api.agent_ack_delivery(f"Bearer {researcher.token}", delivery_id)
+        self.assertEqual(403, wrong_agent.exception.status_code)
+
+        ack = self.api.agent_ack_delivery(f"Bearer {reviewer.token}", delivery_id)
+        self.assertEqual("acked", ack["delivery"]["status"])
+        self.assertEqual("agent_2", ack["delivery"]["recipient_agent_id"])

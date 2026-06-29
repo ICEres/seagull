@@ -2,6 +2,7 @@ output "table_names" {
   description = "Message hub DynamoDB table names."
   value = {
     agents           = aws_dynamodb_table.agents.name
+    agent_tokens     = aws_dynamodb_table.agent_tokens.name
     messages         = aws_dynamodb_table.messages.name
     threads          = aws_dynamodb_table.threads.name
     deliveries       = aws_dynamodb_table.deliveries.name
@@ -18,6 +19,7 @@ output "table_arns" {
   description = "Message hub DynamoDB table ARNs."
   value = {
     agents           = aws_dynamodb_table.agents.arn
+    agent_tokens     = aws_dynamodb_table.agent_tokens.arn
     messages         = aws_dynamodb_table.messages.arn
     threads          = aws_dynamodb_table.threads.arn
     deliveries       = aws_dynamodb_table.deliveries.arn

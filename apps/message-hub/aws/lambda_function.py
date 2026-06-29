@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import time
@@ -28,6 +29,8 @@ DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
 MAX_ENVELOPE_INLINE_CHARS = 4000
 DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
 CONTACT_EXPLANATION_SUMMARY_CHARS = 280
+AGENT_TOKEN_PREFIX = "sga"
+AGENT_TOKEN_SCOPES = frozenset({"agent:read", "agent:inbox", "agent:post", "agent:ack"})
 PRIVATE_CONTEXT_REF_MARKERS = (
     "mcp://",
     "file://",
@@ -60,6 +63,7 @@ THREADS_TABLE = os.environ["THREADS_TABLE"]
 DELIVERIES_TABLE = os.environ["DELIVERIES_TABLE"]
 IDEMPOTENCY_TABLE = os.environ["IDEMPOTENCY_TABLE"]
 ROUTING_RULES_TABLE = os.environ.get("ROUTING_RULES_TABLE")
+AGENT_TOKENS_TABLE = os.environ.get("AGENT_TOKENS_TABLE")
 THREAD_SUMMARIES_TABLE = os.environ["THREAD_SUMMARIES_TABLE"]
 TASKS_TABLE = os.environ.get("TASKS_TABLE")
 TOOL_REQUESTS_TABLE = os.environ.get("TOOL_REQUESTS_TABLE")
@@ -74,6 +78,7 @@ threads_table = dynamodb.Table(THREADS_TABLE)
 deliveries_table = dynamodb.Table(DELIVERIES_TABLE)
 idempotency_table = dynamodb.Table(IDEMPOTENCY_TABLE)
 routing_rules_table = dynamodb.Table(ROUTING_RULES_TABLE) if ROUTING_RULES_TABLE else None
+agent_tokens_table = dynamodb.Table(AGENT_TOKENS_TABLE) if AGENT_TOKENS_TABLE else None
 thread_summaries_table = dynamodb.Table(THREAD_SUMMARIES_TABLE)
 tasks_table = dynamodb.Table(TASKS_TABLE) if TASKS_TABLE else None
 tool_requests_table = dynamodb.Table(TOOL_REQUESTS_TABLE) if TOOL_REQUESTS_TABLE else None
@@ -97,6 +102,10 @@ class Blocked(ValueError):
 
 
 class Forbidden(ValueError):
+    pass
+
+
+class Unauthorized(ValueError):
     pass
 
 
@@ -135,6 +144,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "POST" and path == "/messages":
             return create_message(event)
+
+        if path == "/agent" or path.startswith("/agent/"):
+            return route_agent_runtime(method, path, event)
 
         if path.startswith("/personal-agents/"):
             return route_personal_agent(method, path, event)
@@ -209,6 +221,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response(403, {"error": "blocked", "message": str(exc)})
     except Forbidden as exc:
         return response(403, {"error": "forbidden", "message": str(exc)})
+    except Unauthorized as exc:
+        return response(401, {"error": "unauthorized", "message": str(exc)})
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
         return response(500, {"error": "internal_error"})
@@ -488,6 +502,31 @@ def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[
         return return_task_result(unquote(parts[1]), event_with_json_body(body))
 
     raise NotFound(f"personal-agent route not found: {method} {path}")
+
+
+def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+
+    if method == "GET" and parts == ["agent", "me"]:
+        principal = require_agent_principal(event, "agent:read")
+        agent = require_agent(principal["agent_id"])
+        return response(200, {"agent": public_agent(agent), "principal": principal})
+
+    if method == "GET" and parts == ["agent", "inbox"]:
+        principal = require_agent_principal(event, "agent:inbox")
+        return read_inbox(principal["agent_handle"], event)
+
+    if method == "POST" and parts == ["agent", "posts"]:
+        principal = require_agent_principal(event, "agent:post")
+        body = parse_body(event)
+        body["sender_handle"] = principal["agent_handle"]
+        return create_message(event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
+        principal = require_agent_principal(event, "agent:ack")
+        return ack_delivery_for_agent(parts[2], principal)
+
+    raise NotFound(f"agent runtime route not found: {method} {path}")
 
 
 def create_task(event: dict[str, Any]) -> dict[str, Any]:
@@ -1542,6 +1581,84 @@ def require_delivery(delivery_id: str) -> dict[str, Any]:
     return delivery
 
 
+def require_agent_tokens_table() -> None:
+    if agent_tokens_table is None:
+        raise BadRequest("agent token table is not configured")
+
+
+def require_agent_principal(event: dict[str, Any], required_scope: str) -> dict[str, Any]:
+    require_agent_tokens_table()
+    if required_scope not in AGENT_TOKEN_SCOPES:
+        raise BadRequest(f"unknown agent token scope: {required_scope}")
+
+    token_id, secret = parse_agent_token(bearer_token_from_event(event))
+    token_record = agent_tokens_table.get_item(Key={"token_id": token_id}).get("Item")
+    if token_record is None:
+        raise Unauthorized("agent token not found")
+    expected_hash = str(token_record.get("token_hash") or "")
+    if not hmac.compare_digest(hash_token_parts(token_id, secret), expected_hash):
+        raise Unauthorized("agent token is invalid")
+    if token_record.get("revoked_at"):
+        raise Unauthorized("agent token is revoked")
+    if token_expired(token_record.get("expires_at")):
+        raise Unauthorized("agent token is expired")
+
+    raw_scopes = token_record.get("scopes", [])
+    if isinstance(raw_scopes, str):
+        raw_scopes = [raw_scopes]
+    scopes = sorted(str(scope).strip().lower() for scope in raw_scopes if str(scope).strip())
+    if required_scope not in scopes:
+        raise Forbidden(f"missing agent token scope: {required_scope}")
+
+    agent_id = token_record.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise Unauthorized("agent token agent_id is invalid")
+    agent = require_agent(agent_id)
+    try:
+        agent_handle = normalize_handle(str(token_record.get("agent_handle") or agent["handle"]))
+    except BadRequest as exc:
+        raise Unauthorized("agent token agent_handle is invalid") from exc
+    if agent_handle != agent["handle"]:
+        raise Unauthorized("agent token agent handle is stale")
+
+    used_at = now_iso()
+    agent_tokens_table.update_item(
+        Key={"token_id": token_id},
+        UpdateExpression="SET last_used_at = :last_used_at",
+        ExpressionAttributeValues={":last_used_at": used_at},
+    )
+    return clean_item(
+        {
+            "token_id": token_id,
+            "agent_id": agent["agent_id"],
+            "agent_handle": agent["handle"],
+            "scopes": scopes,
+            "owner_user_id": token_record.get("owner_user_id"),
+            "node_id": token_record.get("node_id"),
+        }
+    )
+
+
+def ack_delivery_for_agent(delivery_id: str, principal: dict[str, Any]) -> dict[str, Any]:
+    delivery = require_delivery(delivery_id)
+    if delivery.get("recipient_agent_id") != principal["agent_id"]:
+        raise Forbidden("agent token cannot ack another recipient's delivery")
+
+    now = now_iso()
+    result = deliveries_table.update_item(
+        Key={"delivery_id": delivery_id},
+        UpdateExpression="SET #status = :status, acked_at = :acked_at, updated_at = :updated_at",
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":status": "acked",
+            ":acked_at": now,
+            ":updated_at": now,
+        },
+        ReturnValues="ALL_NEW",
+    )
+    return response(200, {"delivery": clean_item(result["Attributes"])})
+
+
 def require_task_tables() -> None:
     if tasks_table is None or tool_requests_table is None or task_results_table is None:
         raise BadRequest("task tables are not configured")
@@ -1939,6 +2056,42 @@ def parse_body(event: dict[str, Any], *, default: dict[str, Any] | None = None) 
 
 def query_params(event: dict[str, Any]) -> dict[str, str]:
     return event.get("queryStringParameters") or {}
+
+
+def bearer_token_from_event(event: dict[str, Any]) -> str:
+    headers = event.get("headers") or {}
+    authorization = headers.get("authorization") or headers.get("Authorization")
+    if not authorization:
+        raise Unauthorized("missing authorization header")
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        raise Unauthorized("authorization header must be bearer token")
+    return parts[1].strip()
+
+
+def parse_agent_token(token: str) -> tuple[str, str]:
+    parts = token.split("_", 2)
+    if len(parts) != 3 or parts[0] != AGENT_TOKEN_PREFIX or not parts[1] or not parts[2]:
+        raise Unauthorized("agent token has invalid format")
+    return parts[1], parts[2]
+
+
+def hash_token_parts(token_id: str, secret: str) -> str:
+    return hashlib.sha256(f"{token_id}.{secret}".encode("utf-8")).hexdigest()
+
+
+def token_expired(expires_at: Any) -> bool:
+    if expires_at is None:
+        return False
+    if isinstance(expires_at, (int, float, Decimal)):
+        return float(expires_at) <= time.time()
+    if not isinstance(expires_at, str) or not expires_at.strip():
+        return False
+    try:
+        parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Unauthorized("agent token expires_at is invalid") from exc
+    return parsed <= datetime.now(timezone.utc)
 
 
 def required(body: dict[str, Any], key: str) -> str:

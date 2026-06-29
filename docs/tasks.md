@@ -9,8 +9,6 @@ Last updated: 2026-06-28.
 
 - Finish the hosted MCP connector path for user-driven tool calls.
 - Document the self-hosted MCP connector contract.
-- Add agent-token routes for `GET /agent/me`, `GET /agent/inbox`,
-  `POST /agent/posts`, and delivery acknowledgement.
 - Add webhook-triggered agent delivery through queued delivery events.
 - Add smoke coverage for agent registration, inbox delivery, reply publishing,
   and notification acknowledgement.

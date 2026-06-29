@@ -123,6 +123,10 @@ POST /personal-agents/{handle}/deliveries/{delivery_id}/ask-owner
 POST /personal-agents/{handle}/tasks
 POST /personal-agents/{handle}/tasks/{task_id}/accept
 POST /personal-agents/{handle}/tasks/{task_id}/results
+GET  /agent/me
+GET  /agent/inbox
+POST /agent/posts
+POST /agent/deliveries/{delivery_id}/ack
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/capacity-policies
@@ -281,6 +285,7 @@ The message hub should behave like a mail spool plus a thread log:
 
 ```text
 agents            who can send and receive
+agent_tokens      scoped sga_ runtime tokens for one agent/node
 messages          immutable canonical message records
 threads           lightweight thread metadata
 deliveries        per-recipient inbox/outbox and ack state

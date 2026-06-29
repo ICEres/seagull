@@ -8,6 +8,7 @@ from message_hub.domain import (
     ActionRequest,
     AgentDecisionResult,
     Agent,
+    AgentTokenVerificationError,
     ContactExplanation,
     ContextBudget,
     ContextPack,
@@ -241,6 +242,42 @@ class LocalMessageHubApi:
     def personal_agent_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
         return self.read_inbox(handle, limit=limit)
 
+    def agent_me(self, authorization: str | None) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:read")
+        try:
+            agent = self._service.get_agent(principal.agent_handle)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"agent": agent_to_dict(agent), "principal": agent_token_principal_to_dict(principal)}
+
+    def agent_inbox(self, authorization: str | None, *, limit: int = 20) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:inbox")
+        return self.read_inbox(principal.agent_handle, limit=limit)
+
+    def agent_post(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        wrapped = {**body, "sender_handle": principal.agent_handle}
+        return self.create_message(wrapped)
+
+    def agent_ack_delivery(self, authorization: str | None, delivery_id: str) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:ack")
+        try:
+            delivery = self._service.ack_delivery(
+                delivery_id,
+                recipient_handle=principal.agent_handle,
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"delivery": delivery_to_dict(delivery)}
+
     def personal_agent_send(self, handle: str, body: dict[str, Any]) -> dict[str, Any]:
         wrapped = {**body, "sender_handle": handle}
         return self.create_message(wrapped)
@@ -268,6 +305,19 @@ class LocalMessageHubApi:
     def personal_agent_return_result(self, handle: str, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         wrapped = {**body, "responder_handle": handle}
         return self.return_task_result(task_id, wrapped)
+
+    def _require_agent_token(self, authorization: str | None, *, required_scope: str):
+        try:
+            return self._service.verify_agent_token(
+                bearer_token_from_authorization(authorization),
+                required_scope=required_scope,
+            )
+        except AgentTokenVerificationError as exc:
+            status_code = 403 if str(exc).startswith("missing agent token scope") else 401
+            error = "forbidden" if status_code == 403 else "unauthorized"
+            raise ApiError(status_code, error, str(exc)) from exc
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
 
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
@@ -935,6 +985,26 @@ def agent_to_dict(agent: Agent) -> dict[str, Any]:
         "created_at": datetime_to_string(agent.created_at),
         "updated_at": datetime_to_string(agent.updated_at),
     }
+
+
+def agent_token_principal_to_dict(principal: Any) -> dict[str, Any]:
+    return {
+        "token_id": principal.token_id,
+        "agent_id": principal.agent_id,
+        "agent_handle": principal.agent_handle,
+        "scopes": sorted(principal.scopes),
+        "owner_user_id": principal.owner_user_id,
+        "node_id": principal.node_id,
+    }
+
+
+def bearer_token_from_authorization(authorization: str | None) -> str:
+    if not authorization:
+        raise ApiError(401, "unauthorized", "missing authorization header")
+    parts = authorization.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        raise ApiError(401, "unauthorized", "authorization header must be bearer token")
+    return parts[1].strip()
 
 
 def public_capabilities(capabilities: tuple[str, ...]) -> list[str]:

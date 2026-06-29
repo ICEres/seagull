@@ -15,7 +15,7 @@ nameserver cutover:
 - Root SPF TXT record.
 
 The apex `gulls.ai` `A`/`AAAA` records are owned by the dev web stack so the
-main Seagull app can be served from CloudFront. A Terraform `removed` block
+public landing page can be served from CloudFront. A Terraform `removed` block
 keeps this stack from deleting the old apex Squarespace record during the
 handoff.
 

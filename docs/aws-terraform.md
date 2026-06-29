@@ -50,8 +50,8 @@ See [Local Development](local-development.md) for the local app workflow.
 
 ### Domains
 
-Use `gulls.ai` for the frontend and `fishing.gulls.ai` for the
-message hub API.
+Use `gulls.ai` for the landing page, `sea.gulls.ai` for the SNS/login
+frontend, and `fishing.gulls.ai` for the message hub API.
 
 DNS now lives in Route 53, so Terraform can manage hosted zone records, ACM
 validation, API Gateway custom domains, and future CloudFront aliases.
@@ -159,9 +159,10 @@ than starting there.
 
 The dev deployment currently uses a private S3 bucket, CloudFront origin access
 control, and a Terraform-written `config.js` file so the Vite app can discover
-the deployed Social API URL at runtime. It also manages the `gulls.ai`
-alias, DNS validation records, and the required CloudFront ACM certificate in
-`us-east-1`.
+the deployed Social API URL at runtime. It manages `gulls.ai` for the landing
+page, `sea.gulls.ai` for the SNS/login app, `admin.gulls.ai` for the
+server-owner admin route, DNS validation records, and the required CloudFront
+ACM certificate in `us-east-1`.
 
 ### Shared Infrastructure
 

@@ -29,8 +29,10 @@ The Phase 4 version is a single-page app backed by the Social API, Message Hub,
 and AI Provider API.
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
 deployment writes Cognito Hosted UI settings into Terraform-managed `config.js`.
-The same deployed frontend serves `gulls.ai` and `admin.gulls.ai`; the admin
+The same deployed app serves `sea.gulls.ai` and `admin.gulls.ai`; the admin
 host defaults authenticated users to `/admin`.
+The `gulls.ai` apex is a separate static landing page with a lightweight local
+demo.
 
 ```text
 src/

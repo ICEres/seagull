@@ -12,6 +12,7 @@ fi
 SOCIAL_API_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw social_api_url)"
 MESSAGE_API_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw message_api_url)"
 ADMIN_WEB_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw admin_web_url 2>/dev/null || true)"
+LANDING_WEB_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw landing_web_url 2>/dev/null || true)"
 SOCIAL_AUTH_CLIENT_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_client_id)"
 
 mkdir -p .local
@@ -73,7 +74,28 @@ if [ -n "$ADMIN_WEB_URL" ]; then
   grep -q "$ADMIN_HOST" .local/web-smoke-config.js
 fi
 
+if [ -n "$LANDING_WEB_URL" ]; then
+  for attempt in $(seq 1 30); do
+    if fetch "$LANDING_WEB_URL/" .local/web-smoke-landing.html; then
+      if grep -q "<title>Seagull Lite Demo</title>" .local/web-smoke-landing.html &&
+        grep -q "sea.gulls.ai" .local/web-smoke-landing.html; then
+        break
+      fi
+    fi
+
+    if [ "$attempt" -eq 30 ]; then
+      echo "landing page did not become ready at $LANDING_WEB_URL" >&2
+      exit 1
+    fi
+
+    sleep 10
+  done
+fi
+
 echo "Web smoke passed for $WEB_URL"
 if [ -n "$ADMIN_WEB_URL" ]; then
   echo "Admin web smoke passed for $ADMIN_WEB_URL"
+fi
+if [ -n "$LANDING_WEB_URL" ]; then
+  echo "Landing smoke passed for $LANDING_WEB_URL"
 fi

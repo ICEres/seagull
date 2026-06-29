@@ -22,6 +22,7 @@ locals {
   web_prefix             = "${var.project}-${var.environment}-web"
   web_bucket_name        = "${local.web_prefix}-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   web_dist_dir           = "${path.module}/../../../../apps/web/dist"
+  landing_dist_dir       = "${path.module}/../../../../apps/landing"
   lambda_src             = "${path.module}/../../../../apps/message-hub/aws/lambda_function.py"
   agent_worker_src       = "${path.module}/../../../../apps/message-hub/aws/agent_worker.py"
   router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
@@ -980,7 +981,9 @@ module "web" {
   bucket_name         = local.web_bucket_name
   domain_name         = var.web_domain_name
   admin_domain_name   = var.admin_domain_name
+  landing_domain_name = var.landing_domain_name
   dist_dir            = local.web_dist_dir
+  landing_dist_dir    = local.landing_dist_dir
   hosted_zone_id      = data.aws_route53_zone.root.zone_id
   message_api_url     = "https://${var.message_api_domain}"
   social_api_url      = module.social_api.api_endpoint

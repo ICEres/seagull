@@ -24,6 +24,18 @@ variable "admin_domain_name" {
   default     = ""
 }
 
+variable "landing_domain_name" {
+  type        = string
+  description = "Optional public HTTPS hostname for the static landing page."
+  default     = ""
+}
+
+variable "landing_dist_dir" {
+  type        = string
+  description = "Optional path to static landing page assets."
+  default     = ""
+}
+
 variable "hosted_zone_id" {
   type        = string
   description = "Route 53 hosted zone ID for the web frontend domain."

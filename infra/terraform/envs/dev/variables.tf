@@ -37,6 +37,12 @@ variable "message_api_domain" {
 variable "web_domain_name" {
   type        = string
   description = "Public HTTPS hostname for the web frontend."
+  default     = "sea.gulls.ai"
+}
+
+variable "landing_domain_name" {
+  type        = string
+  description = "Public HTTPS hostname for the landing page."
   default     = "gulls.ai"
 }
 

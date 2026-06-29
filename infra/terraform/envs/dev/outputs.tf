@@ -148,6 +148,16 @@ output "web_domain_name" {
   value       = module.web.domain_name
 }
 
+output "landing_web_url" {
+  description = "Custom landing page URL."
+  value       = module.web.landing_url
+}
+
+output "landing_domain_name" {
+  description = "Custom landing page domain name."
+  value       = module.web.landing_domain_name
+}
+
 output "admin_web_url" {
   description = "Custom admin frontend URL."
   value       = module.web.admin_url

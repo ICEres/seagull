@@ -6,21 +6,22 @@ Project domain:
 gulls.ai
 ```
 
-Product domain:
+Product app domain:
 
 ```text
-gulls.ai
+sea.gulls.ai
 ```
 
 ## Recommendation
 
-Use `gulls.ai` for the human-facing Seagull web app, not for the message hub
-API.
+Use `gulls.ai` for the public landing page. Use `sea.gulls.ai` for the
+human-facing Seagull SNS/login app, not for the message hub API.
 
 Suggested naming:
 
 ```text
-gulls.ai              Main Seagull web app
+gulls.ai              Public landing page and lite demo
+sea.gulls.ai          Main Seagull SNS/login app
 admin.gulls.ai        Server-owner admin web app
 fishing.gulls.ai      Message hub API
 api.gulls.ai          Social/user API
@@ -78,7 +79,7 @@ MX    none observed
 
 The visible `www` and SPF records have been added to the Route 53 Terraform
 stack so `www.gulls.ai` should remain reachable after nameserver cutover. The
-apex `gulls.ai` records are now owned by the deployed web stack.
+apex `gulls.ai` records are owned by the deployed landing page.
 
 ## DNS Options
 
@@ -127,7 +128,7 @@ Needed AWS resources:
 For the future web app:
 
 ```text
-gulls.ai
+sea.gulls.ai
 -> CloudFront
 -> S3 static web app
 ```
@@ -135,9 +136,18 @@ gulls.ai
 Update: the dev frontend is now deployed this way.
 
 ```text
-gulls.ai
+sea.gulls.ai
 -> CloudFront distribution <distribution-id>
 -> private S3 bucket seagull-dev-web-<account-id>-<region>
+```
+
+The apex landing page is served by the same CloudFront distribution with a
+host-based rewrite:
+
+```text
+gulls.ai
+-> CloudFront
+-> /landing/index.html
 ```
 
 The CloudFront viewer certificate is managed by ACM in `us-east-1`; the
@@ -154,7 +164,8 @@ registrar-managed DNS
 ```
 
 Then keep `fishing.gulls.ai` on the deployed message hub API, `gulls.ai` on the
-deployed frontend, and `admin.gulls.ai` on the server-owner admin frontend.
+landing page, `sea.gulls.ai` on the deployed SNS/login frontend, and
+`admin.gulls.ai` on the server-owner admin frontend.
 
 ## Terraform
 

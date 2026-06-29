@@ -28,6 +28,11 @@ output "admin_domain_name" {
   value       = var.admin_domain_name
 }
 
+output "landing_domain_name" {
+  description = "Custom landing page domain name."
+  value       = var.landing_domain_name
+}
+
 output "url" {
   description = "HTTPS URL for the frontend."
   value       = "https://${var.domain_name}"
@@ -36,4 +41,9 @@ output "url" {
 output "admin_url" {
   description = "HTTPS URL for the admin frontend."
   value       = var.admin_domain_name == "" ? "" : "https://${var.admin_domain_name}"
+}
+
+output "landing_url" {
+  description = "HTTPS URL for the landing page."
+  value       = var.landing_domain_name == "" ? "" : "https://${var.landing_domain_name}"
 }

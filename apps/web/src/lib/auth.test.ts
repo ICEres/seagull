@@ -21,8 +21,8 @@ const cognitoConfig: Extract<AuthConfig, { mode: "cognito" }> = {
   issuer: "https://cognito-idp.ap-southeast-2.amazonaws.com/pool_1",
   hostedDomain: "seagull-social.auth.ap-southeast-2.amazoncognito.com",
   clientId: "client_1",
-  redirectUri: "https://gulls.ai/auth/callback",
-  logoutUri: "https://gulls.ai/register",
+  redirectUri: "https://sea.gulls.ai/auth/callback",
+  logoutUri: "https://sea.gulls.ai/register",
 };
 
 describe("auth helpers", () => {
@@ -56,13 +56,13 @@ describe("auth helpers", () => {
     );
 
     const callback = parseAuthCallbackUrl(
-      "https://gulls.ai/auth/callback?code=code_1&state=state_1",
+      "https://sea.gulls.ai/auth/callback?code=code_1&state=state_1",
     );
     expect(callback).toMatchObject({ code: "code_1", state: "state_1" });
 
     const session = await completeHostedCallback(
       cognitoConfig,
-      "https://gulls.ai/auth/callback?code=code_1&state=state_1",
+      "https://sea.gulls.ai/auth/callback?code=code_1&state=state_1",
       async (_input, init) => {
         expect(String(init?.body)).toContain("code=code_1");
         return new Response(

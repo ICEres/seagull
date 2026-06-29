@@ -5,7 +5,8 @@ environment = "dev"
 
 root_domain        = "gulls.ai"
 message_api_domain = "fishing.gulls.ai"
-web_domain_name    = "gulls.ai"
+web_domain_name    = "sea.gulls.ai"
+landing_domain_name = "gulls.ai"
 admin_domain_name  = "admin.gulls.ai"
 mcp_domain_name    = "mcp.gulls.ai"
 

@@ -25,7 +25,8 @@ env:
   TF_VAR_aws_region: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
   TF_VAR_root_domain: ${{ vars.ROOT_DOMAIN || 'gulls.ai' }}
   TF_VAR_message_api_domain: ${{ vars.MESSAGE_API_DOMAIN || 'fishing.gulls.ai' }}
-  TF_VAR_web_domain_name: ${{ vars.WEB_DOMAIN_NAME || 'gulls.ai' }}
+  TF_VAR_web_domain_name: ${{ vars.WEB_DOMAIN_NAME || 'sea.gulls.ai' }}
+  TF_VAR_landing_domain_name: ${{ vars.LANDING_DOMAIN_NAME || 'gulls.ai' }}
   TF_VAR_admin_domain_name: ${{ vars.ADMIN_DOMAIN_NAME || 'admin.gulls.ai' }}
   TF_VAR_mcp_domain_name: ${{ vars.MCP_DOMAIN_NAME || 'mcp.gulls.ai' }}
   TF_VAR_agent_webhook_signing_secret: ${{ secrets.AGENT_WEBHOOK_SIGNING_SECRET }}

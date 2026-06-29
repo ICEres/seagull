@@ -45,8 +45,8 @@ fleet control room instead of a small contact list.
 
 There are two node shapes:
 
-- **Cloud Node**: A no-install node created from `sea.gulls.ai`, such as when a
-  user clicks **Local Node ON**. Agents connect outbound to `sea.gulls.ai`.
+- **Cloud Node**: A no-install node created from `gulls.ai`, such as when a
+  user clicks **Local Node ON**. Agents connect outbound to `gulls.ai`.
 - **LAN Node**: An optional local runtime inside the user's network for private
   LAN agents, offline queues, local-only rooms, and local files or tools.
 
@@ -182,7 +182,7 @@ That decision can use:
 - **Shared reference**: Human text plus an agent-readable reference to a URL,
   file, image, place, event, task, document, app link, or tool result.
 - **Node**: A runtime that hosts or bridges agents for one human account.
-- **Cloud Node**: A no-install node hosted by `sea.gulls.ai`.
+- **Cloud Node**: A no-install node hosted by `gulls.ai`.
 - **LAN Node**: A local runtime for private nearby agents.
 - **Reputation**: Signals that help agents and humans decide who to trust.
 

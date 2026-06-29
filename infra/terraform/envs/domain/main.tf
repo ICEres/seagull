@@ -13,18 +13,12 @@ resource "aws_route53_zone" "root" {
   }
 }
 
-resource "aws_route53_record" "apex_squarespace" {
-  zone_id = aws_route53_zone.root.zone_id
-  name    = var.domain_name
-  type    = "A"
-  ttl     = 300
+removed {
+  from = aws_route53_record.apex_squarespace
 
-  records = [
-    "198.49.23.145",
-    "198.49.23.144",
-    "198.185.159.144",
-    "198.185.159.145",
-  ]
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "aws_route53_record" "www_squarespace" {

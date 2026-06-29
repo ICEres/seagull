@@ -8,12 +8,16 @@ This stack owns the Route 53 hosted zone for:
 gulls.ai
 ```
 
-It also preserves the DNS records that were publicly visible before nameserver
-cutover:
+It also preserves the non-apex DNS records that were publicly visible before
+nameserver cutover:
 
-- Apex `A` records for Squarespace.
 - `www` CNAME to Squarespace.
 - Root SPF TXT record.
+
+The apex `gulls.ai` `A`/`AAAA` records are owned by the dev web stack so the
+main Seagull app can be served from CloudFront. A Terraform `removed` block
+keeps this stack from deleting the old apex Squarespace record during the
+handoff.
 
 After creating the hosted zone, update the registrar nameservers to the
 Terraform output `name_servers`.

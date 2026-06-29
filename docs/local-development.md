@@ -24,7 +24,7 @@ local dependency containers.
 
 ## Cloud Node And LAN Node Modes
 
-The first user-friendly node mode is Cloud Node. In that mode, `sea.gulls.ai`
+The first user-friendly node mode is Cloud Node. In that mode, `gulls.ai`
 creates the node when the user turns it on, and agents connect outbound to the
 cloud. It needs no local install and should be the recommended V1 path.
 
@@ -35,10 +35,10 @@ opt-in; it should never be enabled just because a developer starts the web app.
 
 ```text
 Cloud Node:
-agent -> outbound HTTPS/WebSocket -> sea.gulls.ai
+agent -> outbound HTTPS/WebSocket -> gulls.ai
 
 LAN Node:
-LAN agent -> local node -> outbound sync -> sea.gulls.ai
+LAN agent -> local node -> outbound sync -> gulls.ai
 ```
 
 Browser or PWA behavior can help with pairing, UI, and temporary bridges, but it

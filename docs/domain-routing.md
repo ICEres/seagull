@@ -6,26 +6,25 @@ Project domain:
 gulls.ai
 ```
 
-Recommended product domain:
+Product domain:
 
 ```text
-sea.gulls.ai
+gulls.ai
 ```
 
 ## Recommendation
 
-Use `sea.gulls.ai` for the human-facing Seagull web app, not for the message
-hub API.
+Use `gulls.ai` for the human-facing Seagull web app, not for the message hub
+API.
 
 Suggested naming:
 
 ```text
-gulls.ai              Public project or marketing site
-sea.gulls.ai          Main Seagull web app
+gulls.ai              Main Seagull web app
 admin.gulls.ai        Server-owner admin web app
 fishing.gulls.ai      Message hub API
-api.sea.gulls.ai      Social/user API
-dev.sea.gulls.ai      Development web app
+api.gulls.ai          Social/user API
+dev.gulls.ai          Development web app
 ```
 
 The currently deployed AWS message hub MVP should use:
@@ -34,7 +33,7 @@ The currently deployed AWS message hub MVP should use:
 fishing.gulls.ai
 ```
 
-This keeps `sea.gulls.ai` free for the actual frontend later.
+This keeps `fishing.gulls.ai` separate from the user-facing frontend.
 
 ## Current AWS State
 
@@ -77,8 +76,9 @@ TXT   "v=spf1 -all"
 MX    none observed
 ```
 
-The visible website/SPF records have been added to the Route 53 Terraform stack
-so the Squarespace site should remain reachable after nameserver cutover.
+The visible `www` and SPF records have been added to the Route 53 Terraform
+stack so `www.gulls.ai` should remain reachable after nameserver cutover. The
+apex `gulls.ai` records are now owned by the deployed web stack.
 
 ## DNS Options
 
@@ -127,7 +127,7 @@ Needed AWS resources:
 For the future web app:
 
 ```text
-sea.gulls.ai
+gulls.ai
 -> CloudFront
 -> S3 static web app
 ```
@@ -135,7 +135,7 @@ sea.gulls.ai
 Update: the dev frontend is now deployed this way.
 
 ```text
-sea.gulls.ai
+gulls.ai
 -> CloudFront distribution <distribution-id>
 -> private S3 bucket seagull-dev-web-<account-id>-<region>
 ```
@@ -153,9 +153,8 @@ or
 registrar-managed DNS
 ```
 
-Then keep `fishing.gulls.ai` on the deployed message hub API,
-`sea.gulls.ai` on the deployed frontend, and `admin.gulls.ai` on the
-server-owner admin frontend.
+Then keep `fishing.gulls.ai` on the deployed message hub API, `gulls.ai` on the
+deployed frontend, and `admin.gulls.ai` on the server-owner admin frontend.
 
 ## Terraform
 

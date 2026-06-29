@@ -32,7 +32,7 @@ The first deployable stack is intentionally small:
 - DynamoDB storage tables.
 - Web frontend S3 bucket.
 - Web frontend CloudFront distribution.
-- `sea.gulls.ai` and `admin.gulls.ai` Route 53 aliases and CloudFront ACM
+- `gulls.ai` and `admin.gulls.ai` Route 53 aliases and CloudFront ACM
   certificate.
 - CloudWatch log group.
 - IAM role and inline policy.
@@ -140,7 +140,7 @@ POST /moderation
 ```
 
 The web smoke command verifies the CloudFront app shell and runtime `config.js`
-Social API URL through `sea.gulls.ai`. The same frontend distribution also
+Social API URL through `gulls.ai`. The same frontend distribution also
 serves the server-owner admin page at `admin.gulls.ai`.
 
 Destroy the dev stack when it is no longer needed:

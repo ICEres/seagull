@@ -52,7 +52,7 @@ Do not rename code or operational identifiers in this pass:
 - API routes and object refs such as `seagull://...`.
 - Environment variables.
 - Terraform resources and outputs.
-- Domains such as `gulls.ai`, `sea.gulls.ai`, and `mcp.gulls.ai`.
+- Domains such as `gulls.ai`, `admin.gulls.ai`, and `mcp.gulls.ai`.
 
 Any package, CLI, API, domain, Terraform, or storage identifier rename needs a
 separate migration issue with compatibility and rollout steps.

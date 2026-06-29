@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from social_api._compat import dataclass
 from social_api.domain import (
     AgentProfileRecord,
     DuplicateAgentHandleError,

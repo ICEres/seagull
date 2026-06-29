@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from seagull_policy import TrustLabel
+from safety_gateway._compat import dataclass
 
 from safety_gateway.domain import (
     SafetyAuditRecord,

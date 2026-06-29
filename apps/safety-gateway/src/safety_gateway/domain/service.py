@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 
 from seagull_policy import ReviewState, RiskLabel, SafetyAction, SafetyDecision, TrustLabel
+from safety_gateway._compat import dataclass
 
 from safety_gateway.domain.models import (
     SafetyAuditRecord,

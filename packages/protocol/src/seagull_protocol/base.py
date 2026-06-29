@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import field
 from datetime import datetime, timezone
 from enum import Enum
+
+from seagull_protocol._compat import dataclass
 
 
 HANDLE_RE = re.compile(r"^@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*$")

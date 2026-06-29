@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Mapping
 
 from seagull_policy import ReviewState, RiskLabel, SafetyAction, SafetyDecision, TrustLabel
+from safety_gateway._compat import dataclass
 
 
 def utc_now() -> datetime:

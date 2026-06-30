@@ -10,6 +10,7 @@ if [ -z "$API_URL" ]; then
 fi
 
 ADMIN_SECRET="${AI_PROVIDER_ADMIN_SECRET:-}"
+AUTH_TOKEN="${AI_PROVIDER_BEARER_TOKEN:-${SOCIAL_API_BEARER_TOKEN:-}}"
 
 mkdir -p .local
 
@@ -29,12 +30,17 @@ fi
 PROBE="ai-smoke-$(date +%s)"
 OWNER_ID="owner-$PROBE"
 AGENT_ID="agent-$PROBE"
+AUTH_CURL_ARGS=()
+if [ -n "$AUTH_TOKEN" ]; then
+  AUTH_CURL_ARGS=(-H "authorization: Bearer $AUTH_TOKEN")
+fi
 
 echo "Grant server credits:"
 curl -fsS \
   -X POST "$API_URL/admin/ai-credits/server-grants" \
   -H "content-type: application/json" \
   -H "x-seagull-admin-secret: $ADMIN_SECRET" \
+  "${AUTH_CURL_ARGS[@]}" \
   -d "{
     \"admin_actor_id\": \"ci-ai-smoke\",
     \"credit_amount\": 100,
@@ -48,6 +54,7 @@ curl -fsS \
   -X POST "$API_URL/owners/$OWNER_ID/ai-credits/grants" \
   -H "content-type: application/json" \
   -H "x-seagull-admin-secret: $ADMIN_SECRET" \
+  "${AUTH_CURL_ARGS[@]}" \
   -d "{
     \"admin_actor_id\": \"ci-ai-smoke\",
     \"credit_amount\": 100,
@@ -62,6 +69,8 @@ echo "Create fake AI run:"
 curl -fsS \
   -X POST "$API_URL/ai-runs" \
   -H "content-type: application/json" \
+  -H "x-seagull-admin-secret: $ADMIN_SECRET" \
+  "${AUTH_CURL_ARGS[@]}" \
   -d "{
     \"provider\": \"fake\",
     \"model\": \"fake-small\",
@@ -79,7 +88,10 @@ echo
 python3 -c 'import json; data=json.load(open(".local/ai-provider-smoke-run.json")); run=data["run"]; assert run["state"] == "completed"; assert run["usage_id"]; assert "Fake response" in run["output_text"]'
 
 echo "Owner credit balance:"
-curl -fsS "$API_URL/owners/$OWNER_ID/ai-credits/balance" | tee .local/ai-provider-smoke-balance.json
+curl -fsS \
+  "$API_URL/owners/$OWNER_ID/ai-credits/balance" \
+  -H "x-seagull-admin-secret: $ADMIN_SECRET" \
+  "${AUTH_CURL_ARGS[@]}" | tee .local/ai-provider-smoke-balance.json
 echo
 echo
 

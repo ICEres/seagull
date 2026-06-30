@@ -238,6 +238,28 @@ class AiProviderLambdaAuthTest(TestCase):
         self.assertEqual("seagull-ai-provider/providers/openai/api-key", payload["provider_config"]["secret_ref"])
         self.assertEqual("sk-test", fake_secrets.secrets["seagull-ai-provider/providers/openai/api-key"])
 
+        second_response = self.lambda_module.handler(
+            event(
+                "POST",
+                "/admin/ai-providers/openai",
+                headers={"x-seagull-admin-secret": "admin-secret"},
+                body={
+                    "admin_actor_id": "admin_1",
+                    "enabled": True,
+                    "allowed_models": ["gpt-test"],
+                    "secret_ref": None,
+                    "reason": "update openai",
+                },
+            ),
+            None,
+        )
+
+        self.assertEqual(200, second_response["statusCode"])
+        self.assertEqual(
+            "seagull-ai-provider/providers/openai/api-key",
+            body(second_response)["provider_config"]["secret_ref"],
+        )
+
     def test_landing_demo_run_allows_public_low_limit_run(self) -> None:
         response = self.lambda_module.handler(
             event(

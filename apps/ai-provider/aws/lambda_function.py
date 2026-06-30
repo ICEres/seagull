@@ -101,12 +101,23 @@ repository = DynamoDbAiProviderRepository(
 
 
 def provider_api_key(provider: str) -> str:
-    config = repository.get_provider_config(provider)
+    config = repository_provider_config(provider)
     if config is not None and config.secret_ref:
         return secret_ref_value(config.secret_ref)
     if provider == "openai":
         return os.environ.get("OPENAI_API_KEY", "").strip()
     return ""
+
+
+def repository_provider_config(provider: str) -> Any:
+    config = repository.get_provider_config(provider)
+    if config is not None:
+        return config
+    normalized_provider = provider.casefold()
+    for candidate in repository.list_provider_configs():
+        if candidate.provider.casefold() == normalized_provider:
+            return candidate
+    return None
 
 
 def secret_ref_value(secret_ref: str) -> str:
@@ -317,10 +328,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             provider = unquote(path.removeprefix("/admin/ai-providers/").strip("/"))
             if not provider:
                 raise BadRequest("provider is required")
+            existing_config = service_provider_config(provider)
             secret_ref = optional_string(body, "secret_ref")
             api_key = optional_string(body, "api_key")
             if api_key:
                 secret_ref = save_provider_api_key(provider, api_key)
+            elif secret_ref is None and existing_config is not None and existing_config.secret_ref:
+                secret_ref = existing_config.secret_ref
             config = service.save_provider_config(
                 admin_actor_id=required_string(body, "admin_actor_id"),
                 provider=provider,
@@ -471,12 +485,23 @@ def public_demo_idempotency_key(message_text: str) -> str:
 
 def public_demo_model() -> str:
     preferred_model = PUBLIC_DEMO_MODEL or ("gpt-5.4-mini" if PUBLIC_DEMO_PROVIDER == "openai" else "fake-small")
-    config = service.get_provider_config(PUBLIC_DEMO_PROVIDER)
+    config = service_provider_config(PUBLIC_DEMO_PROVIDER)
     if config is not None and config.allowed_models:
         if preferred_model in config.allowed_models:
             return preferred_model
         return config.allowed_models[0]
     return preferred_model
+
+
+def service_provider_config(provider: str) -> Any:
+    config = service.get_provider_config(provider)
+    if config is not None:
+        return config
+    normalized_provider = provider.casefold()
+    for candidate in service.list_provider_configs():
+        if candidate.provider.casefold() == normalized_provider:
+            return candidate
+    return None
 
 
 def public_demo_used_tokens() -> int:

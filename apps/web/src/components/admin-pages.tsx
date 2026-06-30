@@ -111,6 +111,7 @@ export function AdminPage({
     },
     onSuccess: (result) => {
       onNotice({ tone: "ok", message: `${result.provider_config.provider} saved.` });
+      setSecretRef(result.provider_config.secret_ref ?? "");
       setApiKey("");
       void queryClient.invalidateQueries({ queryKey: ["ai-provider-configs"] });
       void queryClient.invalidateQueries({ queryKey: ["ai-provider-audit"] });

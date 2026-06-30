@@ -491,7 +491,7 @@
             </div>
             <div class="fact">
               <strong>Delivery</strong>
-              <span>Messages remain Seagull records even when no provider is configured.</span>
+              <span>Messages remain Seagull records whether provider delivery runs now or later.</span>
             </div>
           </div>
         </section>
@@ -502,7 +502,7 @@
               <p class="eyebrow">Lite demo</p>
               <h2 id="demo-title">Chat to an agent with bound assets</h2>
             </div>
-            <span class="status" id="demoStatus">stored</span>
+            <span class="status" id="demoStatus">delivered</span>
           </div>
 
           <div class="thread" id="thread" aria-live="polite"></div>
@@ -519,7 +519,7 @@
                 Skill asset
               </label>
               <label class="toggle">
-                <input id="providerToggle" type="checkbox" />
+                <input id="providerToggle" type="checkbox" checked />
                 Provider step
               </label>
             </div>
@@ -613,7 +613,7 @@
 
         const response = providerOn
           ? "Draft reply: create the landing page slice, keep the full SNS on sea.gulls.ai, and record the provider run reference with the response."
-          : "No provider is configured, so the message remains available for manual or connector handling with the prompt and skill snapshot attached.";
+          : "Provider delivery is paused for this local demo run, so the message remains available for manual or connector handling with the prompt and skill snapshot attached.";
 
         window.setTimeout(() => {
           thread.appendChild(

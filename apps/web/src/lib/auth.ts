@@ -51,24 +51,6 @@ type TokenPayload = {
   error_description?: string;
 };
 
-type CognitoAuthResult = {
-  AuthenticationResult?: {
-    AccessToken?: string;
-    IdToken?: string;
-    RefreshToken?: string;
-    TokenType?: string;
-    ExpiresIn?: number;
-  };
-  ChallengeName?: string;
-  message?: string;
-  __type?: string;
-};
-
-type CognitoErrorPayload = {
-  message?: string;
-  __type?: string;
-};
-
 const SESSION_KEY = "seagull.web.auth.session";
 const PENDING_KEY = "seagull.web.auth.pending";
 const OAUTH_SCOPE = "openid email profile";
@@ -220,82 +202,6 @@ export function hostedLogoutUrl(config: Extract<AuthConfig, { mode: "cognito" }>
   return url.toString();
 }
 
-export async function registerWithCognito(
-  config: Extract<AuthConfig, { mode: "cognito" }>,
-  input: { email: string; password: string; displayName?: string },
-  fetcher: typeof fetch = fetch,
-): Promise<void> {
-  const userAttributes = [{ Name: "email", Value: input.email.trim() }];
-  const displayName = input.displayName?.trim();
-  if (displayName) {
-    userAttributes.push({ Name: "name", Value: displayName });
-  }
-
-  await cognitoRequest(
-    config,
-    "AWSCognitoIdentityProviderService.SignUp",
-    {
-      ClientId: config.clientId,
-      Username: input.email.trim(),
-      Password: input.password,
-      UserAttributes: userAttributes,
-    },
-    fetcher,
-  );
-}
-
-export async function confirmCognitoRegistration(
-  config: Extract<AuthConfig, { mode: "cognito" }>,
-  input: { email: string; code: string },
-  fetcher: typeof fetch = fetch,
-): Promise<void> {
-  await cognitoRequest(
-    config,
-    "AWSCognitoIdentityProviderService.ConfirmSignUp",
-    {
-      ClientId: config.clientId,
-      Username: input.email.trim(),
-      ConfirmationCode: input.code.trim(),
-    },
-    fetcher,
-  );
-}
-
-export async function loginWithCognito(
-  config: Extract<AuthConfig, { mode: "cognito" }>,
-  input: { email: string; password: string },
-  fetcher: typeof fetch = fetch,
-): Promise<AuthSession> {
-  const result = await cognitoRequest<CognitoAuthResult>(
-    config,
-    "AWSCognitoIdentityProviderService.InitiateAuth",
-    {
-      AuthFlow: "USER_PASSWORD_AUTH",
-      ClientId: config.clientId,
-      AuthParameters: {
-        USERNAME: input.email.trim(),
-        PASSWORD: input.password,
-      },
-    },
-    fetcher,
-  );
-
-  const authResult = result.AuthenticationResult;
-  if (!authResult?.AccessToken) {
-    throw new Error(result.ChallengeName || "Login failed.");
-  }
-
-  const session: AuthSession = {
-    accessToken: authResult.AccessToken,
-    idToken: authResult.IdToken ?? null,
-    refreshToken: authResult.RefreshToken ?? null,
-    tokenType: authResult.TokenType ?? "Bearer",
-    expiresAt: Date.now() + (authResult.ExpiresIn ?? 3600) * 1000,
-  };
-  saveAuthSession(session);
-  return session;
-}
-
 export function parseAuthCallbackUrl(url: string): {
   code: string | null;
   state: string | null;
@@ -337,28 +243,6 @@ function loadPendingLogin(storage: Storage = window.localStorage): PendingLogin 
 
 function clearPendingLogin(storage: Storage = window.localStorage): void {
   storage.removeItem(PENDING_KEY);
-}
-
-async function cognitoRequest<T = unknown>(
-  config: Extract<AuthConfig, { mode: "cognito" }>,
-  target: string,
-  body: unknown,
-  fetcher: typeof fetch,
-): Promise<T> {
-  const response = await fetcher(new URL(config.issuer).origin, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-amz-json-1.1",
-      "x-amz-target": target,
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json()) as T & CognitoErrorPayload;
-  if (!response.ok) {
-    const code = payload.__type?.split("#").pop();
-    throw new Error(payload.message || code || "Cognito request failed.");
-  }
-  return payload;
 }
 
 function randomBase64Url(byteLength: number): string {

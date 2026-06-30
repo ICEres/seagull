@@ -38,7 +38,7 @@ from social_api.storage.dynamodb import DynamoDbSocialRepository
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-social-api")
-SOCIAL_AUTH_REQUIRED = os.environ.get("SOCIAL_AUTH_REQUIRED", "false").lower() == "true"
+SOCIAL_AUTH_REQUIRED = os.environ.get("SOCIAL_AUTH_REQUIRED", "true").lower() not in {"0", "false", "no"}
 
 dynamodb = boto3.resource("dynamodb")
 repository = DynamoDbSocialRepository(

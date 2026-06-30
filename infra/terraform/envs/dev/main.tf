@@ -47,6 +47,23 @@ data "aws_route53_zone" "root" {
   private_zone = false
 }
 
+resource "aws_kms_key" "dynamodb" {
+  description         = "CMK for ${var.project}-${var.environment} DynamoDB tables"
+  enable_key_rotation = true
+
+  tags = merge(
+    local.message_hub_tags,
+    {
+      App = "dynamodb"
+    },
+  )
+}
+
+resource "aws_kms_alias" "dynamodb" {
+  name          = "alias/${var.project}-${var.environment}-dynamodb"
+  target_key_id = aws_kms_key.dynamodb.key_id
+}
+
 data "archive_file" "message_hub_api" {
   type        = "zip"
   source_file = local.lambda_src
@@ -179,6 +196,7 @@ resource "aws_lambda_function" "message_hub_api" {
       MESSAGES_TABLE         = module.message_hub_storage.table_names.messages
       ROUTING_RULES_TABLE    = module.message_hub_storage.table_names.routing_rules
       SAFETY_BLOCKED_TERMS   = "unsafe:"
+      SAFETY_GATEWAY_URL     = module.safety_gateway.api_endpoint
       TASK_RESULTS_TABLE     = module.message_hub_storage.table_names.task_results
       TASKS_TABLE            = module.message_hub_storage.table_names.tasks
       THREAD_SUMMARIES_TABLE = module.message_hub_storage.table_names.thread_summaries
@@ -373,10 +391,15 @@ resource "aws_dynamodb_table" "mcp_connector_tokens" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.dynamodb_point_in_time_recovery_enabled
   }
 
-  deletion_protection_enabled = false
+  deletion_protection_enabled = var.dynamodb_deletion_protection_enabled
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.dynamodb.arn
+  }
 
   tags = {
     Project     = var.project
@@ -856,8 +879,9 @@ module "message_hub_storage" {
   source = "../../modules/message-hub"
 
   name_prefix                    = local.message_hub_prefix
-  point_in_time_recovery_enabled = false
-  deletion_protection_enabled    = false
+  point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
+  deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   tags                           = local.message_hub_tags
 }
 
@@ -868,8 +892,10 @@ module "safety_gateway" {
   lambda_package_path     = data.archive_file.safety_gateway.output_path
   lambda_source_code_hash = data.archive_file.safety_gateway.output_base64sha256
 
-  deletion_protection_enabled = false
-  tags                        = local.message_hub_tags
+  point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
+  deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
+  tags                           = local.message_hub_tags
 }
 
 module "ai_provider" {
@@ -879,9 +905,13 @@ module "ai_provider" {
   lambda_package_path     = data.archive_file.ai_provider.output_path
   lambda_source_code_hash = data.archive_file.ai_provider.output_base64sha256
   admin_secret            = var.ai_provider_admin_secret
+  jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
+  jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
 
-  deletion_protection_enabled = false
-  tags                        = local.message_hub_tags
+  point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
+  deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
+  tags                           = local.message_hub_tags
 }
 
 resource "aws_cognito_user_pool" "social_web" {
@@ -941,9 +971,8 @@ resource "aws_cognito_user_pool_client" "social_web" {
   supported_identity_providers  = ["COGNITO"]
   prevent_user_existence_errors = "ENABLED"
   explicit_auth_flows = [
+    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_PASSWORD_AUTH",
-    "ALLOW_USER_SRP_AUTH",
   ]
   access_token_validity  = 1
   id_token_validity      = 1
@@ -965,8 +994,10 @@ module "social_api" {
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
 
-  deletion_protection_enabled = false
-  tags                        = local.message_hub_tags
+  point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
+  deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
+  tags                           = local.message_hub_tags
 }
 
 module "web" {
@@ -1004,7 +1035,11 @@ module "message_router" {
   name_prefix             = local.message_router_prefix
   lambda_package_path     = data.archive_file.message_router.output_path
   lambda_source_code_hash = data.archive_file.message_router.output_base64sha256
+  agent_tokens_table_name = module.message_hub_storage.table_names.agent_tokens
+  agent_tokens_table_arn  = module.message_hub_storage.table_arns.agent_tokens
 
-  deletion_protection_enabled = false
-  tags                        = local.message_hub_tags
+  point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
+  deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
+  tags                           = local.message_hub_tags
 }

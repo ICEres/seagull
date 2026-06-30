@@ -11,7 +11,9 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
+from urllib.request import Request, urlopen
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -24,6 +26,8 @@ SAFETY_BLOCKED_TERMS = tuple(
     for term in os.environ.get("SAFETY_BLOCKED_TERMS", "unsafe:").split(",")
     if term.strip()
 )
+SAFETY_GATEWAY_URL = os.environ.get("SAFETY_GATEWAY_URL", "").strip().rstrip("/")
+SAFETY_GATEWAY_TIMEOUT_SECONDS = float(os.environ.get("SAFETY_GATEWAY_TIMEOUT_SECONDS", "5"))
 DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
@@ -148,14 +152,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "GET" and path.startswith("/agents/") and path.endswith("/inbox"):
             handle = path_param(path, "/agents/", "/inbox")
+            require_legacy_agent_access(event, handle, "agent:inbox")
             return read_inbox(handle, event)
 
         if method == "GET" and path.startswith("/agents/") and path.endswith("/outbox"):
             handle = path_param(path, "/agents/", "/outbox")
+            require_legacy_agent_access(event, handle, "agent:read")
             return read_outbox(handle, event)
 
         if method == "GET" and path.startswith("/agents/") and path.endswith("/sent"):
             handle = path_param(path, "/agents/", "/sent")
+            require_legacy_agent_access(event, handle, "agent:read")
             return read_sent_messages(handle, event)
 
         if method == "POST" and path == "/messages":
@@ -410,15 +417,7 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         if existing_message_id is not None:
             return response(200, send_result(existing_message_id, idempotent=True))
 
-    safety_status = local_safety_status(content_inline)
-    stored_content_inline, stored_content_ref = envelope_content_for_storage(
-        content_inline,
-        content_ref,
-        "message content",
-    )
-
     thread_id = optional_string(body, "thread_id")
-    now = now_iso()
     if thread_id:
         existing_thread = get_thread_record(thread_id)
         if existing_thread is None:
@@ -427,6 +426,27 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         thread_id = f"thread_{uuid.uuid4().hex}"
         existing_thread = None
 
+    safety_decision = evaluate_safety_gateway(
+        actor_id=sender["agent_id"],
+        action_type="message.send",
+        content=content_inline,
+        content_ref=content_ref,
+        target_ids=[agent["agent_id"] for agent in recipients],
+        intent=optional_string(body, "intent") or "message",
+        visibility=visibility,
+        thread_id=thread_id,
+        trace_id=optional_string(body, "trace_id"),
+        thread_depth=int(existing_thread.get("message_count", 0)) if existing_thread else 0,
+    )
+    safety_status, safety_needs_review = safety_outcome(safety_decision, subject="message")
+    needs_review = needs_review or safety_needs_review
+    stored_content_inline, stored_content_ref = envelope_content_for_storage(
+        content_inline,
+        content_ref,
+        "message content",
+    )
+
+    now = now_iso()
     message_id = f"message_{uuid.uuid4().hex}"
     recipient_agent_ids = [agent["agent_id"] for agent in recipients]
     message = {
@@ -441,6 +461,11 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         "refs": refs,
         "schema_version": "seagull.message.v1",
         "safety_status": safety_status,
+        "safety_action": safety_decision_action(safety_decision),
+        "safety_decision_id": safety_decision_id(safety_decision),
+        "safety_policy_ids": safety_decision_policy_ids(safety_decision),
+        "safety_reasons": safety_decision_reasons(safety_decision),
+        "safety_risk": safety_decision_risk(safety_decision),
         "created_at": now,
     }
     if recipient_agent_ids:
@@ -521,14 +546,17 @@ def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[
     agent_handle, parts = personal_agent_path_parts(path)
 
     if method == "GET" and parts == ["inbox"]:
+        require_legacy_agent_access(event, agent_handle, "agent:inbox")
         return read_inbox(agent_handle, event)
 
     if method == "POST" and parts == ["send"]:
+        require_legacy_agent_access(event, agent_handle, "agent:post")
         body = parse_body(event)
         body["sender_handle"] = agent_handle
         return create_message(event_with_json_body(body))
 
     if method == "POST" and len(parts) == 3 and parts[0] == "deliveries":
+        require_legacy_agent_access(event, agent_handle, "agent:post")
         delivery_id = unquote(parts[1])
         action = parts[2]
         body = parse_body(event)
@@ -544,16 +572,19 @@ def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[
         return submit_delivery_decision(delivery_id, event_with_json_body(body))
 
     if method == "POST" and parts == ["tasks"]:
+        require_legacy_agent_access(event, agent_handle, "agent:post")
         body = parse_body(event)
         body["requester_handle"] = agent_handle
         return create_task(event_with_json_body(body))
 
     if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "accept":
+        require_legacy_agent_access(event, agent_handle, "agent:post")
         body = parse_body(event)
         body["worker_handle"] = agent_handle
         return accept_task(unquote(parts[1]), event_with_json_body(body))
 
     if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "results":
+        require_legacy_agent_access(event, agent_handle, "agent:post")
         body = parse_body(event)
         body["responder_handle"] = agent_handle
         return return_task_result(unquote(parts[1]), event_with_json_body(body))
@@ -600,6 +631,18 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
     recipient = require_agent_by_handle(required(body, "recipient_handle"))
     objective = required(body, "objective")
     require_small_inline(objective, "objective")
+    task_safety_decision = evaluate_safety_gateway(
+        actor_id=requester["agent_id"],
+        action_type="task.request",
+        content=objective,
+        content_ref=optional_string(body, "input_ref"),
+        target_ids=[recipient["agent_id"]],
+        intent="task_request",
+        visibility="direct",
+        thread_id=optional_string(body, "thread_id"),
+        trace_id=optional_string(body, "trace_id"),
+    )
+    _, task_needs_review = safety_outcome(task_safety_decision, subject="task")
     idempotency_key = optional_string(body, "idempotency_key")
     if idempotency_key:
         existing_task_id = get_idempotent_task_id(requester["agent_id"], idempotency_key)
@@ -641,8 +684,12 @@ def create_task(event: dict[str, Any]) -> dict[str, Any]:
         "stream_id": optional_string(body, "stream_id"),
         "allowed_tool_names": string_list(body.get("allowed_tool_names", []), "allowed_tool_names"),
         "allowed_use_terms": string_list(body.get("allowed_use_terms", []), "allowed_use_terms"),
-        "state": "requested",
-        "policy_decision_id": "local_safety_allow",
+        "state": "needs_approval" if task_needs_review else "requested",
+        "policy_decision_id": safety_decision_id(task_safety_decision),
+        "safety_action": safety_decision_action(task_safety_decision),
+        "safety_policy_ids": safety_decision_policy_ids(task_safety_decision),
+        "safety_reasons": safety_decision_reasons(task_safety_decision),
+        "safety_risk": safety_decision_risk(task_safety_decision),
         "quote_ids": [],
         "escrow_ids": [],
         "capacity_policy_ids": [],
@@ -1503,12 +1550,113 @@ def send_result(message_id: str, *, idempotent: bool) -> dict[str, Any]:
     }
 
 
-def local_safety_status(content: str | None) -> str:
-    normalized_content = (content or "").lower()
-    blocked_terms = [term for term in SAFETY_BLOCKED_TERMS if term in normalized_content]
-    if blocked_terms:
-        raise Blocked(f"message blocked by local safety policy: {', '.join(blocked_terms)}")
-    return "approved"
+def evaluate_safety_gateway(
+    *,
+    actor_id: str,
+    action_type: str,
+    content: str | None,
+    content_ref: str | None,
+    target_ids: list[str],
+    intent: str,
+    visibility: str,
+    thread_id: str | None = None,
+    message_id: str | None = None,
+    trace_id: str | None = None,
+    thread_depth: int = 0,
+    repeated_reply_count: int = 0,
+) -> dict[str, Any]:
+    if not SAFETY_GATEWAY_URL:
+        raise Blocked("safety gateway is not configured")
+
+    payload = without_none(
+        {
+            "actor_id": actor_id,
+            "action_type": action_type,
+            "content": content,
+            "content_ref": content_ref,
+            "target_ids": target_ids,
+            "intent": intent,
+            "visibility": visibility,
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "trace_id": trace_id,
+            "thread_depth": thread_depth,
+            "repeated_reply_count": repeated_reply_count,
+        }
+    )
+    request = Request(
+        f"{SAFETY_GATEWAY_URL}/evaluate",
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=SAFETY_GATEWAY_TIMEOUT_SECONDS) as result:
+            status_code = int(result.status)
+            raw = result.read().decode("utf-8")
+    except HTTPError as exc:
+        raise Blocked(f"safety gateway rejected evaluation: HTTP {exc.code}") from exc
+    except (OSError, TimeoutError, URLError) as exc:
+        raise Blocked(f"safety gateway is unavailable: {exc}") from exc
+
+    if status_code < 200 or status_code >= 300:
+        raise Blocked(f"safety gateway rejected evaluation: HTTP {status_code}")
+
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise Blocked("safety gateway returned invalid JSON") from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("decision"), dict):
+        raise Blocked("safety gateway response is missing a decision")
+    return parsed["decision"]
+
+
+def safety_outcome(decision: dict[str, Any], *, subject: str) -> tuple[str, bool]:
+    action = safety_decision_action(decision)
+    if action == "allow":
+        return "approved", False
+    if action == "allow_with_warning":
+        return "approved_with_warning", False
+    if action == "human_review":
+        return "needs_review", True
+    if action in {"block", "quarantine", "rate_limit"}:
+        reasons = ", ".join(safety_decision_reasons(decision)) or action
+        raise Blocked(f"{subject} blocked by safety gateway: {reasons}")
+    raise Blocked(f"safety gateway returned unsupported action: {action}")
+
+
+def safety_decision_id(decision: dict[str, Any]) -> str:
+    value = decision.get("decision_id")
+    if not isinstance(value, str) or not value.strip():
+        raise Blocked("safety gateway decision is missing decision_id")
+    return value.strip()
+
+
+def safety_decision_action(decision: dict[str, Any]) -> str:
+    value = decision.get("action")
+    if not isinstance(value, str) or not value.strip():
+        raise Blocked("safety gateway decision is missing action")
+    return value.strip()
+
+
+def safety_decision_risk(decision: dict[str, Any]) -> str | None:
+    value = decision.get("risk")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def safety_decision_policy_ids(decision: dict[str, Any]) -> list[str]:
+    return clean_string_values(decision.get("policy_ids"))
+
+
+def safety_decision_reasons(decision: dict[str, Any]) -> list[str]:
+    return clean_string_values(decision.get("reasons"))
+
+
+def clean_string_values(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
 def delivery_items(deliveries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1668,6 +1816,13 @@ def require_legacy_handle_routes_enabled(event: dict[str, Any]) -> None:
         if provided and hmac.compare_digest(provided, LEGACY_HANDLE_ROUTE_SECRET):
             return
     raise Unauthorized("legacy handle-based message hub routes are disabled; use /agent runtime routes")
+
+
+def require_legacy_agent_access(event: dict[str, Any], handle: str, required_scope: str) -> None:
+    normalized_handle = normalize_handle(handle)
+    principal = require_agent_principal(event, required_scope)
+    if principal["agent_handle"] != normalized_handle:
+        raise Forbidden("agent token cannot access another agent's legacy route")
 
 
 def require_agent_principal(event: dict[str, Any], required_scope: str) -> dict[str, Any]:
@@ -1982,6 +2137,8 @@ def enqueue_delivery_events(
         raise RuntimeError("delivery and recipient counts differ")
 
     for delivery, recipient in zip(deliveries, recipients):
+        if delivery.get("status") != "delivered":
+            continue
         if recipient.get("trigger_mode", "manual") != "webhook":
             continue
 

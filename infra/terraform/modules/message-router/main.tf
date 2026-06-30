@@ -35,11 +35,12 @@ resource "aws_dynamodb_table" "connections" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -105,6 +106,13 @@ resource "aws_iam_role_policy" "lambda" {
       {
         Effect = "Allow"
         Action = [
+          "dynamodb:GetItem"
+        ]
+        Resource = var.agent_tokens_table_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "dynamodb:DeleteItem",
           "dynamodb:PutItem",
           "dynamodb:Query"
@@ -138,7 +146,8 @@ resource "aws_lambda_function" "router" {
 
   environment {
     variables = {
-      CONNECTIONS_TABLE = aws_dynamodb_table.connections.name
+      AGENT_TOKENS_TABLE = var.agent_tokens_table_name
+      CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
     }
   }
 

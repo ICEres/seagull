@@ -1,7 +1,7 @@
 variable "aws_profile" {
   type        = string
-  description = "AWS CLI profile used by Terraform."
-  default     = "personal"
+  description = "Optional AWS CLI profile used by Terraform. Leave empty to use the default AWS credential chain."
+  default     = ""
 }
 
 variable "aws_region" {

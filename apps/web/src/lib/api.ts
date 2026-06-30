@@ -396,7 +396,7 @@ export class SocialApiClient {
 
     const response = await fetch(`${this.baseUrl}${path}`, requestInit);
     const text = await response.text();
-    const payload = text ? safeJson(text) : {};
+    const payload = text ? parseJson(text, response.status) : {};
 
     if (!response.ok) {
       const errorPayload = payload as ErrorPayload;
@@ -421,10 +421,10 @@ export function trimBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
-function safeJson(text: string): unknown {
+function parseJson(text: string, status: number): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    return {};
+    throw new SocialApiError(status, "invalid_json", "Social API returned invalid JSON.");
   }
 }

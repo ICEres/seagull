@@ -2,16 +2,14 @@ import { describe, expect, it, beforeEach } from "vitest";
 
 import {
   authConfigFromRuntime,
+  beginHostedLogin,
   clearAuthSession,
-  confirmCognitoRegistration,
   completeHostedCallback,
   hostedAuthorizeUrl,
   hostedLogoutUrl,
   isSessionActive,
   loadAuthSession,
-  loginWithCognito,
   parseAuthCallbackUrl,
-  registerWithCognito,
   saveAuthSession,
   type AuthConfig,
 } from "./auth";
@@ -96,53 +94,14 @@ describe("auth helpers", () => {
     expect(loadAuthSession()).toBeNull();
   });
 
-  it("calls Cognito signup, confirmation, and login APIs for custom forms", async () => {
-    const targets: string[] = [];
-    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
-      targets.push(new Headers(init?.headers).get("x-amz-target") ?? "");
-      const body = JSON.parse(String(init?.body));
-      if (targets.at(-1) === "AWSCognitoIdentityProviderService.SignUp") {
-        expect(body.Username).toBe("alice@example.com");
-        expect(body.UserAttributes).toContainEqual({ Name: "name", Value: "Alice" });
-        return new Response(JSON.stringify({}), { status: 200 });
-      }
-      if (targets.at(-1) === "AWSCognitoIdentityProviderService.ConfirmSignUp") {
-        expect(body.ConfirmationCode).toBe("123456");
-        return new Response(JSON.stringify({}), { status: 200 });
-      }
-      expect(body.AuthFlow).toBe("USER_PASSWORD_AUTH");
-      return new Response(
-        JSON.stringify({
-          AuthenticationResult: {
-            AccessToken: "access_1",
-            IdToken: "id_1",
-            RefreshToken: "refresh_1",
-            TokenType: "Bearer",
-            ExpiresIn: 3600,
-          },
-        }),
-        { status: 200 },
-      );
-    };
+  it("starts Hosted UI login with a stored PKCE verifier", async () => {
+    const authorizationUrl = new URL(await beginHostedLogin(cognitoConfig));
+    const pending = JSON.parse(window.localStorage.getItem("seagull.web.auth.pending") ?? "{}");
 
-    await registerWithCognito(
-      cognitoConfig,
-      { email: "alice@example.com", password: "Password123", displayName: "Alice" },
-      fetcher,
-    );
-    await confirmCognitoRegistration(cognitoConfig, { email: "alice@example.com", code: "123456" }, fetcher);
-    const session = await loginWithCognito(
-      cognitoConfig,
-      { email: "alice@example.com", password: "Password123" },
-      fetcher,
-    );
-
-    expect(targets).toEqual([
-      "AWSCognitoIdentityProviderService.SignUp",
-      "AWSCognitoIdentityProviderService.ConfirmSignUp",
-      "AWSCognitoIdentityProviderService.InitiateAuth",
-    ]);
-    expect(session.accessToken).toBe("access_1");
-    expect(loadAuthSession()?.refreshToken).toBe("refresh_1");
+    expect(authorizationUrl.origin).toBe(`https://${cognitoConfig.hostedDomain}`);
+    expect(authorizationUrl.searchParams.get("response_type")).toBe("code");
+    expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorizationUrl.searchParams.get("state")).toBe(pending.state);
+    expect(pending.codeVerifier).toBeTruthy();
   });
 });

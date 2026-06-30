@@ -5,13 +5,10 @@ import { useMutation } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import {
-  confirmCognitoRegistration,
-  loginWithCognito,
-  registerWithCognito,
+  beginHostedLogin,
   type AuthConfig,
-  type AuthSession,
 } from "../lib/auth";
-import type { AgentProfile, HumanIdentity } from "../lib/social";
+import type { HumanIdentity } from "../lib/social";
 import type { Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;
@@ -71,13 +68,11 @@ function AuthPanel({
 }
 
 export function LoginPage({
-  apiUrl,
   api,
   authConfig,
   isAuthenticated,
   postAuthPath = "/dashboard",
   onLocalIdentity,
-  onCognitoIdentity,
   onNotice,
 }: {
   apiUrl: string;
@@ -86,13 +81,10 @@ export function LoginPage({
   isAuthenticated: boolean;
   postAuthPath?: string;
   onLocalIdentity: (identity: HumanIdentity) => void;
-  onCognitoIdentity: (session: AuthSession, identity: HumanIdentity, profiles: AgentProfile[]) => void;
   onNotice: (notice: Notice) => void;
 }) {
   const navigate = useNavigate();
   const [subject, setSubject] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
 
   const localLoginMutation = useMutation({
     mutationFn: async () => {
@@ -117,15 +109,10 @@ export function LoginPage({
       if (authConfig.mode !== "cognito") {
         throw new Error("Cognito auth is not configured.");
       }
-      const session = await loginWithCognito(authConfig, { email, password });
-      const authenticatedApi = new SocialApiClient(apiUrl, session.accessToken);
-      const identity = (await authenticatedApi.me()).identity;
-      const profiles = (await authenticatedApi.getProfiles()).items;
-      return { session, identity, profiles };
+      return beginHostedLogin(authConfig);
     },
-    onSuccess: ({ session, identity, profiles }) => {
-      onCognitoIdentity(session, identity, profiles);
-      navigate(postAuthPath);
+    onSuccess: (authorizationUrl) => {
+      window.location.assign(authorizationUrl);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -167,24 +154,14 @@ export function LoginPage({
   return (
     <AuthPanel title="Login" icon={<LogIn size={20} />}>
       <form
-        className="grid grid-cols-2 gap-3.5 px-[22px] pb-[22px] max-[620px]:grid-cols-1"
+        className="grid gap-3.5 px-[22px] pb-[22px]"
         onSubmit={(event) => {
           event.preventDefault();
-          if (email.trim() && password) {
-            cognitoLoginMutation.mutate();
-          }
+          cognitoLoginMutation.mutate();
         }}
       >
-        <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-          Email
-          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" />
-        </label>
-        <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-          Password
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
-        </label>
-        <div className="col-span-2 flex gap-2.5 max-[620px]:col-span-1 max-[620px]:grid max-[620px]:grid-cols-1">
-          <button className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]" type="submit" disabled={!email.trim() || !password || cognitoLoginMutation.isPending}>
+        <div className="flex gap-2.5 max-[620px]:grid max-[620px]:grid-cols-1">
+          <button className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]" type="submit" disabled={cognitoLoginMutation.isPending}>
             <LogIn size={16} />
             Login
           </button>
@@ -198,13 +175,11 @@ export function LoginPage({
 }
 
 export function RegisterPage({
-  apiUrl,
   api,
   authConfig,
   isAuthenticated,
   postAuthPath = "/dashboard",
   onLocalIdentity,
-  onCognitoIdentity,
   onNotice,
 }: {
   apiUrl: string;
@@ -213,16 +188,12 @@ export function RegisterPage({
   isAuthenticated: boolean;
   postAuthPath?: string;
   onLocalIdentity: (identity: HumanIdentity) => void;
-  onCognitoIdentity: (session: AuthSession, identity: HumanIdentity, profiles: AgentProfile[]) => void;
   onNotice: (notice: Notice) => void;
 }) {
   const navigate = useNavigate();
   const [subject, setSubject] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmationCode, setConfirmationCode] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
 
   const localRegisterMutation = useMutation({
     mutationFn: async () => {
@@ -249,30 +220,10 @@ export function RegisterPage({
       if (authConfig.mode !== "cognito") {
         throw new Error("Cognito auth is not configured.");
       }
-      await registerWithCognito(authConfig, { email, password, displayName });
+      return beginHostedLogin(authConfig);
     },
-    onSuccess: () => {
-      setAwaitingConfirmation(true);
-      onNotice({ tone: "ok", message: "Confirmation code sent." });
-    },
-    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
-  });
-
-  const cognitoConfirmMutation = useMutation({
-    mutationFn: async () => {
-      if (authConfig.mode !== "cognito") {
-        throw new Error("Cognito auth is not configured.");
-      }
-      await confirmCognitoRegistration(authConfig, { email, code: confirmationCode });
-      const session = await loginWithCognito(authConfig, { email, password });
-      const authenticatedApi = new SocialApiClient(apiUrl, session.accessToken);
-      const identity = (await authenticatedApi.me()).identity;
-      const profiles = (await authenticatedApi.getProfiles()).items;
-      return { session, identity, profiles };
-    },
-    onSuccess: ({ session, identity, profiles }) => {
-      onCognitoIdentity(session, identity, profiles);
-      navigate(postAuthPath);
+    onSuccess: (authorizationUrl) => {
+      window.location.assign(authorizationUrl);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -282,7 +233,7 @@ export function RegisterPage({
   }
 
   return (
-    <AuthPanel title={awaitingConfirmation ? "Confirm email" : "Register"} icon={<UserRound size={20} />}>
+    <AuthPanel title="Register" icon={<UserRound size={20} />}>
       {authConfig.mode === "local" ? (
         <form
           className="grid grid-cols-2 gap-3.5 px-[22px] pb-[22px] max-[620px]:grid-cols-1"
@@ -317,50 +268,20 @@ export function RegisterPage({
         </form>
       ) : (
         <form
-          className="grid grid-cols-2 gap-3.5 px-[22px] pb-[22px] max-[620px]:grid-cols-1"
+          className="grid gap-3.5 px-[22px] pb-[22px]"
           onSubmit={(event) => {
             event.preventDefault();
-            if (awaitingConfirmation) {
-              if (confirmationCode.trim()) {
-                cognitoConfirmMutation.mutate();
-              }
-              return;
-            }
-            if (email.trim() && password) {
-              cognitoRegisterMutation.mutate();
-            }
+            cognitoRegisterMutation.mutate();
           }}
         >
-          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-            Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" />
-          </label>
-          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-            Display name
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" />
-          </label>
-          <label className="col-span-2 grid gap-1.5 text-[0.82rem] font-black text-muted max-[620px]:col-span-1">
-            Password
-            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="new-password" />
-          </label>
-          {awaitingConfirmation ? (
-            <label className="col-span-2 grid gap-1.5 text-[0.82rem] font-black text-muted max-[620px]:col-span-1">
-              Confirmation code
-              <input value={confirmationCode} onChange={(event) => setConfirmationCode(event.target.value)} inputMode="numeric" />
-            </label>
-          ) : null}
-          <div className="col-span-2 flex gap-2.5 max-[620px]:col-span-1 max-[620px]:grid max-[620px]:grid-cols-1">
+          <div className="flex gap-2.5 max-[620px]:grid max-[620px]:grid-cols-1">
             <button
               className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
               type="submit"
-              disabled={
-                awaitingConfirmation
-                  ? !confirmationCode.trim() || cognitoConfirmMutation.isPending
-                  : !email.trim() || !password || cognitoRegisterMutation.isPending
-              }
+              disabled={cognitoRegisterMutation.isPending}
             >
-              {awaitingConfirmation ? <LogIn size={16} /> : <UserRound size={16} />}
-              {awaitingConfirmation ? "Confirm and login" : "Register"}
+              <UserRound size={16} />
+              Register
             </button>
             <button className="inline-flex min-h-10 min-w-28 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:min-w-0" type="button" onClick={() => navigate("/login")}>
               Login

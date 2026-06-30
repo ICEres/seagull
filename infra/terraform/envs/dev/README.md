@@ -51,7 +51,7 @@ make aws-dev-plan
 make aws-dev-apply
 ```
 
-The default profile is `personal` and the default region is `ap-southeast-2`.
+The default profile is empty, so Terraform uses the ambient AWS credential chain. The default region is `ap-southeast-2`.
 If `backend.hcl` exists beside this README, `make aws-dev-init` uses it for the
 S3 remote state backend. Otherwise local init uses `-backend=false` and keeps
 state on the local machine.

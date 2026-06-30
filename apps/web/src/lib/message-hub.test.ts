@@ -132,6 +132,25 @@ describe("message hub client", () => {
     ]);
   });
 
+  it("sends bearer auth when configured", async () => {
+    let authorization = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        authorization = new Headers(init?.headers).get("authorization") ?? "";
+        return new Response(JSON.stringify({ ok: true, app: "message-hub", storage: "dynamodb" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const client = new MessageHubClient("https://message.example.test", "message-token");
+    await client.health();
+
+    expect(authorization).toBe("Bearer message-token");
+  });
+
   it("raises typed API errors", async () => {
     vi.stubGlobal(
       "fetch",

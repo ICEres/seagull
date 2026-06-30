@@ -699,7 +699,7 @@ export function RoomPage({
 }) {
   const queryClient = useQueryClient();
   const params = useParams();
-  const room = params.slug === state.room?.slug ? state.room : state.room;
+  const room = state.room;
   const roomPosts = room ? posts.filter((post) => post.room_id === room.room_id) : [];
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");

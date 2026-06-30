@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
+import socket
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib import error, request
+from urllib.parse import urlsplit
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-message-hub-agent-worker")
 DELIVERIES_TABLE = os.environ.get("DELIVERIES_TABLE", "")
 MESSAGES_TABLE = os.environ.get("MESSAGES_TABLE", "")
 AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "")
-WEBHOOK_SIGNING_SECRET = os.environ.get("SEAGULL_WEBHOOK_SIGNING_SECRET", "dev-only-change-me")
+WEBHOOK_SIGNING_SECRET = os.environ.get("SEAGULL_WEBHOOK_SIGNING_SECRET", "")
+INSECURE_WEBHOOK_SIGNING_SECRET = "dev-only-change-me"
 
 _DYNAMODB = None
 
@@ -51,6 +55,7 @@ def handle_delivery_event(
     tables: Any,
     http_post: Any,
     signing_secret: str,
+    resolve_host: Callable[[str, int | None], list[str]] | None = None,
 ) -> None:
     data = event.get("data") or {}
     delivery_id = data.get("delivery_id")
@@ -81,6 +86,16 @@ def handle_delivery_event(
     if not isinstance(webhook_url, str) or not webhook_url:
         mark_delivery_failure(tables.deliveries, delivery_id, "recipient has no webhook_url")
         return
+    try:
+        validate_webhook_url(webhook_url, resolve_host=resolve_host)
+    except ValueError as exc:
+        mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
+        return
+    try:
+        signing_secret = require_webhook_signing_secret(signing_secret)
+    except ValueError as exc:
+        mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
+        return
 
     body = json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
     headers = {
@@ -105,6 +120,7 @@ def handle_delivery_event(
 
 
 def post_json(url: str, body: bytes, headers: dict[str, str]) -> int:
+    validate_webhook_url(url)
     req = request.Request(url, data=body, headers=headers, method="POST")
     try:
         with request.urlopen(req, timeout=5) as response:
@@ -150,8 +166,59 @@ def get_item(table: Any, key: dict[str, str]) -> dict[str, Any] | None:
 
 
 def sign_webhook_body(body: bytes, secret: str) -> str:
-    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    signing_secret = require_webhook_signing_secret(secret)
+    digest = hmac.new(signing_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
+
+
+def require_webhook_signing_secret(secret: str) -> str:
+    signing_secret = secret.strip()
+    if not signing_secret:
+        raise ValueError("webhook signing secret is not configured")
+    if hmac.compare_digest(signing_secret, INSECURE_WEBHOOK_SIGNING_SECRET):
+        raise ValueError("webhook signing secret uses the insecure development placeholder")
+    return signing_secret
+
+
+def validate_webhook_url(
+    url: str,
+    *,
+    resolve_host: Callable[[str, int | None], list[str]] | None = None,
+) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https":
+        raise ValueError("webhook_url must use https")
+    if parsed.username or parsed.password:
+        raise ValueError("webhook_url must not include credentials")
+    if not parsed.hostname:
+        raise ValueError("webhook_url host is required")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("webhook_url port is invalid") from exc
+
+    host = parsed.hostname
+    try:
+        addresses = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        resolver = resolve_host or resolve_host_ips
+        addresses = resolver(host, port)
+
+    if not addresses:
+        raise ValueError("webhook_url host did not resolve")
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("webhook_url host resolved to an invalid address") from exc
+        if not ip.is_global:
+            raise ValueError("webhook_url host resolves to a non-public address")
+
+
+def resolve_host_ips(host: str, port: int | None) -> list[str]:
+    service_port = port or 443
+    results = socket.getaddrinfo(host, service_port, type=socket.SOCK_STREAM)
+    return sorted({result[4][0] for result in results})
 
 
 def now_iso() -> str:

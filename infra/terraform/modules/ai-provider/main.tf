@@ -65,11 +65,12 @@ resource "aws_dynamodb_table" "runs" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -104,11 +105,12 @@ resource "aws_dynamodb_table" "run_events" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -167,11 +169,12 @@ resource "aws_dynamodb_table" "usage_ledger" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -206,11 +209,12 @@ resource "aws_dynamodb_table" "user_credit_ledger" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -228,11 +232,12 @@ resource "aws_dynamodb_table" "server_credit_ledger" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -250,11 +255,12 @@ resource "aws_dynamodb_table" "provider_configs" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -289,11 +295,12 @@ resource "aws_dynamodb_table" "admin_audit_events" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -328,11 +335,12 @@ resource "aws_dynamodb_table" "model_policies" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -367,11 +375,12 @@ resource "aws_dynamodb_table" "budget_limits" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -471,7 +480,7 @@ resource "aws_apigatewayv2_api" "http" {
   protocol_type = "HTTP"
 
   cors_configuration {
-    allow_headers = ["content-type", "x-seagull-admin-secret"]
+    allow_headers = ["authorization", "content-type", "x-seagull-admin-secret"]
     allow_methods = ["GET", "POST", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
@@ -487,9 +496,29 @@ resource "aws_apigatewayv2_integration" "lambda" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_authorizer" "jwt" {
+  api_id           = aws_apigatewayv2_api.http.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${var.name_prefix}-jwt"
+
+  jwt_configuration {
+    audience = var.jwt_audience
+    issuer   = var.jwt_issuer
+  }
+}
+
 resource "aws_apigatewayv2_route" "default" {
+  api_id             = aws_apigatewayv2_api.http.id
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
+  route_key          = "$default"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "health" {
   api_id    = aws_apigatewayv2_api.http.id
-  route_key = "$default"
+  route_key = "GET /health"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 

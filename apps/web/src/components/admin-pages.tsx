@@ -12,20 +12,20 @@ import {
 import { formatTimestamp, parseCommaList } from "../lib/state";
 import { EmptyState, StatusPill, type Notice } from "./shared";
 
-const ADMIN_SECRET_STORAGE_KEY = "seagull.web.ai_provider.admin_secret";
 const ADMIN_ACTOR_STORAGE_KEY = "seagull.web.ai_provider.admin_actor";
 
 type AdminError = Error | AiProviderApiError;
 
 export function AdminPage({
   aiProviderApiUrl,
+  authToken,
   onNotice,
 }: {
   aiProviderApiUrl: string;
+  authToken: string | null;
   onNotice: (notice: Notice) => void;
 }) {
   const queryClient = useQueryClient();
-  const [adminSecret, setAdminSecret] = useState(() => window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) ?? "");
   const [adminActorId, setAdminActorId] = useState(() => window.localStorage.getItem(ADMIN_ACTOR_STORAGE_KEY) ?? "server-owner");
   const [provider, setProvider] = useState("fake");
   const [enabled, setEnabled] = useState(true);
@@ -36,10 +36,10 @@ export function AdminPage({
   const [serverCreditAmount, setServerCreditAmount] = useState("10000");
   const [serverCreditReason, setServerCreditReason] = useState("server credit grant");
 
-  const adminReady = Boolean(adminSecret.trim());
+  const adminReady = Boolean(authToken?.trim());
   const aiProvider = useMemo(
-    () => new AiProviderClient(aiProviderApiUrl, adminSecret),
-    [aiProviderApiUrl, adminSecret],
+    () => new AiProviderClient(aiProviderApiUrl, authToken ?? ""),
+    [aiProviderApiUrl, authToken],
   );
 
   const healthQuery = useQuery({
@@ -48,28 +48,28 @@ export function AdminPage({
   });
 
   const providerConfigsQuery = useQuery({
-    queryKey: ["ai-provider-configs", aiProviderApiUrl, adminSecret],
+    queryKey: ["ai-provider-configs", aiProviderApiUrl, authToken],
     queryFn: () => aiProvider.listProviderConfigs(),
     enabled: adminReady,
     retry: false,
   });
 
   const serverBalanceQuery = useQuery({
-    queryKey: ["ai-provider-server-balance", aiProviderApiUrl, adminSecret],
+    queryKey: ["ai-provider-server-balance", aiProviderApiUrl, authToken],
     queryFn: () => aiProvider.getServerCreditBalance(),
     enabled: adminReady,
     retry: false,
   });
 
   const serverLedgerQuery = useQuery({
-    queryKey: ["ai-provider-server-ledger", aiProviderApiUrl, adminSecret],
+    queryKey: ["ai-provider-server-ledger", aiProviderApiUrl, authToken],
     queryFn: () => aiProvider.listServerCreditLedger(),
     enabled: adminReady,
     retry: false,
   });
 
   const auditQuery = useQuery({
-    queryKey: ["ai-provider-audit", aiProviderApiUrl, adminSecret],
+    queryKey: ["ai-provider-audit", aiProviderApiUrl, authToken],
     queryFn: () => aiProvider.listAdminAuditEvents(),
     enabled: adminReady,
     retry: false,
@@ -111,9 +111,8 @@ export function AdminPage({
 
   function saveAdminSession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    window.localStorage.setItem(ADMIN_SECRET_STORAGE_KEY, adminSecret.trim());
     window.localStorage.setItem(ADMIN_ACTOR_STORAGE_KEY, adminActorId.trim() || "server-owner");
-    onNotice({ tone: "ok", message: "Admin session saved." });
+    onNotice({ tone: "ok", message: "Admin actor saved." });
     void queryClient.invalidateQueries({ queryKey: ["ai-provider-configs"] });
     void queryClient.invalidateQueries({ queryKey: ["ai-provider-server-balance"] });
     void queryClient.invalidateQueries({ queryKey: ["ai-provider-server-ledger"] });
@@ -175,23 +174,13 @@ export function AdminPage({
               Admin actor
               <input value={adminActorId} onChange={(event) => setAdminActorId(event.target.value)} spellCheck={false} />
             </label>
-            <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-              Admin secret
-              <input
-                value={adminSecret}
-                type="password"
-                onChange={(event) => setAdminSecret(event.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </label>
             <button
               className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
               type="submit"
-              disabled={!adminSecret.trim() || !adminActorId.trim()}
+              disabled={!adminActorId.trim()}
             >
               <KeyRound size={16} />
-              Save session
+              Save actor
             </button>
           </form>
         </section>
@@ -221,7 +210,7 @@ export function AdminPage({
           </div>
 
           {!adminReady ? (
-            <EmptyState title="Admin locked" detail="Enter the server owner secret." />
+            <EmptyState title="Admin locked" detail="Sign in with a Cognito admin session." />
           ) : providerConfigsQuery.isFetching && configs.length === 0 ? (
             <EmptyState title="Loading providers" detail="Reading AI provider config." />
           ) : configs.length === 0 ? (
@@ -245,7 +234,7 @@ export function AdminPage({
               className="grid gap-3 p-[18px]"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (provider.trim() && adminActorId.trim() && adminSecret.trim()) {
+                if (provider.trim() && adminActorId.trim() && adminReady) {
                   saveProviderMutation.mutate();
                 }
               }}
@@ -282,7 +271,7 @@ export function AdminPage({
               <button
                 className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
                 type="submit"
-                disabled={!provider.trim() || !adminActorId.trim() || !adminSecret.trim() || saveProviderMutation.isPending}
+                disabled={!provider.trim() || !adminActorId.trim() || !adminReady || saveProviderMutation.isPending}
               >
                 <Save size={16} />
                 Save provider
@@ -299,7 +288,7 @@ export function AdminPage({
               className="grid gap-3 p-[18px]"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (Number.parseInt(serverCreditAmount, 10) > 0 && adminActorId.trim() && adminSecret.trim()) {
+                if (Number.parseInt(serverCreditAmount, 10) > 0 && adminActorId.trim() && adminReady) {
                   serverCreditMutation.mutate();
                 }
               }}
@@ -321,7 +310,7 @@ export function AdminPage({
               <button
                 className="inline-flex min-h-10 w-fit items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
                 type="submit"
-                disabled={!adminActorId.trim() || !adminSecret.trim() || Number.parseInt(serverCreditAmount, 10) <= 0 || serverCreditMutation.isPending}
+                disabled={!adminActorId.trim() || !adminReady || Number.parseInt(serverCreditAmount, 10) <= 0 || serverCreditMutation.isPending}
               >
                 <Wallet size={16} />
                 Grant server credits

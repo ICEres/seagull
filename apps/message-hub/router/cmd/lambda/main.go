@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +31,7 @@ type handler struct {
 	ddb              *dynamodb.Client
 	awsConfig        aws.Config
 	connectionsTable string
+	agentTokensTable string
 	now              func() time.Time
 }
 
@@ -36,6 +40,15 @@ type connectionRecord struct {
 	AgentID      string `dynamodbav:"agent_id"`
 	ConnectedAt  string `dynamodbav:"connected_at"`
 	ExpiresAt    int64  `dynamodbav:"expires_at"`
+}
+
+type agentTokenRecord struct {
+	TokenID   string   `dynamodbav:"token_id"`
+	TokenHash string   `dynamodbav:"token_hash"`
+	AgentID   string   `dynamodbav:"agent_id"`
+	Scopes    []string `dynamodbav:"scopes"`
+	RevokedAt string   `dynamodbav:"revoked_at"`
+	ExpiresAt string   `dynamodbav:"expires_at"`
 }
 
 type routeRequest struct {
@@ -58,11 +71,16 @@ func main() {
 	if tableName == "" {
 		panic("CONNECTIONS_TABLE is required")
 	}
+	agentTokensTable := os.Getenv("AGENT_TOKENS_TABLE")
+	if agentTokensTable == "" {
+		panic("AGENT_TOKENS_TABLE is required")
+	}
 
 	h := handler{
 		ddb:              dynamodb.NewFromConfig(cfg),
 		awsConfig:        cfg,
 		connectionsTable: tableName,
+		agentTokensTable: agentTokensTable,
 		now:              time.Now,
 	}
 	lambda.Start(h.handle)
@@ -85,15 +103,24 @@ func (h handler) handle(ctx context.Context, request events.APIGatewayWebsocketP
 }
 
 func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocketProxyRequest) (events.APIGatewayProxyResponse, error) {
-	agentID := firstNonEmpty(
+	tokenRecord, authResponse, err := h.requireAgentToken(ctx, request, "agent:inbox")
+	if err != nil {
+		return serverError(err)
+	}
+	if authResponse != nil {
+		return *authResponse, nil
+	}
+
+	agentID := strings.TrimSpace(tokenRecord.AgentID)
+	requestedAgentID := firstNonEmpty(
 		request.QueryStringParameters["agent_id"],
 		request.QueryStringParameters["agentId"],
 		request.QueryStringParameters["handle"],
 	)
-	if agentID == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]any{
-			"error":   "bad_request",
-			"message": "agent_id query parameter is required",
+	if requestedAgentID != "" && requestedAgentID != agentID {
+		return jsonResponse(http.StatusForbidden, map[string]any{
+			"error":   "forbidden",
+			"message": "agent_id does not match authenticated token",
 		})
 	}
 
@@ -130,6 +157,83 @@ func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocket
 		"connection_id": connectionID,
 		"agent_id":      agentID,
 	})
+}
+
+func (h handler) requireAgentToken(ctx context.Context, request events.APIGatewayWebsocketProxyRequest, requiredScope string) (agentTokenRecord, *events.APIGatewayProxyResponse, error) {
+	bearerToken, err := bearerTokenFromHeaders(request.Headers)
+	if err != nil {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": err.Error(),
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	tokenID, secret, err := parseAgentToken(bearerToken)
+	if err != nil {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": err.Error(),
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+
+	result, err := h.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(h.agentTokensTable),
+		Key: map[string]types.AttributeValue{
+			"token_id": &types.AttributeValueMemberS{Value: tokenID},
+		},
+	})
+	if err != nil {
+		return agentTokenRecord{}, nil, err
+	}
+	if result.Item == nil {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "agent token not found",
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+
+	var record agentTokenRecord
+	if err := attributevalue.UnmarshalMap(result.Item, &record); err != nil {
+		return agentTokenRecord{}, nil, err
+	}
+	if !tokenHashMatches(tokenID, secret, record.TokenHash) {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "agent token is invalid",
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	if strings.TrimSpace(record.RevokedAt) != "" {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "agent token is revoked",
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	if tokenExpired(record.ExpiresAt, h.now().UTC()) {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "agent token is expired",
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	if strings.TrimSpace(record.AgentID) == "" {
+		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "agent token agent_id is invalid",
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	if !hasScope(record.Scopes, requiredScope) {
+		response, responseErr := jsonResponse(http.StatusForbidden, map[string]any{
+			"error":   "forbidden",
+			"message": "missing agent token scope: " + requiredScope,
+		})
+		return agentTokenRecord{}, &response, responseErr
+	}
+	return record, nil, nil
 }
 
 func (h handler) disconnect(ctx context.Context, request events.APIGatewayWebsocketProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -220,6 +324,56 @@ func validateRoute(route routeRequest) error {
 		return errors.New("sender_agent_id is required")
 	}
 	return nil
+}
+
+func bearerTokenFromHeaders(headers map[string]string) (string, error) {
+	authorization := firstNonEmpty(headers["authorization"], headers["Authorization"])
+	if authorization == "" {
+		return "", errors.New("missing authorization header")
+	}
+	parts := strings.SplitN(strings.TrimSpace(authorization), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") || strings.TrimSpace(parts[1]) == "" {
+		return "", errors.New("authorization header must be bearer token")
+	}
+	return strings.TrimSpace(parts[1]), nil
+}
+
+func parseAgentToken(token string) (string, string, error) {
+	parts := strings.SplitN(token, "_", 3)
+	if len(parts) != 3 || parts[0] != "sga" || parts[1] == "" || parts[2] == "" {
+		return "", "", errors.New("agent token has invalid format")
+	}
+	return parts[1], parts[2], nil
+}
+
+func tokenHashMatches(tokenID string, secret string, expectedHash string) bool {
+	actualHash := hashTokenParts(tokenID, secret)
+	return subtle.ConstantTimeCompare([]byte(actualHash), []byte(expectedHash)) == 1
+}
+
+func hashTokenParts(tokenID string, secret string) string {
+	sum := sha256.Sum256([]byte(tokenID + "." + secret))
+	return hex.EncodeToString(sum[:])
+}
+
+func hasScope(scopes []string, requiredScope string) bool {
+	for _, scope := range scopes {
+		if strings.EqualFold(strings.TrimSpace(scope), requiredScope) {
+			return true
+		}
+	}
+	return false
+}
+
+func tokenExpired(expiresAt string, now time.Time) bool {
+	if strings.TrimSpace(expiresAt) == "" {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return true
+	}
+	return !parsed.After(now)
 }
 
 func (h handler) connectionIDsForAgent(ctx context.Context, agentID string) ([]string, error) {

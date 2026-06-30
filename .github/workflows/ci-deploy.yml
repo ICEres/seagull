@@ -41,10 +41,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.13"
 
@@ -64,10 +64,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
 
@@ -88,7 +88,7 @@ jobs:
         run: make web-build
 
       - name: Upload web artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: web-dist
           path: apps/web/dist
@@ -101,10 +101,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: apps/message-hub/router/go.mod
           cache-dependency-path: apps/message-hub/router/go.sum
@@ -116,7 +116,7 @@ jobs:
         run: make message-router-build
 
       - name: Upload router artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: message-router-bootstrap
           path: infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
@@ -129,7 +129,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Build Lambda packages
         run: |
@@ -139,7 +139,7 @@ jobs:
           make mcp-connector-build
 
       - name: Upload Lambda package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: lambda-packages
           path: |
@@ -156,10 +156,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
         with:
           terraform_version: "1.15.6"
 
@@ -194,24 +194,22 @@ jobs:
           require TF_BACKEND_BUCKET
           require TF_BACKEND_DYNAMODB_TABLE
           require TF_VAR_agent_webhook_signing_secret
-          require TF_VAR_ai_provider_admin_secret
-          require TF_VAR_mcp_connector_admin_secret
 
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Download Lambda package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: lambda-packages
           path: infra/terraform/envs/dev/.terraform/build
 
       - name: Download router artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: message-router-bootstrap
           path: infra/terraform/envs/dev/.terraform/build/message-router
@@ -220,29 +218,29 @@ jobs:
         run: chmod +x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
 
       - name: Download web artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: web-dist
           path: apps/web/dist
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.13"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
         with:
           terraform_version: "1.15.6"
 
@@ -292,8 +290,9 @@ jobs:
             --password "$PASSWORD" \
             --permanent
 
-          TOKEN_JSON="$(aws cognito-idp initiate-auth \
-            --auth-flow USER_PASSWORD_AUTH \
+          TOKEN_JSON="$(aws cognito-idp admin-initiate-auth \
+            --user-pool-id "$USER_POOL_ID" \
+            --auth-flow ADMIN_USER_PASSWORD_AUTH \
             --client-id "$CLIENT_ID" \
             --auth-parameters USERNAME="$USERNAME",PASSWORD="$PASSWORD")"
           ID_TOKEN="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["AuthenticationResult"]["IdToken"])' <<<"$TOKEN_JSON")"

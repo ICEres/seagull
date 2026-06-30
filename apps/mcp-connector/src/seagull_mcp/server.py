@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 from typing import Any
 
@@ -249,7 +250,7 @@ class McpConnectorApp:
         if not self._admin_secret:
             raise TokenVerificationError("connector token admin API is disabled")
         provided = headers.get("x-seagull-admin-secret")
-        if provided != self._admin_secret:
+        if not isinstance(provided, str) or not hmac.compare_digest(provided, self._admin_secret):
             raise TokenVerificationError("invalid connector token admin secret")
 
     def _auth_headers(self) -> dict[str, str]:

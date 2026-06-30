@@ -91,6 +91,7 @@ def audit_record_to_dict(record: SafetyAuditRecord) -> dict[str, Any]:
         "audit_id": record.audit_id,
         "decision_id": record.decision_id,
         "actor_id": record.actor_id,
+        "action_type": record.action_type,
         "action": record.action.value,
         "risk": record.risk.value,
         "review_state": record.review_state.value,

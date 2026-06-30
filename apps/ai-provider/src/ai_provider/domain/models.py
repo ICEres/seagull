@@ -111,6 +111,7 @@ class AiRun:
     budget_reason: str | None = None
     credit_reason: str | None = None
     trace_id: str | None = None
+    idempotency_key: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 

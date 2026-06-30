@@ -47,6 +47,7 @@ class SafetyAuditRecord:
     audit_id: str
     decision_id: str
     actor_id: str
+    action_type: str
     action: SafetyAction
     risk: RiskLabel
     target_ids: tuple[str, ...] = ()

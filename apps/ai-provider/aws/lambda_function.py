@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import os
 from typing import Any
@@ -26,6 +27,11 @@ from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
 ADMIN_SECRET = os.environ.get("AI_PROVIDER_ADMIN_SECRET", "")
+ADMIN_GROUPS = tuple(
+    group.strip().casefold()
+    for group in os.environ.get("AI_PROVIDER_ADMIN_GROUPS", "seagull-admin,server-owner,admin").split(",")
+    if group.strip()
+)
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -64,11 +70,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "POST" and path == "/ai-runs":
             body = parse_body(event)
+            owner_user_id = required_string(body, "owner_user_id")
+            require_owner_or_admin(event, owner_user_id)
             run = service.create_run(
                 provider=required_string(body, "provider"),
                 model=required_string(body, "model"),
                 actor_agent_id=required_string(body, "actor_agent_id"),
-                owner_user_id=required_string(body, "owner_user_id"),
+                owner_user_id=owner_user_id,
                 input_messages=provider_messages(body.get("input_messages", ())),
                 system_instructions=optional_string(body, "system_instructions"),
                 system_instructions_ref=optional_string(body, "system_instructions_ref"),
@@ -86,7 +94,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return response(200, {"run": run_to_dict(run)})
 
         if method == "GET" and path.startswith("/ai-runs/") and path.endswith("/events"):
+            require_authenticated_request(event)
             run_id = path_param(path, "/ai-runs/", "/events")
+            run = service.get_run(run_id)
+            require_owner_or_admin(event, run.owner_user_id)
             return response(
                 200,
                 {
@@ -96,11 +107,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
 
         if method == "GET" and path.startswith("/ai-runs/"):
+            require_authenticated_request(event)
             run_id = unquote(path.removeprefix("/ai-runs/").strip("/"))
-            return response(200, {"run": run_to_dict(service.get_run(run_id))})
+            run = service.get_run(run_id)
+            require_owner_or_admin(event, run.owner_user_id)
+            return response(200, {"run": run_to_dict(run)})
 
         if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-usage"):
             owner_user_id = path_param(path, "/owners/", "/ai-usage")
+            require_owner_or_admin(event, owner_user_id)
             return response(
                 200,
                 {
@@ -110,6 +125,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
 
         if method == "GET" and path.startswith("/agents/") and path.endswith("/ai-usage"):
+            require_admin(event)
             agent_id = path_param(path, "/agents/", "/ai-usage")
             return response(
                 200,
@@ -154,10 +170,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-credits/balance"):
             owner_user_id = path_param(path, "/owners/", "/ai-credits/balance")
+            require_owner_or_admin(event, owner_user_id)
             return response(200, {"balance": user_credit_balance_to_dict(service.get_user_credit_balance(owner_user_id))})
 
         if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-credits/ledger"):
             owner_user_id = path_param(path, "/owners/", "/ai-credits/ledger")
+            require_owner_or_admin(event, owner_user_id)
             return response(
                 200,
                 {
@@ -250,7 +268,7 @@ def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
         "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-headers": "content-type,x-seagull-admin-secret",
+            "access-control-allow-headers": "authorization,content-type,x-seagull-admin-secret",
             "access-control-allow-methods": "GET,POST,OPTIONS",
         },
         "body": json.dumps(body, separators=(",", ":"), default=str),
@@ -262,11 +280,83 @@ def cors_response() -> dict[str, Any]:
 
 
 def require_admin(event: dict[str, Any]) -> None:
+    if admin_claims(jwt_claims(event)):
+        return
     if not ADMIN_SECRET:
         raise Unauthorized("admin API is not configured")
-    headers = {key.lower(): value for key, value in (event.get("headers") or {}).items()}
-    if headers.get("x-seagull-admin-secret") != ADMIN_SECRET:
+    if not is_admin_request(event):
         raise Unauthorized("admin secret is required")
+
+
+def is_admin_request(event: dict[str, Any]) -> bool:
+    if not ADMIN_SECRET:
+        return False
+    headers = {key.lower(): value for key, value in (event.get("headers") or {}).items()}
+    provided = headers.get("x-seagull-admin-secret")
+    return isinstance(provided, str) and hmac.compare_digest(provided, ADMIN_SECRET)
+
+
+def require_authenticated_request(event: dict[str, Any]) -> None:
+    if is_admin_request(event):
+        return
+    if not jwt_claims(event):
+        raise Unauthorized("authentication is required")
+
+
+def require_owner_or_admin(event: dict[str, Any], owner_user_id: str) -> None:
+    if is_admin_request(event):
+        return
+    claims = jwt_claims(event)
+    if not claims:
+        raise Unauthorized("authentication is required")
+    claim_owner_user_id = owner_user_id_from_claims(claims)
+    if claim_owner_user_id is None:
+        raise Unauthorized("authenticated token is missing owner_user_id claim")
+    if not hmac.compare_digest(claim_owner_user_id, owner_user_id):
+        raise Unauthorized("owner_user_id does not match authenticated user")
+
+
+def owner_user_id_from_claims(claims: dict[str, Any]) -> str | None:
+    for name in ("custom:seagull_user_id", "custom:owner_user_id", "seagull_user_id", "owner_user_id"):
+        value = optional_claim(claims, name)
+        if value is not None:
+            return value
+    return optional_claim(claims, "sub")
+
+
+def jwt_claims(event: dict[str, Any]) -> dict[str, Any] | None:
+    authorizer = event.get("requestContext", {}).get("authorizer", {})
+    jwt = authorizer.get("jwt", {}) if isinstance(authorizer, dict) else {}
+    claims = jwt.get("claims", {}) if isinstance(jwt, dict) else {}
+    return claims if isinstance(claims, dict) else None
+
+
+def optional_claim(claims: dict[str, Any], name: str) -> str | None:
+    value = claims.get(name)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def admin_claims(claims: dict[str, Any] | None) -> bool:
+    if not claims:
+        return False
+    admin_flag = optional_claim(claims, "custom:seagull_admin") or optional_claim(claims, "seagull_admin")
+    if admin_flag is not None and admin_flag.casefold() in {"1", "true", "yes"}:
+        return True
+    groups = claim_values(claims.get("cognito:groups"))
+    roles = claim_values(claims.get("custom:role")) + claim_values(claims.get("role"))
+    allowed = set(ADMIN_GROUPS)
+    return any(value.casefold() in allowed for value in groups + roles)
+
+
+def claim_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [part.strip() for part in value.replace(",", " ").split() if part.strip()]
+    if isinstance(value, list):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return []
 
 
 def provider_messages(value: Any) -> tuple[dict[str, str], ...]:

@@ -34,7 +34,8 @@ resource "aws_dynamodb_table" "agents" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -73,7 +74,8 @@ resource "aws_dynamodb_table" "agent_tokens" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -124,7 +126,8 @@ resource "aws_dynamodb_table" "messages" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -146,7 +149,8 @@ resource "aws_dynamodb_table" "threads" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -209,7 +213,8 @@ resource "aws_dynamodb_table" "deliveries" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -231,7 +236,8 @@ resource "aws_dynamodb_table" "routing_rules" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -264,7 +270,8 @@ resource "aws_dynamodb_table" "idempotency_keys" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -292,7 +299,8 @@ resource "aws_dynamodb_table" "thread_summaries" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -355,7 +363,8 @@ resource "aws_dynamodb_table" "tasks" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -394,7 +403,8 @@ resource "aws_dynamodb_table" "tool_requests" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -433,7 +443,8 @@ resource "aws_dynamodb_table" "task_results" {
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags

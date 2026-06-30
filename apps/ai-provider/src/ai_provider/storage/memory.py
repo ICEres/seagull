@@ -31,6 +31,12 @@ class InMemoryAiProviderRepository:
     def put_run(self, run: AiRun) -> None:
         self._runs[run.run_id] = run
 
+    def put_run_if_absent(self, run: AiRun) -> bool:
+        if run.run_id in self._runs:
+            return False
+        self._runs[run.run_id] = run
+        return True
+
     def get_run(self, run_id: str) -> AiRun | None:
         return self._runs.get(run_id)
 

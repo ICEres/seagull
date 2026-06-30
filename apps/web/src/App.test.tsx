@@ -334,17 +334,99 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("Apply hook");
   });
 
+  it("completes Cognito Hosted UI callbacks without direct password auth APIs", async () => {
+    window.SEAGULL_CONFIG = {
+      socialApiUrl: "https://api.example.test",
+      auth: {
+        mode: "cognito",
+        issuer: "https://cognito-idp.example.test/pool",
+        hostedDomain: "seagull.auth.example.test",
+        clientId: "client_1",
+        redirectUri: "https://app.example.test/auth/callback",
+        logoutUri: "https://app.example.test/register",
+      },
+    };
+    window.localStorage.setItem(
+      "seagull.web.auth.pending",
+      JSON.stringify({ state: "state_1", codeVerifier: "verifier_1", createdAt: 1 }),
+    );
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+      "/dashboard": {
+        identity,
+        profiles: { items: [profile] },
+        feed: { items: [post] },
+        notifications: { unread_count: 0, items: [] },
+        moderation: { count: 0, items: [] },
+        health: { ok: true, app: "social-api", storage: "memory" },
+      },
+      "/profiles": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [post] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "https://seagull.auth.example.test/oauth2/token": {
+        access_token: "access_1",
+        id_token: "id_1",
+        token_type: "Bearer",
+        expires_in: 3600,
+      },
+    });
+
+    const container = renderApp("/auth/callback?code=code_1&state=state_1");
+    await waitForText(container, "Recent social activity");
+
+    const session = JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}");
+    expect(session.accessToken).toBe("access_1");
+
+    const fetchMock = vi.mocked(fetch);
+    const tokenCall = fetchMock.mock.calls.find(([input]) => String(input) === "https://seagull.auth.example.test/oauth2/token");
+    expect(String(tokenCall?.[1]?.body)).toContain("code_verifier=verifier_1");
+    expect(
+      fetchMock.mock.calls.some(([, init]) => {
+        const target = new Headers(init?.headers).get("x-amz-target") ?? "";
+        return target.includes("SignUp") || target.includes("ConfirmSignUp") || target.includes("InitiateAuth");
+      }),
+    ).toBe(false);
+  });
+
   it("renders AI provider admin config", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       messageApiUrl: "https://message.example.test",
       aiProviderApiUrl: "https://ai.example.test",
-      auth: { mode: "local" },
+      auth: {
+        mode: "cognito",
+        issuer: "https://cognito-idp.example.test/pool",
+        hostedDomain: "seagull.auth.example.test",
+        clientId: "client_1",
+        redirectUri: "https://app.example.test/auth/callback",
+        logoutUri: "https://app.example.test/register",
+      },
     };
-    window.localStorage.setItem("seagull.web.ai_provider.admin_secret", "admin-secret");
+    window.localStorage.setItem(
+      "seagull.web.auth.session",
+      JSON.stringify({
+        accessToken: "admin-access-token",
+        idToken: null,
+        refreshToken: null,
+        tokenType: "Bearer",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
     saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
     mockApi({
       "/health": { ok: true, app: "api", storage: "memory" },
+      "/dashboard": {
+        identity,
+        profiles: { items: [profile] },
+        feed: { items: [] },
+        notifications: { unread_count: 0, items: [] },
+        moderation: { count: 0, items: [] },
+        health: { ok: true, app: "api", storage: "memory" },
+      },
+      "/profiles": { items: [profile] },
       "/profiles?owner_user_id=user_1": { items: [profile] },
       "/feed?owner_user_id=user_1&limit=50": { items: [] },
       "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
@@ -406,6 +488,12 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("fake-small");
     expect(container.textContent).toContain("12000");
     expect(container.textContent).toContain("ai.provider_config_update");
+
+    const fetchMock = vi.mocked(fetch);
+    const providerCall = fetchMock.mock.calls.find(([input]) => String(input) === "https://ai.example.test/admin/ai-providers");
+    const headers = new Headers(providerCall?.[1]?.headers);
+    expect(headers.get("authorization")).toBe("Bearer admin-access-token");
+    expect(headers.get("x-seagull-admin-secret")).toBeNull();
   });
 });
 
@@ -459,7 +547,7 @@ function saveLoopState(partial: Record<string, unknown>): void {
 function mockApi(responses: Record<string, unknown>): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = new URL(String(input));
       const key = `${url.pathname}${url.search}`;
       const fullKey = `${url.origin}${url.pathname}${url.search}`;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from safety_gateway.domain.models import SafetyAuditRecord
@@ -16,3 +17,12 @@ class SafetyAuditRepository(Protocol):
         limit: int = 50,
     ) -> tuple[SafetyAuditRecord, ...]:
         """Return recent audit records, newest first."""
+
+    def count_recent(
+        self,
+        *,
+        actor_id: str,
+        action_type: str,
+        since: datetime,
+    ) -> int:
+        """Return count of recent evaluations for an actor/action pair."""

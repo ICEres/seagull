@@ -49,6 +49,19 @@ class DynamoDbAiProviderRepository:
     def put_run(self, run: AiRun) -> None:
         self._runs_table.put_item(Item=run_to_item(run))
 
+    def put_run_if_absent(self, run: AiRun) -> bool:
+        try:
+            self._runs_table.put_item(
+                Item=run_to_item(run),
+                ConditionExpression="attribute_not_exists(run_id)",
+            )
+        except Exception as exc:
+            error = getattr(exc, "response", {}).get("Error", {}) if hasattr(exc, "response") else {}
+            if error.get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+        return True
+
     def get_run(self, run_id: str) -> AiRun | None:
         item = self._runs_table.get_item(Key={"run_id": run_id}).get("Item")
         return None if item is None else item_to_run(item)
@@ -183,6 +196,7 @@ def run_to_item(run: AiRun) -> dict[str, Any]:
             "budget_reason": run.budget_reason,
             "credit_reason": run.credit_reason,
             "trace_id": run.trace_id,
+            "idempotency_key": run.idempotency_key,
             "created_at": run.created_at.isoformat(),
             "updated_at": run.updated_at.isoformat(),
         }
@@ -210,6 +224,7 @@ def item_to_run(item: dict[str, Any]) -> AiRun:
         budget_reason=item.get("budget_reason"),
         credit_reason=item.get("credit_reason"),
         trace_id=item.get("trace_id"),
+        idempotency_key=item.get("idempotency_key"),
         created_at=datetime.fromisoformat(item["created_at"]),
         updated_at=datetime.fromisoformat(item["updated_at"]),
     )

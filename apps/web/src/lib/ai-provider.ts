@@ -66,11 +66,11 @@ export class AiProviderApiError extends Error {
 
 export class AiProviderClient {
   readonly baseUrl: string;
-  readonly adminSecret: string;
+  readonly authToken: string;
 
-  constructor(baseUrl: string, adminSecret = "") {
+  constructor(baseUrl: string, authToken = "") {
     this.baseUrl = trimBaseUrl(baseUrl);
-    this.adminSecret = adminSecret.trim();
+    this.authToken = authToken.trim();
   }
 
   health(): Promise<AiProviderHealth> {
@@ -133,13 +133,13 @@ export class AiProviderClient {
       headers.set("content-type", "application/json");
       requestInit.body = JSON.stringify(body);
     }
-    if (this.adminSecret) {
-      headers.set("x-seagull-admin-secret", this.adminSecret);
+    if (this.authToken) {
+      headers.set("authorization", `Bearer ${this.authToken}`);
     }
 
     const response = await fetch(`${this.baseUrl}${path}`, requestInit);
     const text = await response.text();
-    const payload = text ? safeJson(text) : {};
+    const payload = text ? parseJson(text, response.status) : {};
 
     if (!response.ok) {
       const errorPayload = payload as ErrorPayload;
@@ -164,10 +164,10 @@ export function trimBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
-function safeJson(text: string): unknown {
+function parseJson(text: string, status: number): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    return {};
+    throw new AiProviderApiError(status, "invalid_json", "AI provider returned invalid JSON.");
   }
 }

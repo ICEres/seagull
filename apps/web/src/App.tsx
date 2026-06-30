@@ -7,6 +7,7 @@ import {
   Home,
   Inbox,
   LayoutDashboard,
+  LogIn,
   LogOut,
   MessageCircle,
   MessagesSquare,
@@ -18,7 +19,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
@@ -44,9 +45,11 @@ import { SocialApiClient, SocialApiError, trimBaseUrl } from "./lib/api";
 import { configuredAiProviderApiUrl } from "./lib/ai-provider";
 import {
   clearAuthSession,
+  completeHostedCallback,
   configuredAuth,
   isSessionActive,
   loadAuthSession,
+  type AuthConfig,
   type AuthSession,
 } from "./lib/auth";
 import { createFirstLoop } from "./lib/demo";
@@ -68,6 +71,63 @@ import {
 } from "./lib/state";
 
 type AppMutationError = Error | SocialApiError;
+
+function AuthCallbackPage({
+  authConfig,
+  postAuthPath,
+  onSession,
+  onNotice,
+}: {
+  authConfig: AuthConfig;
+  postAuthPath: string;
+  onSession: (session: AuthSession) => void;
+  onNotice: (notice: Notice) => void;
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (authConfig.mode !== "cognito") {
+      onNotice({ tone: "error", message: "Cognito auth is not configured." });
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    const callbackUrl = `${window.location.origin}${location.pathname}${location.search}`;
+    let cancelled = false;
+
+    void completeHostedCallback(authConfig, callbackUrl)
+      .then((session) => {
+        if (cancelled) {
+          return;
+        }
+        onSession(session);
+        onNotice({ tone: "ok", message: "Signed in." });
+        navigate(postAuthPath, { replace: true });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        clearAuthSession();
+        onNotice({ tone: "error", message: error instanceof Error ? error.message : "Sign in failed." });
+        navigate("/login", { replace: true });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authConfig, location.pathname, location.search, navigate, onNotice, onSession, postAuthPath]);
+
+  return (
+    <section className="grid min-h-40 place-items-center rounded-lg border border-line bg-surface px-[22px] py-8 shadow-panel">
+      <div className="inline-flex items-center gap-2 font-extrabold text-ink">
+        <LogIn size={18} />
+        Signing in
+      </div>
+    </section>
+  );
+}
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -102,7 +162,10 @@ export default function App() {
     () => new SocialApiClient(state.apiUrl, activeAuthSession?.accessToken ?? null),
     [state.apiUrl, activeAuthSession?.accessToken],
   );
-  const messageApi = useMemo(() => new MessageHubClient(messageApiUrl), [messageApiUrl]);
+  const messageApi = useMemo(
+    () => new MessageHubClient(messageApiUrl, activeAuthSession?.accessToken ?? null),
+    [messageApiUrl, activeAuthSession?.accessToken],
+  );
 
   const healthQuery = useQuery({
     queryKey: ["social-health", state.apiUrl],
@@ -329,11 +392,6 @@ export default function App() {
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
-                onCognitoIdentity={(session, identity, ownedProfiles) => {
-                  setAuthSession(session);
-                  rememberUser(identity, ownedProfiles);
-                  setNotice({ tone: "ok", message: "Signed in." });
-                }}
                 onNotice={setNotice}
               />
             }
@@ -348,11 +406,17 @@ export default function App() {
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
-                onCognitoIdentity={(session, identity, ownedProfiles) => {
-                  setAuthSession(session);
-                  rememberUser(identity, ownedProfiles);
-                  setNotice({ tone: "ok", message: "Registered and signed in." });
-                }}
+                onNotice={setNotice}
+              />
+            }
+          />
+          <Route
+            path="/auth/callback"
+            element={
+              <AuthCallbackPage
+                authConfig={authConfig}
+                postAuthPath={defaultAuthenticatedPath}
+                onSession={setAuthSession}
                 onNotice={setNotice}
               />
             }
@@ -499,11 +563,6 @@ export default function App() {
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
-                onCognitoIdentity={(session, identity, ownedProfiles) => {
-                  setAuthSession(session);
-                  rememberUser(identity, ownedProfiles);
-                  setNotice({ tone: "ok", message: "Signed in." });
-                }}
                 onNotice={setNotice}
               />
             }
@@ -518,18 +577,13 @@ export default function App() {
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
                 onLocalIdentity={(identity) => rememberUser(identity)}
-                onCognitoIdentity={(session, identity, ownedProfiles) => {
-                  setAuthSession(session);
-                  rememberUser(identity, ownedProfiles);
-                  setNotice({ tone: "ok", message: "Registered and signed in." });
-                }}
                 onNotice={setNotice}
               />
             }
           />
           <Route
             path="/auth/callback"
-            element={<Navigate to="/login" replace />}
+            element={<Navigate to={defaultAuthenticatedPath} replace />}
           />
           <Route
             path="/dashboard"
@@ -545,6 +599,8 @@ export default function App() {
                   moderationRecords={dashboardModerationRecords}
                   notificationCount={dashboardNotificationCount}
                   moderationCount={dashboardModerationCount}
+                  apiHealth={healthQuery.data}
+                  apiHealthLoading={healthQuery.isLoading}
                   profilesLoading={profilesQuery.isFetching || dashboardQuery.isFetching}
                   setState={setState}
                   onNotice={setNotice}
@@ -688,7 +744,11 @@ export default function App() {
             path="/admin"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <AdminPage aiProviderApiUrl={aiProviderApiUrl} onNotice={setNotice} />
+                <AdminPage
+                  aiProviderApiUrl={aiProviderApiUrl}
+                  authToken={activeAuthSession?.accessToken ?? null}
+                  onNotice={setNotice}
+                />
               </ProtectedRoute>
             }
           />

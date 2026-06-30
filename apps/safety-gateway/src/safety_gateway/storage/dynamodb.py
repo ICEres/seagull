@@ -36,6 +36,17 @@ class DynamoDbSafetyAuditRepository:
 
         return tuple(item_to_audit_record(item) for item in items[:limit])
 
+    def count_recent(self, *, actor_id: str, action_type: str, since: datetime) -> int:
+        result = self._table.query(
+            IndexName="actor-created-at-index",
+            KeyConditionExpression=Key("actor_id").eq(actor_id) & Key("created_at").gte(since.isoformat()),
+        )
+        return sum(
+            1
+            for item in result.get("Items", [])
+            if item.get("action_type", "message.send") == action_type
+        )
+
 
 def audit_record_to_item(record: SafetyAuditRecord) -> dict[str, Any]:
     return without_none(
@@ -43,6 +54,7 @@ def audit_record_to_item(record: SafetyAuditRecord) -> dict[str, Any]:
             "audit_id": record.audit_id,
             "decision_id": record.decision_id,
             "actor_id": record.actor_id,
+            "action_type": record.action_type,
             "action": record.action.value,
             "risk": record.risk.value,
             "target_ids": list(record.target_ids),
@@ -63,6 +75,7 @@ def item_to_audit_record(item: dict[str, Any]) -> SafetyAuditRecord:
         audit_id=item["audit_id"],
         decision_id=item["decision_id"],
         actor_id=item["actor_id"],
+        action_type=item.get("action_type", "message.send"),
         action=SafetyAction(item["action"]),
         risk=RiskLabel(item["risk"]),
         target_ids=tuple(item.get("target_ids", [])),

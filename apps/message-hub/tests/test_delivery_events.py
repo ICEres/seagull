@@ -220,6 +220,7 @@ class AgentWorkerTest(TestCase):
                 tables=tables,
                 http_post=lambda url, body, headers: calls.append((url, body, headers)) or 204,
                 signing_secret="dev-secret",
+                resolve_host=public_resolver,
             )
 
         self.assertEqual([], calls)
@@ -246,12 +247,132 @@ class AgentWorkerTest(TestCase):
                 tables=tables,
                 http_post=lambda url, body, headers: 503,
                 signing_secret="dev-secret",
+                resolve_host=public_resolver,
             )
 
         delivery = tables.deliveries.items["delivery_1"]
         self.assertEqual("failed", delivery["trigger_status"])
         self.assertEqual(1, delivery["retry_count"])
         self.assertIn("503", delivery["last_error"])
+
+    def test_worker_blocks_metadata_webhook_url_without_dispatch(self) -> None:
+        worker = load_agent_worker()
+        calls: list[str] = []
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "webhook_url": "http://169.254.169.254/latest/meta-data"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: calls.append(url) or 204,
+            signing_secret="dev-secret",
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertEqual([], calls)
+        self.assertEqual("failed", delivery["trigger_status"])
+        self.assertIn("must use https", delivery["last_error"])
+
+    def test_worker_blocks_dns_private_address_without_dispatch(self) -> None:
+        worker = load_agent_worker()
+        calls: list[str] = []
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "webhook_url": "https://runner.example.com/seagull"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: calls.append(url) or 204,
+            signing_secret="dev-secret",
+            resolve_host=lambda host, port: ["10.0.0.5"],
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertEqual([], calls)
+        self.assertEqual("failed", delivery["trigger_status"])
+        self.assertIn("non-public address", delivery["last_error"])
+
+    def test_worker_requires_signing_secret(self) -> None:
+        worker = load_agent_worker()
+        calls: list[str] = []
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "webhook_url": "https://runner.example.com/seagull"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: calls.append(url) or 204,
+            signing_secret="",
+            resolve_host=public_resolver,
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertEqual([], calls)
+        self.assertEqual("failed", delivery["trigger_status"])
+        self.assertIn("signing secret", delivery["last_error"])
+
+    def test_worker_rejects_placeholder_signing_secret(self) -> None:
+        worker = load_agent_worker()
+        calls: list[str] = []
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "webhook_url": "https://runner.example.com/seagull"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: calls.append(url) or 204,
+            signing_secret="dev-only-change-me",
+            resolve_host=public_resolver,
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertEqual([], calls)
+        self.assertEqual("failed", delivery["trigger_status"])
+        self.assertIn("insecure development placeholder", delivery["last_error"])
 
 
 def load_agent_worker():
@@ -262,6 +383,10 @@ def load_agent_worker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def public_resolver(host: str, port: int | None) -> list[str]:
+    return ["8.8.8.8"]
 
 
 class FakeTables:

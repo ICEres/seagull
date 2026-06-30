@@ -18,8 +18,8 @@ variable "aws_region" {
 
 variable "aws_profile" {
   type        = string
-  description = "AWS CLI profile used by Terraform."
-  default     = "personal"
+  description = "Optional AWS CLI profile used by Terraform. Leave empty to use the default AWS credential chain."
+  default     = ""
 }
 
 variable "root_domain" {
@@ -60,22 +60,34 @@ variable "mcp_domain_name" {
 
 variable "agent_webhook_signing_secret" {
   type        = string
-  description = "Development signing secret used for outbound Seagull agent webhooks."
-  default     = "dev-only-change-me"
+  description = "Signing secret used for outbound Seagull agent webhooks. Leave empty only to disable webhook dispatch."
+  default     = ""
   sensitive   = true
+}
+
+variable "dynamodb_point_in_time_recovery_enabled" {
+  type        = bool
+  description = "Enable point-in-time recovery for DynamoDB tables."
+  default     = true
+}
+
+variable "dynamodb_deletion_protection_enabled" {
+  type        = bool
+  description = "Enable deletion protection for DynamoDB tables."
+  default     = true
 }
 
 variable "mcp_connector_admin_secret" {
   type        = string
-  description = "Development admin secret for creating and revoking connector tokens."
-  default     = "dev-only-change-me"
+  description = "Optional admin secret for creating and revoking connector tokens. Leave empty to disable secret-based admin access."
+  default     = ""
   sensitive   = true
 }
 
 variable "ai_provider_admin_secret" {
   type        = string
-  description = "Development admin secret for AI provider admin operations."
-  default     = "dev-only-change-me"
+  description = "Optional AI provider admin secret. Leave empty to require Cognito admin claims."
+  default     = ""
   sensitive   = true
 }
 

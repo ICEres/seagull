@@ -19,6 +19,9 @@ class AiProviderRepository(Protocol):
     def put_run(self, run: AiRun) -> None:
         """Create or replace an AI run."""
 
+    def put_run_if_absent(self, run: AiRun) -> bool:
+        """Create an AI run only when its ID does not already exist."""
+
     def get_run(self, run_id: str) -> AiRun | None:
         """Return an AI run by ID."""
 

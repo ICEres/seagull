@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -106,8 +107,9 @@ class AiProviderService:
             raise InvalidAiRunError(f"provider is not configured: {request.provider}")
 
         now = self._clock()
+        run_id = idempotent_run_id(request) if request.idempotency_key is not None else self._new_id("airun")
         run = AiRun(
-            run_id=self._new_id("airun"),
+            run_id=run_id,
             provider=request.provider,
             model=request.model,
             actor_agent_id=request.actor_agent_id,
@@ -116,10 +118,18 @@ class AiProviderService:
             message_id=request.message_id,
             input_ref=request.content_ref,
             trace_id=request.trace_id,
+            idempotency_key=request.idempotency_key,
             created_at=now,
             updated_at=now,
         )
-        self._repository.put_run(run)
+        if request.idempotency_key is not None:
+            if not self._repository.put_run_if_absent(run):
+                existing_run = self._repository.get_run(run_id)
+                if existing_run is None:
+                    raise InvalidAiRunError("idempotent AI run already exists but could not be loaded")
+                return existing_run
+        else:
+            self._repository.put_run(run)
         self._append_event(run, AiRunState.REQUESTED, "run requested")
 
         denial = self._preflight_denial(request)
@@ -136,7 +146,6 @@ class AiProviderService:
             return self._fail(run, f"provider call failed: {exc}")
 
         usage = self._record_usage(run, response)
-        self._charge_user_credits(run, usage)
         run = replace(
             run,
             provider_run_id=response.provider_run_id,
@@ -147,6 +156,11 @@ class AiProviderService:
             updated_at=self._clock(),
         )
         self._repository.put_run(run)
+        actual_credit_reason = self._actual_credit_reason(run, usage)
+        if actual_credit_reason is not None:
+            return self._deny(run, actual_credit_reason, usage_id=usage.usage_id)
+
+        self._charge_user_credits(run, usage)
 
         output_safety_reason = self._output_safety_reason(response)
         if output_safety_reason is not None:
@@ -403,6 +417,13 @@ class AiProviderService:
             return f"insufficient user credits for {request.owner_user_id}"
         return None
 
+    def _actual_credit_reason(self, run: AiRun, usage: UsageRecord) -> str | None:
+        actual_cost = usage.estimated_cost_units
+        available_credits = self.get_user_credit_balance(run.owner_user_id).available_credits
+        if available_credits < actual_cost:
+            return f"insufficient user credits for actual usage on {run.run_id}"
+        return None
+
     def _budget_reason(self, request: ProviderRequest) -> str | None:
         estimate = estimate_run_cost_units(request)
         for limit in self._matching_budget_limits(request):
@@ -469,7 +490,7 @@ class AiProviderService:
         self._repository.append_user_credit_ledger_entry(entry)
         return entry
 
-    def _deny(self, run: AiRun, reason: str) -> AiRun:
+    def _deny(self, run: AiRun, reason: str, *, usage_id: str | None = None) -> AiRun:
         denied = replace(
             run,
             state=AiRunState.DENIED,
@@ -477,6 +498,7 @@ class AiProviderService:
             safety_reason=reason if reason.startswith("blocked input") else run.safety_reason,
             budget_reason=reason if "budget" in reason else run.budget_reason,
             credit_reason=reason if "credit" in reason else run.credit_reason,
+            usage_id=usage_id or run.usage_id,
             updated_at=self._clock(),
         )
         self._repository.put_run(denied)
@@ -664,6 +686,12 @@ def estimate_request_tokens(request: ProviderRequest) -> int:
 
 def estimate_run_cost_units(request: ProviderRequest) -> int:
     return (estimate_request_tokens(request) + request.max_output_tokens) * DEFAULT_COST_UNIT_PER_TOKEN
+
+
+def idempotent_run_id(request: ProviderRequest) -> str:
+    key = "\0".join((request.owner_user_id, request.actor_agent_id, request.idempotency_key or ""))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+    return f"airun_idem_{digest}"
 
 
 def scope_keys_for(request: ProviderRequest) -> tuple[str, ...]:

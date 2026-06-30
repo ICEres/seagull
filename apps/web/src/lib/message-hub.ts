@@ -194,9 +194,11 @@ export class MessageHubError extends Error {
 
 export class MessageHubClient {
   readonly baseUrl: string;
+  readonly authToken: string | null;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, authToken: string | null = null) {
     this.baseUrl = trimBaseUrl(baseUrl);
+    this.authToken = authToken?.trim() || null;
   }
 
   health(): Promise<MessageHubHealth> {
@@ -315,10 +317,13 @@ export class MessageHubClient {
       headers.set("content-type", "application/json");
       requestInit.body = JSON.stringify(body);
     }
+    if (this.authToken) {
+      headers.set("authorization", `Bearer ${this.authToken}`);
+    }
 
     const response = await fetch(`${this.baseUrl}${path}`, requestInit);
     const text = await response.text();
-    const payload = text ? safeJson(text) : {};
+    const payload = text ? parseJson(text, response.status) : {};
 
     if (!response.ok) {
       const errorPayload = payload as ErrorPayload;
@@ -339,10 +344,10 @@ export function configuredMessageApiUrl(): string {
   return trimBaseUrl(envUrl || runtimeUrl || DEFAULT_MESSAGE_API_URL);
 }
 
-function safeJson(text: string): unknown {
+function parseJson(text: string, status: number): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    return {};
+    throw new MessageHubError(status, "invalid_json", "Message API returned invalid JSON.");
   }
 }

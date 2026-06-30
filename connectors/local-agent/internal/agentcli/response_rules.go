@@ -344,13 +344,17 @@ func compactText(value string) string {
 }
 
 func trimToLimit(value string, limit int) string {
-	if len(value) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
 	if limit <= 3 {
-		return value[:limit]
+		return string(runes[:limit])
 	}
-	return strings.TrimSpace(value[:limit-3]) + "..."
+	return strings.TrimSpace(string(runes[:limit-3])) + "..."
 }
 
 func invalidResolution(message string) ResponseRuleResolution {

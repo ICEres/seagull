@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from safety_gateway.domain.models import SafetyAuditRecord
 
 
@@ -20,3 +22,12 @@ class InMemorySafetyAuditRepository:
         if actor_id is not None:
             records = (record for record in records if record.actor_id == actor_id)
         return tuple(list(records)[:limit])
+
+    def count_recent(self, *, actor_id: str, action_type: str, since: datetime) -> int:
+        return sum(
+            1
+            for record in self._records
+            if record.actor_id == actor_id
+            and record.action_type == action_type
+            and record.created_at >= since
+        )

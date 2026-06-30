@@ -195,6 +195,7 @@ def run_to_dict(run: AiRun) -> dict[str, Any]:
         "budget_reason": run.budget_reason,
         "credit_reason": run.credit_reason,
         "trace_id": run.trace_id,
+        "idempotency_key": run.idempotency_key,
         "created_at": datetime_to_string(run.created_at),
         "updated_at": datetime_to_string(run.updated_at),
     }

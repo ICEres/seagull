@@ -24,9 +24,11 @@ infra/terraform/
     dev/
     prod/
   modules/
+    ai-provider/
     shared/
     safety-gateway/
     message-hub/
+    message-router/
     social-api/
     web/
 ```

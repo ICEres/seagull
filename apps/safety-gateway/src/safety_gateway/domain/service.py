@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -67,7 +66,6 @@ class SafetyGatewayService:
         self._policy = policy or SafetyGatewayPolicy()
         self._id_factory = id_factory or self._default_id_factory
         self._clock = clock
-        self._rate_events: dict[tuple[str, str], list[datetime]] = defaultdict(list)
 
     def evaluate(self, request: SafetyEvaluationRequest) -> SafetyEvaluationResult:
         request = normalize_request(request)
@@ -89,6 +87,7 @@ class SafetyGatewayService:
             audit_id=self._new_id("audit"),
             decision_id=decision.decision_id,
             actor_id=request.actor_id,
+            action_type=request.action_type,
             action=decision.action,
             risk=decision.risk,
             target_ids=request.target_ids,
@@ -124,6 +123,12 @@ class SafetyGatewayService:
         if "blocked_term" in flag_labels:
             return decision_from_flags(SafetyAction.BLOCK, RiskLabel.HIGH, ReviewState.NOT_REQUIRED, flags)
 
+        if "loop" in flag_labels:
+            return decision_from_flags(SafetyAction.QUARANTINE, RiskLabel.HIGH, ReviewState.PENDING, flags)
+
+        if "prompt_injection" in flag_labels:
+            return decision_from_flags(SafetyAction.QUARANTINE, RiskLabel.HIGH, ReviewState.PENDING, flags)
+
         if rate_limited:
             return (
                 SafetyAction.RATE_LIMIT,
@@ -133,11 +138,8 @@ class SafetyGatewayService:
                 ("safety.rate_limit",),
             )
 
-        if "loop" in flag_labels:
-            return decision_from_flags(SafetyAction.QUARANTINE, RiskLabel.HIGH, ReviewState.PENDING, flags)
-
-        if "prompt_injection" in flag_labels:
-            return decision_from_flags(SafetyAction.QUARANTINE, RiskLabel.HIGH, ReviewState.PENDING, flags)
+        if "content_ref" in flag_labels:
+            return decision_from_flags(SafetyAction.HUMAN_REVIEW, RiskLabel.MEDIUM, ReviewState.PENDING, flags)
 
         if request.intent in self._policy.human_review_intents or request.action_type in self._policy.human_review_intents:
             return (
@@ -166,7 +168,7 @@ class SafetyGatewayService:
 
     def _flags_for(self, request: SafetyEvaluationRequest) -> tuple[SafetyFlag, ...]:
         flags: list[SafetyFlag] = []
-        content = normalized_content(request.content)
+        content = normalized_request_text(request)
 
         for term in normalized_terms(self._policy.blocked_terms):
             if term in content:
@@ -201,6 +203,16 @@ class SafetyGatewayService:
                     )
                 )
 
+        if request.content_ref is not None:
+            flags.append(
+                SafetyFlag(
+                    label="content_ref",
+                    risk=RiskLabel.MEDIUM,
+                    reason="referenced payload requires safety review",
+                    policy_id="safety.content_ref_review",
+                )
+            )
+
         if request.thread_depth > self._policy.max_thread_depth:
             flags.append(
                 SafetyFlag(
@@ -225,16 +237,12 @@ class SafetyGatewayService:
 
     def _record_and_check_rate_limit(self, request: SafetyEvaluationRequest, now: datetime) -> bool:
         window = timedelta(seconds=self._policy.rate_limit_window_seconds)
-        key = (request.actor_id, request.action_type)
-        events = [
-            event_time
-            for event_time in self._rate_events[key]
-            if now - event_time < window
-        ]
-        self._rate_events[key] = events
-        limited = len(events) >= self._policy.max_events_per_window
-        events.append(now)
-        return limited
+        recent_count = self._audit_repository.count_recent(
+            actor_id=request.actor_id,
+            action_type=request.action_type,
+            since=now - window,
+        )
+        return recent_count >= self._policy.max_events_per_window
 
     def _new_id(self, prefix: str) -> str:
         return self._id_factory(prefix)
@@ -276,7 +284,7 @@ def normalize_request(request: SafetyEvaluationRequest) -> SafetyEvaluationReque
         actor_id=actor_id,
         action_type=action_type,
         content=request.content,
-        content_ref=request.content_ref,
+        content_ref=normalized_optional_string(request.content_ref),
         target_ids=target_ids,
         intent=intent,
         visibility=visibility,
@@ -290,8 +298,15 @@ def normalize_request(request: SafetyEvaluationRequest) -> SafetyEvaluationReque
     )
 
 
-def normalized_content(content: str | None) -> str:
-    return (content or "").casefold()
+def normalized_request_text(request: SafetyEvaluationRequest) -> str:
+    return "\n".join(part for part in (request.content, request.content_ref) if part).casefold()
+
+
+def normalized_optional_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def normalized_terms(terms: tuple[str, ...]) -> tuple[str, ...]:

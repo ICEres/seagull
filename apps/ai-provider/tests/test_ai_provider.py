@@ -108,6 +108,63 @@ class AiProviderServiceTest(TestCase):
             tuple(event.state for event in events),
         )
 
+    def test_idempotency_key_returns_existing_run_without_double_charge(self) -> None:
+        first = self.service.create_run(
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "Summarize this thread."},),
+            idempotency_key="retry-1",
+        )
+        second = self.service.create_run(
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "Summarize this thread."},),
+            idempotency_key="retry-1",
+        )
+
+        self.assertEqual(first.run_id, second.run_id)
+        self.assertEqual("retry-1", second.idempotency_key)
+        self.assertEqual(1, len(self.fake_provider.calls))
+        self.assertEqual(1, len(self.service.list_usage_by_owner("user_1")))
+        self.assertEqual(991, self.service.get_user_credit_balance("user_1").available_credits)
+
+    def test_actual_usage_over_credit_balance_fails_without_negative_balance(self) -> None:
+        repository = InMemoryAiProviderRepository()
+        provider = FakeProviderAdapter(output_text="one two three four five six seven eight nine ten")
+        service = AiProviderService(
+            repository,
+            {"fake": provider},
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+        )
+        service.grant_server_credits(admin_actor_id="admin_1", credit_amount=1000, reason="test server credits")
+        service.grant_user_credits(
+            admin_actor_id="admin_1",
+            owner_user_id="user_1",
+            credit_amount=5,
+            reason="tiny test credits",
+        )
+
+        run = service.create_run(
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "hello"},),
+            max_output_tokens=1,
+        )
+
+        self.assertEqual(AiRunState.DENIED, run.state)
+        self.assertEqual("insufficient user credits for actual usage on airun_1", run.credit_reason)
+        self.assertEqual("usage_1", run.usage_id)
+        self.assertEqual(1, len(provider.calls))
+        self.assertEqual(5, service.get_user_credit_balance("user_1").available_credits)
+        self.assertEqual(1, len(service.list_usage_by_owner("user_1")))
+
     def test_blocked_input_denies_before_provider_call(self) -> None:
         run = self.service.create_run(
             provider="fake",

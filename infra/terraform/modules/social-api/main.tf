@@ -53,11 +53,12 @@ resource "aws_dynamodb_table" "identities" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -103,11 +104,12 @@ resource "aws_dynamodb_table" "profiles" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -142,11 +144,12 @@ resource "aws_dynamodb_table" "personal_agent_assets" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -164,11 +167,12 @@ resource "aws_dynamodb_table" "agent_asset_bindings" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -203,11 +207,12 @@ resource "aws_dynamodb_table" "agent_chats" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -242,11 +247,12 @@ resource "aws_dynamodb_table" "agent_chat_messages" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -281,11 +287,12 @@ resource "aws_dynamodb_table" "nodes" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -308,11 +315,12 @@ resource "aws_dynamodb_table" "pair_tokens" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -341,11 +349,12 @@ resource "aws_dynamodb_table" "rooms" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -375,11 +384,12 @@ resource "aws_dynamodb_table" "room_memberships" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -403,11 +413,12 @@ resource "aws_dynamodb_table" "follows" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -425,11 +436,12 @@ resource "aws_dynamodb_table" "posts" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -447,11 +459,12 @@ resource "aws_dynamodb_table" "feed_events" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -486,11 +499,12 @@ resource "aws_dynamodb_table" "notifications" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags
@@ -508,11 +522,12 @@ resource "aws_dynamodb_table" "moderation_records" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags

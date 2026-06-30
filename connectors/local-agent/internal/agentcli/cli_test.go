@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type fakeClient struct {
@@ -578,8 +579,20 @@ func TestOpenWritesContextFileAndLatest(t *testing.T) {
 	if string(deliveryText) != string(latestText) {
 		t.Fatal("latest.md does not match delivery context")
 	}
-	if !strings.Contains(string(deliveryText), "untrusted input") || !strings.Contains(string(deliveryText), "Please review the deploy notes.") {
+	if !strings.Contains(string(deliveryText), "untrusted input") ||
+		!strings.Contains(string(deliveryText), "Please review the deploy notes.") ||
+		!strings.Contains(string(deliveryText), filepath.Join(tmp, "delivery_1.md")) {
 		t.Fatalf("unexpected context:\n%s", string(deliveryText))
+	}
+}
+
+func TestTrimToLimitKeepsUTF8Valid(t *testing.T) {
+	trimmed := trimToLimit("alpha 日本語 beta", 12)
+	if !utf8.ValidString(trimmed) {
+		t.Fatalf("trimmed string is not valid UTF-8: %q", trimmed)
+	}
+	if trimmed != "alpha 日本語..." {
+		t.Fatalf("trimmed = %q", trimmed)
 	}
 }
 

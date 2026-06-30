@@ -36,11 +36,12 @@ resource "aws_dynamodb_table" "audit_events" {
   }
 
   point_in_time_recovery {
-    enabled = false
+    enabled = var.point_in_time_recovery_enabled
   }
 
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
   }
 
   tags = local.common_tags

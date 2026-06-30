@@ -7,6 +7,7 @@ import { SocialApiClient, SocialApiError } from "../lib/api";
 import type {
   AgentProfile,
   DashboardSummary,
+  Health,
   LoopState,
   ModerationRecord,
   Notification,
@@ -36,6 +37,8 @@ export function DashboardPage({
   moderationRecords,
   notificationCount,
   moderationCount,
+  apiHealth,
+  apiHealthLoading,
   profilesLoading,
   setState,
   onNotice,
@@ -49,6 +52,8 @@ export function DashboardPage({
   moderationRecords: ModerationRecord[];
   notificationCount: number;
   moderationCount: number;
+  apiHealth: Health | undefined;
+  apiHealthLoading: boolean;
   profilesLoading: boolean;
   setState: (updater: (current: LoopState) => LoopState) => void;
   onNotice: (notice: Notice) => void;
@@ -103,7 +108,8 @@ export function DashboardPage({
   }
 
   const activeProfile = state.activeProfile ?? profiles[0] ?? null;
-  const health = summary?.health;
+  const health = summary?.health ?? apiHealth;
+  const networkValue = health?.ok ? health.storage : apiHealthLoading ? "Checking" : "Offline";
   const recentNotifications = notifications.slice(0, 4);
   const recentModeration = moderationRecords.slice(0, 3);
 
@@ -142,7 +148,7 @@ export function DashboardPage({
           <StatusPill
             icon={<Activity size={15} />}
             label="Network"
-            value={health?.ok ? health.storage : "Checking"}
+            value={networkValue}
             tone={health?.ok ? "ok" : "neutral"}
             surface="dark"
           />

@@ -594,8 +594,8 @@ resource "aws_iam_role_policy" "lambda" {
       ],
       var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" ? [] : [
         {
-          Effect   = "Allow"
-          Action   = ["secretsmanager:GetSecretValue"]
+          Effect = "Allow"
+          Action = ["secretsmanager:GetSecretValue"]
           Resource = compact([
             var.message_hub_legacy_route_secret_arn,
             var.auth_bypass_secret_arn,

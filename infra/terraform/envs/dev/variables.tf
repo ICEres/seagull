@@ -58,6 +58,13 @@ variable "mcp_domain_name" {
   default     = "mcp.gulls.ai"
 }
 
+variable "agent_webhook_signing_secret" {
+  type        = string
+  description = "Signing secret used for outbound Seagull agent webhooks. Leave empty only to disable webhook dispatch."
+  default     = ""
+  sensitive   = true
+}
+
 variable "dynamodb_point_in_time_recovery_enabled" {
   type        = bool
   description = "Enable point-in-time recovery for DynamoDB tables."
@@ -86,6 +93,34 @@ variable "api_access_log_retention_days" {
   type        = number
   description = "Retention in days for API Gateway access logs."
   default     = 30
+}
+
+variable "mcp_connector_admin_secret" {
+  type        = string
+  description = "Optional admin secret for creating and revoking connector tokens. Leave empty to disable secret-based admin access."
+  default     = ""
+  sensitive   = true
+}
+
+variable "ai_provider_admin_secret" {
+  type        = string
+  description = "Optional AI provider admin secret. Leave empty to require Cognito admin claims."
+  default     = ""
+  sensitive   = true
+}
+
+variable "mcp_dev_token" {
+  type        = string
+  description = "Optional development bearer token accepted by the hosted MCP connector."
+  default     = ""
+  sensitive   = true
+}
+
+variable "safety_gateway_admin_secret" {
+  type        = string
+  description = "Shared secret used by internal Safety Gateway callers."
+  default     = ""
+  sensitive   = true
 }
 
 variable "mcp_dev_owner_user_id" {

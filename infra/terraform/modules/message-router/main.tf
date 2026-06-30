@@ -59,17 +59,6 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_access.arn
-    format = jsonencode({
-      requestId               = "$context.requestId"
-      routeKey                = "$context.routeKey"
-      status                  = "$context.status"
-      sourceIp                = "$context.identity.sourceIp"
-      integrationErrorMessage = "$context.integrationErrorMessage"
-    })
-  }
-
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
@@ -100,13 +89,6 @@ resource "aws_iam_role" "lambda" {
 resource "aws_cloudwatch_log_group" "lambda" {
   name              = "/aws/lambda/${var.name_prefix}"
   retention_in_days = 7
-
-  tags = local.common_tags
-}
-
-resource "aws_cloudwatch_log_group" "api_access" {
-  name              = "/aws/apigateway/${var.name_prefix}-websocket"
-  retention_in_days = var.access_log_retention_days
 
   tags = local.common_tags
 }

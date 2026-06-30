@@ -47,88 +47,6 @@ data "aws_route53_zone" "root" {
   private_zone = false
 }
 
-resource "aws_kms_key" "dynamodb" {
-  description         = "CMK for ${var.project}-${var.environment} DynamoDB tables"
-  enable_key_rotation = true
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "dynamodb"
-    },
-  )
-}
-
-resource "aws_kms_alias" "dynamodb" {
-  name          = "alias/${var.project}-${var.environment}-dynamodb"
-  target_key_id = aws_kms_key.dynamodb.key_id
-}
-
-resource "aws_secretsmanager_secret" "agent_webhook_signing_secret" {
-  name        = "${local.message_hub_prefix}/agent-webhook-signing-secret"
-  description = "Signing secret used for outbound Seagull agent webhooks."
-  kms_key_id  = aws_kms_key.dynamodb.arn
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "message-hub-agent-worker"
-    },
-  )
-}
-
-resource "aws_secretsmanager_secret" "mcp_connector_admin_secret" {
-  name        = "${local.mcp_connector_prefix}/connector-token-admin-secret"
-  description = "Admin secret used for connector token management."
-  kms_key_id  = aws_kms_key.dynamodb.arn
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "mcp-connector"
-    },
-  )
-}
-
-resource "aws_secretsmanager_secret" "mcp_dev_token" {
-  name        = "${local.mcp_connector_prefix}/dev-token"
-  description = "Optional development bearer token for the hosted MCP connector."
-  kms_key_id  = aws_kms_key.dynamodb.arn
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "mcp-connector"
-    },
-  )
-}
-
-resource "aws_secretsmanager_secret" "ai_provider_admin_secret" {
-  name        = "${local.ai_provider_prefix}/admin-secret"
-  description = "Optional AI provider admin secret."
-  kms_key_id  = aws_kms_key.dynamodb.arn
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "ai-provider"
-    },
-  )
-}
-
-resource "aws_secretsmanager_secret" "safety_gateway_admin_secret" {
-  name        = "${local.safety_gateway_prefix}/admin-secret"
-  description = "Shared secret used by internal Safety Gateway callers."
-  kms_key_id  = aws_kms_key.dynamodb.arn
-
-  tags = merge(
-    local.message_hub_tags,
-    {
-      App = "safety-gateway"
-    },
-  )
-}
-
 data "archive_file" "message_hub_api" {
   type        = "zip"
   source_file = local.lambda_src
@@ -205,17 +123,6 @@ resource "aws_cloudwatch_log_group" "lambda" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "message_api_access" {
-  name              = "/aws/apigateway/${local.message_api_prefix}-http"
-  retention_in_days = var.api_access_log_retention_days
-
-  tags = {
-    Project     = var.project
-    Environment = var.environment
-    App         = "message-hub-api"
-  }
-}
-
 resource "aws_iam_role_policy" "lambda" {
   name = "${local.message_api_prefix}-lambda-policy"
   role = aws_iam_role.lambda.id
@@ -247,16 +154,6 @@ resource "aws_iam_role_policy" "lambda" {
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.agent_jobs.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.safety_gateway_admin_secret.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.dynamodb.arn
       }
     ]
   })
@@ -271,26 +168,25 @@ resource "aws_lambda_function" "message_hub_api" {
   source_code_hash = data.archive_file.message_hub_api.output_base64sha256
   timeout          = 10
   memory_size      = 256
-  kms_key_arn      = aws_kms_key.dynamodb.arn
 
   environment {
     variables = {
-      AGENTS_TABLE                    = module.message_hub_storage.table_names.agents
-      AGENT_TOKENS_TABLE              = module.message_hub_storage.table_names.agent_tokens
-      AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
-      APP_NAME                        = local.message_hub_prefix
-      DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
-      IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
-      MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
-      ROUTING_RULES_TABLE             = module.message_hub_storage.table_names.routing_rules
-      SAFETY_BLOCKED_TERMS            = "unsafe:"
-      SAFETY_GATEWAY_ADMIN_SECRET_ARN = aws_secretsmanager_secret.safety_gateway_admin_secret.arn
-      SAFETY_GATEWAY_URL              = module.safety_gateway.api_endpoint
-      TASK_RESULTS_TABLE              = module.message_hub_storage.table_names.task_results
-      TASKS_TABLE                     = module.message_hub_storage.table_names.tasks
-      THREAD_SUMMARIES_TABLE          = module.message_hub_storage.table_names.thread_summaries
-      THREADS_TABLE                   = module.message_hub_storage.table_names.threads
-      TOOL_REQUESTS_TABLE             = module.message_hub_storage.table_names.tool_requests
+      AGENTS_TABLE                = module.message_hub_storage.table_names.agents
+      AGENT_TOKENS_TABLE          = module.message_hub_storage.table_names.agent_tokens
+      AGENT_JOBS_QUEUE_URL        = aws_sqs_queue.agent_jobs.url
+      APP_NAME                    = local.message_hub_prefix
+      DELIVERIES_TABLE            = module.message_hub_storage.table_names.deliveries
+      IDEMPOTENCY_TABLE           = module.message_hub_storage.table_names.idempotency_keys
+      MESSAGES_TABLE              = module.message_hub_storage.table_names.messages
+      ROUTING_RULES_TABLE         = module.message_hub_storage.table_names.routing_rules
+      SAFETY_BLOCKED_TERMS        = "unsafe:"
+      SAFETY_GATEWAY_ADMIN_SECRET = var.safety_gateway_admin_secret
+      SAFETY_GATEWAY_URL          = module.safety_gateway.api_endpoint
+      TASK_RESULTS_TABLE          = module.message_hub_storage.table_names.task_results
+      TASKS_TABLE                 = module.message_hub_storage.table_names.tasks
+      THREAD_SUMMARIES_TABLE      = module.message_hub_storage.table_names.thread_summaries
+      THREADS_TABLE               = module.message_hub_storage.table_names.threads
+      TOOL_REQUESTS_TABLE         = module.message_hub_storage.table_names.tool_requests
     }
   }
 
@@ -403,16 +299,6 @@ resource "aws_iam_role_policy" "agent_worker" {
           "sqs:GetQueueAttributes"
         ]
         Resource = aws_sqs_queue.agent_jobs.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = aws_secretsmanager_secret.agent_webhook_signing_secret.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.dynamodb.arn
       }
     ]
   })
@@ -427,15 +313,14 @@ resource "aws_lambda_function" "agent_worker" {
   source_code_hash = data.archive_file.agent_worker.output_base64sha256
   timeout          = 20
   memory_size      = 256
-  kms_key_arn      = aws_kms_key.dynamodb.arn
 
   environment {
     variables = {
-      AGENTS_TABLE                       = module.message_hub_storage.table_names.agents
-      APP_NAME                           = "${local.message_hub_prefix}-agent-worker"
-      DELIVERIES_TABLE                   = module.message_hub_storage.table_names.deliveries
-      MESSAGES_TABLE                     = module.message_hub_storage.table_names.messages
-      SEAGULL_WEBHOOK_SIGNING_SECRET_ARN = aws_secretsmanager_secret.agent_webhook_signing_secret.arn
+      AGENTS_TABLE                   = module.message_hub_storage.table_names.agents
+      APP_NAME                       = "${local.message_hub_prefix}-agent-worker"
+      DELIVERIES_TABLE               = module.message_hub_storage.table_names.deliveries
+      MESSAGES_TABLE                 = module.message_hub_storage.table_names.messages
+      SEAGULL_WEBHOOK_SIGNING_SECRET = var.agent_webhook_signing_secret
     }
   }
 
@@ -497,8 +382,7 @@ resource "aws_dynamodb_table" "mcp_connector_tokens" {
   deletion_protection_enabled = var.dynamodb_deletion_protection_enabled
 
   server_side_encryption {
-    enabled     = true
-    kms_key_arn = aws_kms_key.dynamodb.arn
+    enabled = true
   }
 
   tags = {
@@ -635,17 +519,6 @@ resource "aws_cloudwatch_log_group" "mcp_connector" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "mcp_connector_access" {
-  name              = "/aws/apigateway/${local.mcp_connector_prefix}-http"
-  retention_in_days = var.api_access_log_retention_days
-
-  tags = {
-    Project     = var.project
-    Environment = var.environment
-    App         = "mcp-connector"
-  }
-}
-
 resource "aws_iam_role_policy" "mcp_connector" {
   name = "${local.mcp_connector_prefix}-lambda-policy"
   role = aws_iam_role.mcp_connector.id
@@ -678,19 +551,6 @@ resource "aws_iam_role_policy" "mcp_connector" {
         Effect   = "Allow"
         Action   = ["cognito-idp:AdminGetUser"]
         Resource = aws_cognito_user_pool.mcp_connector.arn
-      },
-      {
-        Effect = "Allow"
-        Action = ["secretsmanager:GetSecretValue"]
-        Resource = [
-          aws_secretsmanager_secret.mcp_connector_admin_secret.arn,
-          aws_secretsmanager_secret.mcp_dev_token.arn
-        ]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = aws_kms_key.dynamodb.arn
       }
     ]
   })
@@ -705,28 +565,29 @@ resource "aws_lambda_function" "mcp_connector" {
   source_code_hash = data.archive_file.mcp_connector.output_base64sha256
   timeout          = 15
   memory_size      = 256
-  kms_key_arn      = aws_kms_key.dynamodb.arn
 
   environment {
     variables = merge(
       {
-        APP_NAME                         = local.mcp_connector_prefix
-        CONNECTOR_TOKEN_ADMIN_SECRET_ARN = aws_secretsmanager_secret.mcp_connector_admin_secret.arn
-        CONNECTOR_TOKENS_TABLE           = aws_dynamodb_table.mcp_connector_tokens.name
-        MCP_AUTHORIZATION_SERVER         = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.mcp_connector.id}"
-        MCP_COGNITO_AUTHORIZATION_URL    = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
-        MCP_COGNITO_CLIENT_ID            = aws_cognito_user_pool_client.mcp_connector_chatgpt.id
-        MCP_COGNITO_REGION               = var.aws_region
-        MCP_COGNITO_TOKEN_URL            = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
-        MCP_COGNITO_USER_POOL_ID         = aws_cognito_user_pool.mcp_connector.id
-        MCP_CORS_ALLOWED_ORIGINS         = join(",", var.mcp_allowed_origins)
-        MCP_DEV_OWNER_USER_ID            = var.mcp_dev_owner_user_id
-        MCP_NO_AUTH_ENABLED              = tostring(var.environment == "dev" && var.mcp_no_auth_enabled)
-        MCP_NO_AUTH_OWNER_USER_ID        = var.mcp_no_auth_owner_user_id
-        MCP_NO_AUTH_SCOPES               = join(",", var.mcp_no_auth_scopes)
-        MCP_RESOURCE_URI                 = "https://${var.mcp_domain_name}/mcp"
-        MESSAGE_API_URL                  = "https://${var.message_api_domain}"
-        MCP_DEV_TOKEN_ARN                = aws_secretsmanager_secret.mcp_dev_token.arn
+        APP_NAME                      = local.mcp_connector_prefix
+        CONNECTOR_TOKEN_ADMIN_SECRET  = var.mcp_connector_admin_secret
+        CONNECTOR_TOKENS_TABLE        = aws_dynamodb_table.mcp_connector_tokens.name
+        MCP_AUTHORIZATION_SERVER      = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.mcp_connector.id}"
+        MCP_COGNITO_AUTHORIZATION_URL = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
+        MCP_COGNITO_CLIENT_ID         = aws_cognito_user_pool_client.mcp_connector_chatgpt.id
+        MCP_COGNITO_REGION            = var.aws_region
+        MCP_COGNITO_TOKEN_URL         = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
+        MCP_COGNITO_USER_POOL_ID      = aws_cognito_user_pool.mcp_connector.id
+        MCP_CORS_ALLOWED_ORIGINS      = join(",", var.mcp_allowed_origins)
+        MCP_DEV_OWNER_USER_ID         = var.mcp_dev_owner_user_id
+        MCP_NO_AUTH_ENABLED           = tostring(var.environment == "dev" && var.mcp_no_auth_enabled)
+        MCP_NO_AUTH_OWNER_USER_ID     = var.mcp_no_auth_owner_user_id
+        MCP_NO_AUTH_SCOPES            = join(",", var.mcp_no_auth_scopes)
+        MCP_RESOURCE_URI              = "https://${var.mcp_domain_name}/mcp"
+        MESSAGE_API_URL               = "https://${var.message_api_domain}"
+      },
+      var.mcp_dev_token == "" ? {} : {
+        MCP_DEV_TOKEN = var.mcp_dev_token
       },
       length(var.mcp_dev_agent_handles) == 0 ? {} : {
         MCP_DEV_AGENT_HANDLES = join(",", var.mcp_dev_agent_handles)
@@ -790,17 +651,6 @@ resource "aws_apigatewayv2_stage" "mcp_connector" {
   api_id      = aws_apigatewayv2_api.mcp_connector.id
   name        = "$default"
   auto_deploy = true
-
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.mcp_connector_access.arn
-    format = jsonencode({
-      requestId               = "$context.requestId"
-      routeKey                = "$context.routeKey"
-      status                  = "$context.status"
-      sourceIp                = "$context.identity.sourceIp"
-      integrationErrorMessage = "$context.integrationErrorMessage"
-    })
-  }
 
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
@@ -929,17 +779,6 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.message_api_access.arn
-    format = jsonencode({
-      requestId               = "$context.requestId"
-      routeKey                = "$context.routeKey"
-      status                  = "$context.status"
-      sourceIp                = "$context.identity.sourceIp"
-      integrationErrorMessage = "$context.integrationErrorMessage"
-    })
-  }
-
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
@@ -1037,7 +876,6 @@ module "message_hub_storage" {
   name_prefix                    = local.message_hub_prefix
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
-  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   tags                           = local.message_hub_tags
 }
 
@@ -1047,15 +885,12 @@ module "safety_gateway" {
   name_prefix             = local.safety_gateway_prefix
   lambda_package_path     = data.archive_file.safety_gateway.output_path
   lambda_source_code_hash = data.archive_file.safety_gateway.output_base64sha256
-  admin_secret_arn        = aws_secretsmanager_secret.safety_gateway_admin_secret.arn
-  lambda_kms_key_arn      = aws_kms_key.dynamodb.arn
+  admin_secret            = var.safety_gateway_admin_secret
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
-  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   api_throttling_burst_limit     = var.api_throttling_burst_limit
   api_throttling_rate_limit      = var.api_throttling_rate_limit
-  access_log_retention_days      = var.api_access_log_retention_days
   tags                           = local.message_hub_tags
 }
 
@@ -1065,17 +900,14 @@ module "ai_provider" {
   name_prefix             = local.ai_provider_prefix
   lambda_package_path     = data.archive_file.ai_provider.output_path
   lambda_source_code_hash = data.archive_file.ai_provider.output_base64sha256
-  admin_secret_arn        = aws_secretsmanager_secret.ai_provider_admin_secret.arn
-  lambda_kms_key_arn      = aws_kms_key.dynamodb.arn
+  admin_secret            = var.ai_provider_admin_secret
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
-  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   api_throttling_burst_limit     = var.api_throttling_burst_limit
   api_throttling_rate_limit      = var.api_throttling_rate_limit
-  access_log_retention_days      = var.api_access_log_retention_days
   tags                           = local.message_hub_tags
 }
 
@@ -1156,16 +988,13 @@ module "social_api" {
   name_prefix             = local.social_api_prefix
   lambda_package_path     = data.archive_file.social_api.output_path
   lambda_source_code_hash = data.archive_file.social_api.output_base64sha256
-  lambda_kms_key_arn      = aws_kms_key.dynamodb.arn
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
-  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   api_throttling_burst_limit     = var.api_throttling_burst_limit
   api_throttling_rate_limit      = var.api_throttling_rate_limit
-  access_log_retention_days      = var.api_access_log_retention_days
   tags                           = local.message_hub_tags
 }
 
@@ -1209,9 +1038,7 @@ module "message_router" {
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
-  dynamodb_kms_key_arn           = aws_kms_key.dynamodb.arn
   api_throttling_burst_limit     = var.api_throttling_burst_limit
   api_throttling_rate_limit      = var.api_throttling_rate_limit
-  access_log_retention_days      = var.api_access_log_retention_days
   tags                           = local.message_hub_tags
 }

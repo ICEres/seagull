@@ -412,20 +412,13 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags = local.common_tags
 }
 
-resource "aws_cloudwatch_log_group" "api_access" {
-  name              = "/aws/apigateway/${var.name_prefix}-http"
-  retention_in_days = var.access_log_retention_days
-
-  tags = local.common_tags
-}
-
 resource "aws_iam_role_policy" "lambda" {
   name = "${var.name_prefix}-lambda-policy"
   role = aws_iam_role.lambda.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = concat([
+    Statement = [
       {
         Effect = "Allow"
         Action = [
@@ -446,22 +439,7 @@ resource "aws_iam_role_policy" "lambda" {
         ]
         Resource = local.table_resources
       }
-      ],
-      var.admin_secret_arn == "" ? [] : [
-        {
-          Effect   = "Allow"
-          Action   = ["secretsmanager:GetSecretValue"]
-          Resource = var.admin_secret_arn
-        },
-      ],
-      var.admin_secret_arn == "" && var.lambda_kms_key_arn == "" ? [] : [
-        {
-          Effect   = "Allow"
-          Action   = ["kms:Decrypt"]
-          Resource = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : (var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : "*")
-        }
-      ]
-    )
+    ]
   })
 }
 
@@ -474,26 +452,21 @@ resource "aws_lambda_function" "api" {
   source_code_hash = var.lambda_source_code_hash
   timeout          = 15
   memory_size      = 256
-  kms_key_arn      = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : null
 
   environment {
-    variables = merge(
-      {
-        AI_ADMIN_AUDIT_EVENTS_TABLE   = aws_dynamodb_table.admin_audit_events.name
-        AI_BUDGET_LIMITS_TABLE        = aws_dynamodb_table.budget_limits.name
-        AI_MODEL_POLICIES_TABLE       = aws_dynamodb_table.model_policies.name
-        AI_PROVIDER_CONFIGS_TABLE     = aws_dynamodb_table.provider_configs.name
-        AI_RUN_EVENTS_TABLE           = aws_dynamodb_table.run_events.name
-        AI_RUNS_TABLE                 = aws_dynamodb_table.runs.name
-        AI_SERVER_CREDIT_LEDGER_TABLE = aws_dynamodb_table.server_credit_ledger.name
-        AI_USAGE_LEDGER_TABLE         = aws_dynamodb_table.usage_ledger.name
-        AI_USER_CREDIT_LEDGER_TABLE   = aws_dynamodb_table.user_credit_ledger.name
-        APP_NAME                      = var.name_prefix
-      },
-      var.admin_secret_arn == "" ? {} : {
-        AI_PROVIDER_ADMIN_SECRET_ARN = var.admin_secret_arn
-      }
-    )
+    variables = {
+      AI_ADMIN_AUDIT_EVENTS_TABLE   = aws_dynamodb_table.admin_audit_events.name
+      AI_BUDGET_LIMITS_TABLE        = aws_dynamodb_table.budget_limits.name
+      AI_MODEL_POLICIES_TABLE       = aws_dynamodb_table.model_policies.name
+      AI_PROVIDER_ADMIN_SECRET      = var.admin_secret
+      AI_PROVIDER_CONFIGS_TABLE     = aws_dynamodb_table.provider_configs.name
+      AI_RUN_EVENTS_TABLE           = aws_dynamodb_table.run_events.name
+      AI_RUNS_TABLE                 = aws_dynamodb_table.runs.name
+      AI_SERVER_CREDIT_LEDGER_TABLE = aws_dynamodb_table.server_credit_ledger.name
+      AI_USAGE_LEDGER_TABLE         = aws_dynamodb_table.usage_ledger.name
+      AI_USER_CREDIT_LEDGER_TABLE   = aws_dynamodb_table.user_credit_ledger.name
+      APP_NAME                      = var.name_prefix
+    }
   }
 
   depends_on = [
@@ -555,17 +528,6 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
-
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_access.arn
-    format = jsonencode({
-      requestId               = "$context.requestId"
-      routeKey                = "$context.routeKey"
-      status                  = "$context.status"
-      sourceIp                = "$context.identity.sourceIp"
-      integrationErrorMessage = "$context.integrationErrorMessage"
-    })
-  }
 
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit

@@ -37,6 +37,13 @@ variable "lambda_source_code_hash" {
   description = "Base64-encoded source hash for the safety gateway Lambda package."
 }
 
+variable "admin_secret" {
+  type        = string
+  description = "Optional Safety Gateway shared secret."
+  default     = ""
+  sensitive   = true
+}
+
 variable "admin_secret_arn" {
   type        = string
   description = "Optional Secrets Manager ARN containing the Safety Gateway shared secret."

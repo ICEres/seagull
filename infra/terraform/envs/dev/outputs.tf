@@ -48,11 +48,6 @@ output "message_hub_agent_worker_lambda_function_name" {
   value       = aws_lambda_function.agent_worker.function_name
 }
 
-output "agent_webhook_signing_secret_arn" {
-  description = "Secrets Manager ARN for the outbound agent webhook signing secret."
-  value       = aws_secretsmanager_secret.agent_webhook_signing_secret.arn
-}
-
 output "safety_gateway_api_url" {
   description = "HTTP API endpoint for the safety gateway."
   value       = module.safety_gateway.api_endpoint
@@ -68,11 +63,6 @@ output "safety_gateway_lambda_function_name" {
   value       = module.safety_gateway.lambda_function_name
 }
 
-output "safety_gateway_admin_secret_arn" {
-  description = "Secrets Manager ARN for the Safety Gateway shared admin secret."
-  value       = aws_secretsmanager_secret.safety_gateway_admin_secret.arn
-}
-
 output "ai_provider_api_url" {
   description = "HTTP API endpoint for the AI provider backend."
   value       = module.ai_provider.api_endpoint
@@ -81,11 +71,6 @@ output "ai_provider_api_url" {
 output "ai_provider_lambda_function_name" {
   description = "AI provider Lambda function name."
   value       = module.ai_provider.lambda_function_name
-}
-
-output "ai_provider_admin_secret_arn" {
-  description = "Secrets Manager ARN for the optional AI provider admin secret."
-  value       = aws_secretsmanager_secret.ai_provider_admin_secret.arn
 }
 
 output "ai_provider_table_names" {
@@ -201,16 +186,6 @@ output "mcp_connector_lambda_function_name" {
 output "mcp_connector_tokens_table_name" {
   description = "DynamoDB table name for connector token metadata."
   value       = aws_dynamodb_table.mcp_connector_tokens.name
-}
-
-output "mcp_connector_admin_secret_arn" {
-  description = "Secrets Manager ARN for the MCP connector token admin secret."
-  value       = aws_secretsmanager_secret.mcp_connector_admin_secret.arn
-}
-
-output "mcp_dev_token_secret_arn" {
-  description = "Secrets Manager ARN for the optional MCP development token."
-  value       = aws_secretsmanager_secret.mcp_dev_token.arn
 }
 
 output "mcp_oauth_user_pool_id" {

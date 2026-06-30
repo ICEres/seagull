@@ -10,8 +10,8 @@ landing_domain_name = "gulls.ai"
 admin_domain_name  = "admin.gulls.ai"
 mcp_domain_name    = "mcp.gulls.ai"
 
-# Secret values are stored in AWS Secrets Manager resources created by this
-# environment. Populate them after apply; do not put secret values in tfvars.
+# Secret values are intentionally omitted from this example. Prefer GitHub
+# Actions secrets or local environment-provided TF_VAR_* values.
 
 api_throttling_burst_limit    = 100
 api_throttling_rate_limit     = 50

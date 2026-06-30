@@ -78,15 +78,14 @@ TF_BACKEND_KEY            # optional, defaults to seagull/dev/terraform.tfstate
 TF_BACKEND_REGION         # optional, defaults to ap-southeast-2
 ```
 
-Terraform creates Secrets Manager secret containers for the Lambda-only secrets
-without storing secret values in tfstate. After the first apply, populate:
+Configure these repository secrets for Lambda-only credentials:
 
 ```text
-seagull-dev-message-hub/agent-webhook-signing-secret
-seagull-dev-safety-gateway/admin-secret
-seagull-dev-ai-provider/admin-secret                  # optional
-seagull-dev-mcp-connector/connector-token-admin-secret # optional
-seagull-dev-mcp-connector/dev-token                    # optional
+AGENT_WEBHOOK_SIGNING_SECRET
+SAFETY_GATEWAY_ADMIN_SECRET  # optional; CI falls back to AGENT_WEBHOOK_SIGNING_SECRET
+AI_PROVIDER_ADMIN_SECRET     # optional; CI falls back to MCP_CONNECTOR_ADMIN_SECRET
+MCP_CONNECTOR_ADMIN_SECRET   # optional
+MCP_DEV_TOKEN                # optional
 ```
 
 From the repository root:
@@ -128,9 +127,8 @@ GET  /audit
 ```
 
 Set `SAFETY_GATEWAY_ADMIN_SECRET` when running `make aws-dev-safety-smoke`
-against a deployed gateway. The stack creates the
-`seagull-dev-safety-gateway/admin-secret` Secrets Manager secret; populate it
-after apply and pass the same value to the smoke script.
+against a deployed gateway. Use the same value passed to Terraform for
+`safety_gateway_admin_secret`.
 
 The social smoke command calls:
 

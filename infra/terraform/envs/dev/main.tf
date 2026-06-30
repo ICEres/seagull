@@ -145,7 +145,6 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:PutItem",
           "dynamodb:Query",
           "dynamodb:Scan",
-          "dynamodb:TransactWriteItems",
           "dynamodb:UpdateItem"
         ]
         Resource = local.message_hub_storage_resources

@@ -530,25 +530,27 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         for recipient in recipients
     ]
 
-    try:
-        persist_message_transaction(
-            message=message,
-            thread=thread,
-            existing_thread=existing_thread,
-            deliveries=deliveries,
-            sender_agent_id=sender["agent_id"],
-            idempotency_key=idempotency_key,
-            participant_agent_ids=[sender["agent_id"], *recipient_agent_ids],
-            now=now,
-        )
-    except ClientError as exc:
-        if is_conditional_check_failed(exc) and idempotency_key:
-            existing_message_id = get_idempotent_message_id(sender["agent_id"], idempotency_key)
-            if existing_message_id is not None:
-                return response(200, send_result(existing_message_id, idempotent=True))
-        raise
+    messages_table.put_item(Item=without_none(message), ConditionExpression="attribute_not_exists(message_id)")
+    if existing_thread is None:
+        threads_table.put_item(Item=thread, ConditionExpression="attribute_not_exists(thread_id)")
+    else:
+        update_existing_thread(thread_id, message_id, now, [sender["agent_id"], *recipient_agent_ids])
+
+    for delivery in deliveries:
+        deliveries_table.put_item(Item=delivery, ConditionExpression="attribute_not_exists(delivery_id)")
 
     enqueue_delivery_events(deliveries, message, sender, recipients)
+
+    if idempotency_key:
+        idempotency_table.put_item(
+            Item={
+                "sender_agent_id": sender["agent_id"],
+                "idempotency_key": idempotency_key,
+                "message_id": message_id,
+                "created_at": now,
+                "expires_at": int(time.time()) + 604800,
+            }
+        )
 
     return response(
         201,
@@ -1988,98 +1990,6 @@ def get_thread_record(thread_id: str) -> dict[str, Any] | None:
     return threads_table.get_item(Key={"thread_id": thread_id}).get("Item")
 
 
-def persist_message_transaction(
-    *,
-    message: dict[str, Any],
-    thread: dict[str, Any],
-    existing_thread: dict[str, Any] | None,
-    deliveries: list[dict[str, Any]],
-    sender_agent_id: str,
-    idempotency_key: str | None,
-    participant_agent_ids: list[str],
-    now: str,
-) -> None:
-    actions = [
-        transact_put(
-            MESSAGES_TABLE,
-            without_none(message),
-            condition_expression="attribute_not_exists(message_id)",
-        )
-    ]
-    if existing_thread is None:
-        actions.append(
-            transact_put(
-                THREADS_TABLE,
-                thread,
-                condition_expression="attribute_not_exists(thread_id)",
-            )
-        )
-    else:
-        actions.append(
-            {
-                "Update": {
-                    "TableName": THREADS_TABLE,
-                    "Key": dynamodb_item({"thread_id": thread["thread_id"]}),
-                    "UpdateExpression": (
-                        "SET last_message_id = :message_id, last_message_at = :last_message_at, "
-                        "updated_at = :updated_at ADD message_count :one, participants :participants"
-                    ),
-                    "ExpressionAttributeValues": {
-                        ":message_id": dynamodb_attribute(message["message_id"]),
-                        ":last_message_at": dynamodb_attribute(now),
-                        ":updated_at": dynamodb_attribute(now),
-                        ":one": dynamodb_attribute(1),
-                        ":participants": dynamodb_attribute(set(participant_agent_ids)),
-                    },
-                    "ConditionExpression": "attribute_exists(thread_id)",
-                }
-            }
-        )
-
-    actions.extend(
-        transact_put(
-            DELIVERIES_TABLE,
-            delivery,
-            condition_expression="attribute_not_exists(delivery_id)",
-        )
-        for delivery in deliveries
-    )
-
-    if idempotency_key:
-        actions.append(
-            transact_put(
-                IDEMPOTENCY_TABLE,
-                {
-                    "sender_agent_id": sender_agent_id,
-                    "idempotency_key": idempotency_key,
-                    "message_id": message["message_id"],
-                    "created_at": now,
-                    "expires_at": int(time.time()) + 604800,
-                },
-                condition_expression=(
-                    "attribute_not_exists(sender_agent_id) AND attribute_not_exists(idempotency_key)"
-                ),
-            )
-        )
-
-    dynamodb.meta.client.transact_write_items(TransactItems=actions)
-
-
-def transact_put(
-    table_name: str,
-    item: dict[str, Any],
-    *,
-    condition_expression: str | None = None,
-) -> dict[str, Any]:
-    put: dict[str, Any] = {
-        "TableName": table_name,
-        "Item": dynamodb_item(item),
-    }
-    if condition_expression is not None:
-        put["ConditionExpression"] = condition_expression
-    return {"Put": put}
-
-
 def update_existing_thread(
     thread_id: str,
     message_id: str,
@@ -2693,38 +2603,6 @@ def private_context_ref(ref: dict[str, Any]) -> bool:
 def private_context_value(*values: str) -> bool:
     normalized = " ".join(values).lower()
     return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
-
-
-def dynamodb_item(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: dynamodb_attribute(value) for key, value in item.items() if value is not None}
-
-
-def dynamodb_attribute(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {"NULL": True}
-    if isinstance(value, bool):
-        return {"BOOL": value}
-    if isinstance(value, str):
-        return {"S": value}
-    if isinstance(value, (int, Decimal)):
-        return {"N": str(value)}
-    if isinstance(value, float):
-        return {"N": str(Decimal(str(value)))}
-    if isinstance(value, set):
-        return {"SS": sorted(str(item) for item in value)}
-    if isinstance(value, (list, tuple)):
-        return {"L": [dynamodb_attribute(item) for item in value]}
-    if isinstance(value, dict):
-        return {"M": dynamodb_item(value)}
-    raise TypeError(f"unsupported DynamoDB attribute type: {type(value).__name__}")
-
-
-def is_conditional_check_failed(exc: ClientError) -> bool:
-    code = exc.response.get("Error", {}).get("Code")
-    if code in {"ConditionalCheckFailedException", "TransactionCanceledException"}:
-        return True
-    reasons = exc.response.get("CancellationReasons", [])
-    return any(reason.get("Code") == "ConditionalCheckFailed" for reason in reasons)
 
 
 def without_none(item: dict[str, Any]) -> dict[str, Any]:

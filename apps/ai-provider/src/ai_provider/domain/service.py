@@ -27,7 +27,7 @@ from ai_provider.domain.models import (
     utc_now,
 )
 from ai_provider.providers.base import AiProviderAdapter
-from ai_provider.storage.repository import AiProviderRepository
+from ai_provider.storage.repository import AiProviderRepository, InsufficientCreditBalanceError
 
 
 IdFactory = Callable[[str], str]
@@ -160,7 +160,14 @@ class AiProviderService:
         if actual_credit_reason is not None:
             return self._deny(run, actual_credit_reason, usage_id=usage.usage_id)
 
-        self._charge_user_credits(run, usage)
+        try:
+            self._charge_user_credits(run, usage)
+        except InsufficientCreditBalanceError:
+            return self._deny(
+                run,
+                f"insufficient user credits for actual usage on {run.run_id}",
+                usage_id=usage.usage_id,
+            )
 
         output_safety_reason = self._output_safety_reason(response)
         if output_safety_reason is not None:
@@ -221,7 +228,6 @@ class AiProviderService:
             reason=normalized_reason,
             created_at=self._clock(),
         )
-        self._repository.append_user_credit_ledger_entry(entry)
         server_entry = ServerCreditLedgerEntry(
             entry_id=self._new_id("server_credit"),
             entry_type=ServerCreditLedgerEntryType.USER_CREDIT_GRANT,
@@ -232,7 +238,14 @@ class AiProviderService:
             user_credit_entry_id=entry.entry_id,
             created_at=self._clock(),
         )
-        self._repository.append_server_credit_ledger_entry(server_entry)
+        try:
+            self._repository.transfer_server_credits_to_user(
+                entry,
+                server_entry,
+                minimum_server_available_balance=credit_amount,
+            )
+        except InsufficientCreditBalanceError as exc:
+            raise InvalidAiRunError("insufficient server credits for user grant") from exc
         self._append_admin_audit_event(
             admin_actor_id=normalized_admin_actor_id,
             action="ai.user_credit_grant",
@@ -274,9 +287,7 @@ class AiProviderService:
         return entry
 
     def get_server_credit_balance(self) -> ServerCreditBalance:
-        return ServerCreditBalance(
-            available_credits=sum(entry.credit_delta for entry in self._repository.list_server_credit_ledger())
-        )
+        return ServerCreditBalance(available_credits=self._repository.get_server_credit_balance())
 
     def list_server_credit_ledger(self) -> tuple[ServerCreditLedgerEntry, ...]:
         return self._repository.list_server_credit_ledger()
@@ -285,10 +296,7 @@ class AiProviderService:
         normalized_owner_user_id = normalized_required(owner_user_id, "owner_user_id")
         return UserCreditBalance(
             owner_user_id=normalized_owner_user_id,
-            available_credits=sum(
-                entry.credit_delta
-                for entry in self._repository.list_user_credit_ledger_by_owner(normalized_owner_user_id)
-            ),
+            available_credits=self._repository.get_user_credit_balance(normalized_owner_user_id),
         )
 
     def list_user_credit_ledger(self, owner_user_id: str) -> tuple[UserCreditLedgerEntry, ...]:
@@ -487,7 +495,10 @@ class AiProviderService:
             usage_id=usage.usage_id,
             created_at=self._clock(),
         )
-        self._repository.append_user_credit_ledger_entry(entry)
+        self._repository.append_user_credit_ledger_entry(
+            entry,
+            minimum_available_balance=cost,
+        )
         return entry
 
     def _deny(self, run: AiRun, reason: str, *, usage_id: str | None = None) -> AiRun:

@@ -20,6 +20,11 @@ from ai_provider.domain.models import (
     UserCreditLedgerEntry,
     UserCreditLedgerEntryType,
 )
+from ai_provider.storage.repository import InsufficientCreditBalanceError
+
+
+SERVER_BALANCE_ENTRY_ID = "balance#server"
+USER_BALANCE_ENTRY_PREFIX = "balance#user#"
 
 
 class DynamoDbAiProviderRepository:
@@ -105,8 +110,32 @@ class DynamoDbAiProviderRepository:
         )
         return tuple(item_to_usage_record(item) for item in result.get("Items", []))
 
-    def append_user_credit_ledger_entry(self, entry: UserCreditLedgerEntry) -> None:
-        self._user_credit_ledger_table.put_item(Item=user_credit_ledger_entry_to_item(entry))
+    def append_user_credit_ledger_entry(
+        self,
+        entry: UserCreditLedgerEntry,
+        *,
+        minimum_available_balance: int = 0,
+    ) -> None:
+        try:
+            self._transact_write(
+                [
+                    balance_update(
+                        table=self._user_credit_ledger_table,
+                        key={"entry_id": user_credit_balance_entry_id(entry.owner_user_id)},
+                        delta=entry.credit_delta,
+                        minimum_available_balance=minimum_available_balance,
+                    ),
+                    put_action(
+                        table=self._user_credit_ledger_table,
+                        item=user_credit_ledger_entry_to_item(entry),
+                        condition_expression="attribute_not_exists(entry_id)",
+                    ),
+                ]
+            )
+        except Exception as exc:
+            if is_conditional_check_failed(exc):
+                raise InsufficientCreditBalanceError("insufficient user credits") from exc
+            raise
 
     def list_user_credit_ledger_by_owner(self, owner_user_id: str) -> tuple[UserCreditLedgerEntry, ...]:
         result = self._user_credit_ledger_table.query(
@@ -114,19 +143,103 @@ class DynamoDbAiProviderRepository:
             KeyConditionExpression=Key("owner_user_id").eq(owner_user_id),
             ScanIndexForward=True,
         )
-        return tuple(item_to_user_credit_ledger_entry(item) for item in result.get("Items", []))
+        return tuple(
+            item_to_user_credit_ledger_entry(item)
+            for item in result.get("Items", [])
+            if "entry_type" in item
+        )
 
-    def append_server_credit_ledger_entry(self, entry: ServerCreditLedgerEntry) -> None:
-        self._server_credit_ledger_table.put_item(Item=server_credit_ledger_entry_to_item(entry))
+    def get_user_credit_balance(self, owner_user_id: str) -> int:
+        item = self._user_credit_ledger_table.get_item(
+            Key={"entry_id": user_credit_balance_entry_id(owner_user_id)}
+        ).get("Item")
+        if item is not None and "available_credits" in item:
+            return int_value(item["available_credits"])
+        return sum(entry.credit_delta for entry in self.list_user_credit_ledger_by_owner(owner_user_id))
+
+    def append_server_credit_ledger_entry(
+        self,
+        entry: ServerCreditLedgerEntry,
+        *,
+        minimum_available_balance: int = 0,
+    ) -> None:
+        try:
+            self._transact_write(
+                [
+                    balance_update(
+                        table=self._server_credit_ledger_table,
+                        key={"entry_id": SERVER_BALANCE_ENTRY_ID},
+                        delta=entry.credit_delta,
+                        minimum_available_balance=minimum_available_balance,
+                    ),
+                    put_action(
+                        table=self._server_credit_ledger_table,
+                        item=server_credit_ledger_entry_to_item(entry),
+                        condition_expression="attribute_not_exists(entry_id)",
+                    ),
+                ]
+            )
+        except Exception as exc:
+            if is_conditional_check_failed(exc):
+                raise InsufficientCreditBalanceError("insufficient server credits") from exc
+            raise
 
     def list_server_credit_ledger(self) -> tuple[ServerCreditLedgerEntry, ...]:
         result = self._server_credit_ledger_table.scan()
         return tuple(
             sorted(
-                (item_to_server_credit_ledger_entry(item) for item in result.get("Items", [])),
+                (
+                    item_to_server_credit_ledger_entry(item)
+                    for item in result.get("Items", [])
+                    if "entry_type" in item
+                ),
                 key=lambda entry: entry.created_at,
             )
         )
+
+    def get_server_credit_balance(self) -> int:
+        item = self._server_credit_ledger_table.get_item(Key={"entry_id": SERVER_BALANCE_ENTRY_ID}).get("Item")
+        if item is not None and "available_credits" in item:
+            return int_value(item["available_credits"])
+        return sum(entry.credit_delta for entry in self.list_server_credit_ledger())
+
+    def transfer_server_credits_to_user(
+        self,
+        user_entry: UserCreditLedgerEntry,
+        server_entry: ServerCreditLedgerEntry,
+        *,
+        minimum_server_available_balance: int,
+    ) -> None:
+        try:
+            self._transact_write(
+                [
+                    balance_update(
+                        table=self._server_credit_ledger_table,
+                        key={"entry_id": SERVER_BALANCE_ENTRY_ID},
+                        delta=server_entry.credit_delta,
+                        minimum_available_balance=minimum_server_available_balance,
+                    ),
+                    put_action(
+                        table=self._server_credit_ledger_table,
+                        item=server_credit_ledger_entry_to_item(server_entry),
+                        condition_expression="attribute_not_exists(entry_id)",
+                    ),
+                    balance_update(
+                        table=self._user_credit_ledger_table,
+                        key={"entry_id": user_credit_balance_entry_id(user_entry.owner_user_id)},
+                        delta=user_entry.credit_delta,
+                    ),
+                    put_action(
+                        table=self._user_credit_ledger_table,
+                        item=user_credit_ledger_entry_to_item(user_entry),
+                        condition_expression="attribute_not_exists(entry_id)",
+                    ),
+                ]
+            )
+        except Exception as exc:
+            if is_conditional_check_failed(exc):
+                raise InsufficientCreditBalanceError("insufficient server credits") from exc
+            raise
 
     def put_provider_config(self, config: ProviderConfig) -> None:
         self._provider_configs_table.put_item(Item=provider_config_to_item(config))
@@ -172,6 +285,9 @@ class DynamoDbAiProviderRepository:
             ScanIndexForward=True,
         )
         return tuple(item_to_budget_limit(item) for item in result.get("Items", []))
+
+    def _transact_write(self, actions: list[dict[str, Any]]) -> None:
+        self._user_credit_ledger_table.meta.client.transact_write_items(TransactItems=actions)
 
 
 def run_to_item(run: AiRun) -> dict[str, Any]:
@@ -460,6 +576,83 @@ def int_value(value: Any) -> int:
     if isinstance(value, Decimal):
         return int(value)
     return int(value)
+
+
+def user_credit_balance_entry_id(owner_user_id: str) -> str:
+    return f"{USER_BALANCE_ENTRY_PREFIX}{owner_user_id}"
+
+
+def put_action(
+    *,
+    table: Any,
+    item: dict[str, Any],
+    condition_expression: str | None = None,
+) -> dict[str, Any]:
+    action: dict[str, Any] = {
+        "Put": {
+            "TableName": table.name,
+            "Item": dynamodb_item(item),
+        }
+    }
+    if condition_expression is not None:
+        action["Put"]["ConditionExpression"] = condition_expression
+    return action
+
+
+def balance_update(
+    *,
+    table: Any,
+    key: dict[str, Any],
+    delta: int,
+    minimum_available_balance: int = 0,
+) -> dict[str, Any]:
+    update: dict[str, Any] = {
+        "TableName": table.name,
+        "Key": dynamodb_item(key),
+        "UpdateExpression": "ADD available_credits :delta",
+        "ExpressionAttributeValues": {
+            ":delta": dynamodb_attribute(delta),
+        },
+    }
+    if minimum_available_balance > 0:
+        update["ConditionExpression"] = "available_credits >= :minimum_available_balance"
+        update["ExpressionAttributeValues"][":minimum_available_balance"] = dynamodb_attribute(
+            minimum_available_balance
+        )
+    return {"Update": update}
+
+
+def dynamodb_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: dynamodb_attribute(value) for key, value in item.items() if value is not None}
+
+
+def dynamodb_attribute(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"NULL": True}
+    if isinstance(value, bool):
+        return {"BOOL": value}
+    if isinstance(value, str):
+        return {"S": value}
+    if isinstance(value, (int, Decimal)):
+        return {"N": str(value)}
+    if isinstance(value, float):
+        return {"N": str(Decimal(str(value)))}
+    if isinstance(value, set):
+        return {"SS": sorted(str(item) for item in value)}
+    if isinstance(value, (list, tuple)):
+        return {"L": [dynamodb_attribute(item) for item in value]}
+    if isinstance(value, dict):
+        return {"M": dynamodb_item(value)}
+    raise TypeError(f"unsupported DynamoDB attribute type: {type(value).__name__}")
+
+
+def is_conditional_check_failed(exc: Exception) -> bool:
+    response = getattr(exc, "response", {})
+    code = response.get("Error", {}).get("Code")
+    if code in {"ConditionalCheckFailedException", "TransactionCanceledException"}:
+        return True
+    reasons = response.get("CancellationReasons", [])
+    return any(reason.get("Code") == "ConditionalCheckFailed" for reason in reasons)
 
 
 def without_none(item: dict[str, Any]) -> dict[str, Any]:

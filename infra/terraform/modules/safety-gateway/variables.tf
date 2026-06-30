@@ -36,3 +36,33 @@ variable "lambda_source_code_hash" {
   type        = string
   description = "Base64-encoded source hash for the safety gateway Lambda package."
 }
+
+variable "admin_secret_arn" {
+  type        = string
+  description = "Optional Secrets Manager ARN containing the Safety Gateway shared secret."
+  default     = ""
+}
+
+variable "lambda_kms_key_arn" {
+  type        = string
+  description = "Optional KMS key ARN used for Lambda environment encryption."
+  default     = ""
+}
+
+variable "api_throttling_burst_limit" {
+  type        = number
+  description = "Default API Gateway burst throttle for the Safety Gateway HTTP API."
+  default     = 100
+}
+
+variable "api_throttling_rate_limit" {
+  type        = number
+  description = "Default API Gateway steady-state requests per second for the Safety Gateway HTTP API."
+  default     = 50
+}
+
+variable "access_log_retention_days" {
+  type        = number
+  description = "Retention in days for Safety Gateway API Gateway access logs."
+  default     = 30
+}

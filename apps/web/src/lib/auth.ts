@@ -86,7 +86,10 @@ export function authConfigFromRuntime(
   };
 }
 
-export function loadAuthSession(storage: Storage = window.localStorage): AuthSession | null {
+export function loadAuthSession(storage: Storage = window.sessionStorage): AuthSession | null {
+  if (storage === window.sessionStorage) {
+    window.localStorage.removeItem(SESSION_KEY);
+  }
   const stored = storage.getItem(SESSION_KEY);
   if (!stored) {
     return null;
@@ -99,7 +102,7 @@ export function loadAuthSession(storage: Storage = window.localStorage): AuthSes
     return {
       accessToken: parsed.accessToken,
       idToken: parsed.idToken ?? null,
-      refreshToken: parsed.refreshToken ?? null,
+      refreshToken: null,
       tokenType: parsed.tokenType,
       expiresAt: parsed.expiresAt,
     };
@@ -108,13 +111,16 @@ export function loadAuthSession(storage: Storage = window.localStorage): AuthSes
   }
 }
 
-export function saveAuthSession(session: AuthSession, storage: Storage = window.localStorage): void {
-  storage.setItem(SESSION_KEY, JSON.stringify(session));
+export function saveAuthSession(session: AuthSession, storage: Storage = window.sessionStorage): void {
+  window.localStorage.removeItem(SESSION_KEY);
+  storage.setItem(SESSION_KEY, JSON.stringify({ ...session, refreshToken: null }));
 }
 
-export function clearAuthSession(storage: Storage = window.localStorage): void {
+export function clearAuthSession(storage: Storage = window.sessionStorage): void {
   storage.removeItem(SESSION_KEY);
   storage.removeItem(PENDING_KEY);
+  window.localStorage.removeItem(SESSION_KEY);
+  window.localStorage.removeItem(PENDING_KEY);
 }
 
 export function isSessionActive(session: AuthSession | null, now = Date.now()): boolean {
@@ -170,7 +176,7 @@ export async function completeHostedCallback(
   const session: AuthSession = {
     accessToken: payload.access_token,
     idToken: payload.id_token ?? null,
-    refreshToken: payload.refresh_token ?? null,
+    refreshToken: null,
     tokenType: payload.token_type ?? "Bearer",
     expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000,
   };
@@ -217,11 +223,12 @@ export function parseAuthCallbackUrl(url: string): {
   };
 }
 
-function savePendingLogin(pending: PendingLogin, storage: Storage = window.localStorage): void {
+function savePendingLogin(pending: PendingLogin, storage: Storage = window.sessionStorage): void {
+  window.localStorage.removeItem(PENDING_KEY);
   storage.setItem(PENDING_KEY, JSON.stringify(pending));
 }
 
-function loadPendingLogin(storage: Storage = window.localStorage): PendingLogin | null {
+function loadPendingLogin(storage: Storage = window.sessionStorage): PendingLogin | null {
   const stored = storage.getItem(PENDING_KEY);
   if (!stored) {
     return null;
@@ -241,8 +248,9 @@ function loadPendingLogin(storage: Storage = window.localStorage): PendingLogin 
   }
 }
 
-function clearPendingLogin(storage: Storage = window.localStorage): void {
+function clearPendingLogin(storage: Storage = window.sessionStorage): void {
   storage.removeItem(PENDING_KEY);
+  window.localStorage.removeItem(PENDING_KEY);
 }
 
 function randomBase64Url(byteLength: number): string {

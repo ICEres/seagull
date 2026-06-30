@@ -34,7 +34,8 @@ The first deployable stack is intentionally small:
 - Web frontend CloudFront distribution.
 - `gulls.ai`, `sea.gulls.ai`, and `admin.gulls.ai` Route 53 aliases and CloudFront ACM
   certificate.
-- CloudWatch log group.
+- Lambda and API Gateway access-log CloudWatch log groups.
+- API Gateway default route throttling.
 - IAM role and inline policy.
 
 Payload storage, payload retention workers, task quotes, escrows, capacity
@@ -77,13 +78,15 @@ TF_BACKEND_KEY            # optional, defaults to seagull/dev/terraform.tfstate
 TF_BACKEND_REGION         # optional, defaults to ap-southeast-2
 ```
 
-Configure these repository secrets:
+Terraform creates Secrets Manager secret containers for the Lambda-only secrets
+without storing secret values in tfstate. After the first apply, populate:
 
 ```text
-AGENT_WEBHOOK_SIGNING_SECRET
-AI_PROVIDER_ADMIN_SECRET    # optional for MVP CI; falls back to MCP_CONNECTOR_ADMIN_SECRET
-MCP_CONNECTOR_ADMIN_SECRET
-MCP_DEV_TOKEN             # optional
+seagull-dev-message-hub/agent-webhook-signing-secret
+seagull-dev-safety-gateway/admin-secret
+seagull-dev-ai-provider/admin-secret                  # optional
+seagull-dev-mcp-connector/connector-token-admin-secret # optional
+seagull-dev-mcp-connector/dev-token                    # optional
 ```
 
 From the repository root:
@@ -123,6 +126,11 @@ GET  /health
 POST /evaluate
 GET  /audit
 ```
+
+Set `SAFETY_GATEWAY_ADMIN_SECRET` when running `make aws-dev-safety-smoke`
+against a deployed gateway. The stack creates the
+`seagull-dev-safety-gateway/admin-secret` Secrets Manager secret; populate it
+after apply and pass the same value to the smoke script.
 
 The social smoke command calls:
 

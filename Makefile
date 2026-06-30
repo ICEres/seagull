@@ -117,7 +117,12 @@ aws-dev-destroy:
 	terraform -chdir=infra/terraform/envs/dev destroy
 
 domain-init:
-	terraform -chdir=infra/terraform/envs/domain init
+	@if [ -f infra/terraform/envs/domain/backend.hcl ]; then \
+		terraform -chdir=infra/terraform/envs/domain init -backend-config=backend.hcl; \
+	else \
+		echo "infra/terraform/envs/domain/backend.hcl is required for remote state"; \
+		exit 1; \
+	fi
 
 domain-plan:
 	terraform -chdir=infra/terraform/envs/domain plan

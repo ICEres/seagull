@@ -13,6 +13,8 @@ AUTH_TOKEN="${SOCIAL_API_BEARER_TOKEN:-${SOCIAL_API_TOKEN:-}}"
 AUTH_CURL_ARGS=()
 if [ -n "$AUTH_TOKEN" ]; then
   AUTH_CURL_ARGS=(-H "authorization: Bearer $AUTH_TOKEN")
+elif [ -n "${SOCIAL_AUTH_BYPASS_SECRET:-}" ]; then
+  AUTH_CURL_ARGS=(-H "x-seagull-auth-bypass-secret: $SOCIAL_AUTH_BYPASS_SECRET")
 fi
 
 mkdir -p .local

@@ -15,6 +15,10 @@ from ai_provider.domain.models import (
 )
 
 
+class InsufficientCreditBalanceError(Exception):
+    """Raised when an atomic credit ledger write would overdraw a balance."""
+
+
 class AiProviderRepository(Protocol):
     def put_run(self, run: AiRun) -> None:
         """Create or replace an AI run."""
@@ -43,17 +47,42 @@ class AiProviderRepository(Protocol):
     def list_usage_by_agent(self, agent_id: str) -> tuple[UsageRecord, ...]:
         """Return usage records for one agent."""
 
-    def append_user_credit_ledger_entry(self, entry: UserCreditLedgerEntry) -> None:
+    def append_user_credit_ledger_entry(
+        self,
+        entry: UserCreditLedgerEntry,
+        *,
+        minimum_available_balance: int = 0,
+    ) -> None:
         """Append a human user credit ledger entry."""
 
     def list_user_credit_ledger_by_owner(self, owner_user_id: str) -> tuple[UserCreditLedgerEntry, ...]:
         """Return user credit ledger entries for one owner."""
 
-    def append_server_credit_ledger_entry(self, entry: ServerCreditLedgerEntry) -> None:
+    def get_user_credit_balance(self, owner_user_id: str) -> int:
+        """Return a human user's available credit balance."""
+
+    def append_server_credit_ledger_entry(
+        self,
+        entry: ServerCreditLedgerEntry,
+        *,
+        minimum_available_balance: int = 0,
+    ) -> None:
         """Append a server owner credit ledger entry."""
 
     def list_server_credit_ledger(self) -> tuple[ServerCreditLedgerEntry, ...]:
         """Return server credit ledger entries."""
+
+    def get_server_credit_balance(self) -> int:
+        """Return the server credit pool's available balance."""
+
+    def transfer_server_credits_to_user(
+        self,
+        user_entry: UserCreditLedgerEntry,
+        server_entry: ServerCreditLedgerEntry,
+        *,
+        minimum_server_available_balance: int,
+    ) -> None:
+        """Atomically move credits from the server pool into a user ledger."""
 
     def put_provider_config(self, config: ProviderConfig) -> None:
         """Create or replace a provider config."""

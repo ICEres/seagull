@@ -27,6 +27,24 @@ variable "dynamodb_kms_key_arn" {
   default     = ""
 }
 
+variable "api_throttling_burst_limit" {
+  type        = number
+  description = "Default API Gateway burst throttle for the message router WebSocket API."
+  default     = 100
+}
+
+variable "api_throttling_rate_limit" {
+  type        = number
+  description = "Default API Gateway steady-state messages per second for the message router WebSocket API."
+  default     = 50
+}
+
+variable "access_log_retention_days" {
+  type        = number
+  description = "Retention in days for message router API Gateway access logs."
+  default     = 30
+}
+
 variable "lambda_package_path" {
   type        = string
   description = "Path to the zipped message router Lambda package."

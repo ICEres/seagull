@@ -122,6 +122,7 @@ afterEach(async () => {
   }
   document.body.innerHTML = "";
   window.localStorage.clear();
+  window.sessionStorage.clear();
   window.SEAGULL_CONFIG = undefined;
   vi.restoreAllMocks();
 });
@@ -346,7 +347,7 @@ describe("App dashboard", () => {
         logoutUri: "https://app.example.test/register",
       },
     };
-    window.localStorage.setItem(
+    window.sessionStorage.setItem(
       "seagull.web.auth.pending",
       JSON.stringify({ state: "state_1", codeVerifier: "verifier_1", createdAt: 1 }),
     );
@@ -377,7 +378,7 @@ describe("App dashboard", () => {
     const container = renderApp("/auth/callback?code=code_1&state=state_1");
     await waitForText(container, "Recent social activity");
 
-    const session = JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}");
+    const session = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.session") ?? "{}");
     expect(session.accessToken).toBe("access_1");
 
     const fetchMock = vi.mocked(fetch);
@@ -405,7 +406,7 @@ describe("App dashboard", () => {
         logoutUri: "https://app.example.test/register",
       },
     };
-    window.localStorage.setItem(
+    window.sessionStorage.setItem(
       "seagull.web.auth.session",
       JSON.stringify({
         accessToken: "admin-access-token",

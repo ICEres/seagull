@@ -310,22 +310,41 @@ def normalize_optional_handles(handles: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def response_to_lambda(response: HttpResponse) -> dict[str, Any]:
+def response_to_lambda(
+    response: HttpResponse,
+    *,
+    request_origin: str | None = None,
+    allowed_origins: tuple[str, ...] = ("*",),
+) -> dict[str, Any]:
     headers = {
         "cache-control": "no-store",
         "content-type": "application/json",
-        **cors_headers(),
+        **cors_headers(request_origin=request_origin, allowed_origins=allowed_origins),
         **(response.headers or {}),
     }
     body = response.body if isinstance(response.body, str) else json.dumps(response.body, separators=(",", ":"), default=str)
     return {"statusCode": response.status_code, "headers": headers, "body": body}
 
 
-def cors_headers() -> dict[str, str]:
+def cors_headers(
+    *,
+    request_origin: str | None = None,
+    allowed_origins: tuple[str, ...] = ("*",),
+) -> dict[str, str]:
+    allow_origin = allowed_origin_for(request_origin=request_origin, allowed_origins=allowed_origins)
     return {
-        "access-control-allow-origin": "*",
+        "access-control-allow-origin": allow_origin,
         "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
         "access-control-allow-headers": (
             "authorization,content-type,mcp-protocol-version,mcp-session-id,x-seagull-admin-secret"
         ),
     }
+
+
+def allowed_origin_for(*, request_origin: str | None, allowed_origins: tuple[str, ...]) -> str:
+    normalized = tuple(origin.strip() for origin in allowed_origins if origin.strip())
+    if not normalized or "*" in normalized:
+        return "*"
+    if request_origin in normalized:
+        return request_origin
+    return normalized[0]

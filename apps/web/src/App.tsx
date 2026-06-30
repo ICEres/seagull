@@ -155,6 +155,7 @@ export default function App() {
     if (authConfig.mode === "cognito" && authSession && !isSessionActive(authSession)) {
       clearAuthSession();
       setAuthSession(null);
+      setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
     }
   }, [authConfig.mode, authSession]);
 

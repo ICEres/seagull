@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from typing import Any
 
@@ -19,6 +20,32 @@ def bool_env(name: str) -> bool:
 
 def csv_env(name: str) -> tuple[str, ...]:
     return tuple(value.strip() for value in os.environ.get(name, "").split(",") if value.strip())
+
+
+def secret_env(name: str) -> str | None:
+    direct = os.environ.get(name, "").strip()
+    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
+    if direct:
+        return direct
+    if not secret_arn:
+        return None
+    try:
+        result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
+        return None
+    secret = result.get("SecretString")
+    if isinstance(secret, str):
+        stripped = secret.strip()
+        return stripped or None
+    encoded = result.get("SecretBinary")
+    if isinstance(encoded, (bytes, bytearray)):
+        stripped = base64.b64decode(encoded).decode("utf-8").strip()
+        return stripped or None
+    if isinstance(encoded, str):
+        stripped = base64.b64decode(encoded).decode("utf-8").strip()
+        return stripped or None
+    return None
 
 
 CognitoConfig = tuple[str, str, str]
@@ -59,7 +86,7 @@ app = McpConnectorApp(
     seagull_client=client,
     resource_uri=os.environ.get("MCP_RESOURCE_URI", "https://mcp.gulls.ai/mcp"),
     authorization_server=os.environ.get("MCP_AUTHORIZATION_SERVER") or None,
-    dev_token=os.environ.get("MCP_DEV_TOKEN") or None,
+    dev_token=secret_env("MCP_DEV_TOKEN"),
     dev_owner_user_id=os.environ.get("MCP_DEV_OWNER_USER_ID", "user_dev"),
     dev_agent_handles=csv_env("MCP_DEV_AGENT_HANDLES"),
     no_auth_enabled=bool_env("MCP_NO_AUTH_ENABLED"),
@@ -68,7 +95,7 @@ app = McpConnectorApp(
     no_auth_scopes=csv_env("MCP_NO_AUTH_SCOPES") or ("agents:read",),
     cognito_resolver=cognito_resolver,
     oauth_proxy=oauth_proxy,
-    admin_secret=os.environ.get("CONNECTOR_TOKEN_ADMIN_SECRET") or None,
+    admin_secret=secret_env("CONNECTOR_TOKEN_ADMIN_SECRET"),
 )
 
 
@@ -80,4 +107,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     body = event.get("body")
     if body is not None and event.get("isBase64Encoded"):
         body = base64.b64decode(body).decode("utf-8")
-    return response_to_lambda(app.handle(method=method, path=path, headers=headers, body=body, query=query))
+    origin = headers.get("origin") or headers.get("Origin")
+    return response_to_lambda(
+        app.handle(method=method, path=path, headers=headers, body=body, query=query),
+        request_origin=origin,
+        allowed_origins=csv_env("MCP_CORS_ALLOWED_ORIGINS") or ("https://chatgpt.com", "https://chat.openai.com"),
+    )

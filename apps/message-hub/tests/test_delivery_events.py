@@ -255,6 +255,38 @@ class AgentWorkerTest(TestCase):
         self.assertEqual(1, delivery["retry_count"])
         self.assertIn("503", delivery["last_error"])
 
+    def test_worker_dispatches_to_vetted_resolved_ip(self) -> None:
+        worker = load_agent_worker()
+        calls: list[object] = []
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "webhook_url": "https://runner.example.com/seagull"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda endpoint, body, headers: calls.append(endpoint) or 204,
+            signing_secret="dev-secret",
+            resolve_host=lambda host, port: ["8.8.8.8"],
+        )
+
+        self.assertEqual(1, len(calls))
+        endpoint = calls[0]
+        self.assertEqual("8.8.8.8", endpoint.address)
+        self.assertEqual("runner.example.com", endpoint.host_header)
+        self.assertEqual("/seagull", endpoint.request_target)
+        self.assertEqual("sent", tables.deliveries.items["delivery_1"]["trigger_status"])
+
     def test_worker_blocks_metadata_webhook_url_without_dispatch(self) -> None:
         worker = load_agent_worker()
         calls: list[str] = []

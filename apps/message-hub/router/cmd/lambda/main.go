@@ -36,10 +36,11 @@ type handler struct {
 }
 
 type connectionRecord struct {
-	ConnectionID string `dynamodbav:"connection_id"`
-	AgentID      string `dynamodbav:"agent_id"`
-	ConnectedAt  string `dynamodbav:"connected_at"`
-	ExpiresAt    int64  `dynamodbav:"expires_at"`
+	ConnectionID string   `dynamodbav:"connection_id"`
+	AgentID      string   `dynamodbav:"agent_id"`
+	Scopes       []string `dynamodbav:"scopes"`
+	ConnectedAt  string   `dynamodbav:"connected_at"`
+	ExpiresAt    int64    `dynamodbav:"expires_at"`
 }
 
 type agentTokenRecord struct {
@@ -136,6 +137,7 @@ func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocket
 	record := connectionRecord{
 		ConnectionID: connectionID,
 		AgentID:      agentID,
+		Scopes:       tokenRecord.Scopes,
 		ConnectedAt:  now.Format(time.RFC3339),
 		ExpiresAt:    now.Add(connectionTTL).Unix(),
 	}
@@ -268,6 +270,30 @@ func (h handler) route(ctx context.Context, request events.APIGatewayWebsocketPr
 		})
 	}
 
+	connectionID := request.RequestContext.ConnectionID
+	if connectionID == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]any{
+			"error":   "bad_request",
+			"message": "connection id is required",
+		})
+	}
+	connection, found, err := h.connectionForID(ctx, connectionID)
+	if err != nil {
+		return serverError(err)
+	}
+	if !found {
+		return jsonResponse(http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "connection is not authenticated",
+		})
+	}
+	if err := authorizeRouteSender(route, connection); err != nil {
+		return jsonResponse(http.StatusForbidden, map[string]any{
+			"error":   "forbidden",
+			"message": err.Error(),
+		})
+	}
+
 	recipients := routecore.PlanRecipients(route.SenderAgentID, route.RecipientAgentIDs)
 	if len(recipients) == 0 {
 		return jsonResponse(http.StatusBadRequest, map[string]any{
@@ -322,6 +348,19 @@ func validateRoute(route routeRequest) error {
 	}
 	if route.SenderAgentID == "" {
 		return errors.New("sender_agent_id is required")
+	}
+	return nil
+}
+
+func authorizeRouteSender(route routeRequest, connection connectionRecord) error {
+	if strings.TrimSpace(connection.AgentID) == "" {
+		return errors.New("connection is not authenticated")
+	}
+	if route.SenderAgentID != connection.AgentID {
+		return errors.New("sender_agent_id does not match authenticated connection")
+	}
+	if !hasScope(connection.Scopes, "agent:post") {
+		return errors.New("missing agent token scope: agent:post")
 	}
 	return nil
 }
@@ -398,6 +437,26 @@ func (h handler) connectionIDsForAgent(ctx context.Context, agentID string) ([]s
 		connectionIDs = append(connectionIDs, value.Value)
 	}
 	return connectionIDs, nil
+}
+
+func (h handler) connectionForID(ctx context.Context, connectionID string) (connectionRecord, bool, error) {
+	result, err := h.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(h.connectionsTable),
+		Key: map[string]types.AttributeValue{
+			"connection_id": &types.AttributeValueMemberS{Value: connectionID},
+		},
+	})
+	if err != nil {
+		return connectionRecord{}, false, err
+	}
+	if result.Item == nil {
+		return connectionRecord{}, false, nil
+	}
+	var record connectionRecord
+	if err := attributevalue.UnmarshalMap(result.Item, &record); err != nil {
+		return connectionRecord{}, false, err
+	}
+	return record, true, nil
 }
 
 func (h handler) deleteConnection(ctx context.Context, connectionID string) error {

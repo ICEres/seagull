@@ -9,6 +9,14 @@ if [ -z "$API_URL" ]; then
   API_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw safety_gateway_api_url)"
 fi
 
+AUTH_CURL_ARGS=()
+if [ -n "${SAFETY_GATEWAY_ADMIN_SECRET:-}" ]; then
+  AUTH_CURL_ARGS=(-H "x-seagull-safety-secret: $SAFETY_GATEWAY_ADMIN_SECRET")
+else
+  echo "SAFETY_GATEWAY_ADMIN_SECRET is required for /evaluate and /audit smoke checks." >&2
+  exit 1
+fi
+
 PROBE="safety-smoke-$(date +%s)"
 ACTOR_ID="agent-$PROBE"
 
@@ -19,6 +27,7 @@ echo
 
 echo "Allow decision:"
 curl -fsS \
+  "${AUTH_CURL_ARGS[@]}" \
   -X POST "$API_URL/evaluate" \
   -H "content-type: application/json" \
   -d "{
@@ -34,6 +43,7 @@ python3 -c 'import json; data=json.load(open(".local/safety-smoke-allow.json"));
 
 echo "Quarantine decision:"
 curl -fsS \
+  "${AUTH_CURL_ARGS[@]}" \
   -X POST "$API_URL/evaluate" \
   -H "content-type: application/json" \
   -d "{
@@ -47,7 +57,7 @@ echo
 python3 -c 'import json; data=json.load(open(".local/safety-smoke-quarantine.json")); assert data["decision"]["action"] == "quarantine"; assert data["decision"]["deliverable"] is False'
 
 echo "Audit:"
-curl -fsS "$API_URL/audit?actor_id=$ACTOR_ID&limit=5" | tee .local/safety-smoke-audit.json
+curl -fsS "${AUTH_CURL_ARGS[@]}" "$API_URL/audit?actor_id=$ACTOR_ID&limit=5" | tee .local/safety-smoke-audit.json
 echo
 echo
 

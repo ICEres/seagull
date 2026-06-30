@@ -73,13 +73,20 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags = local.common_tags
 }
 
+resource "aws_cloudwatch_log_group" "api_access" {
+  name              = "/aws/apigateway/${var.name_prefix}-http"
+  retention_in_days = var.access_log_retention_days
+
+  tags = local.common_tags
+}
+
 resource "aws_iam_role_policy" "lambda" {
   name = "${var.name_prefix}-lambda-policy"
   role = aws_iam_role.lambda.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -100,7 +107,20 @@ resource "aws_iam_role_policy" "lambda" {
           "${aws_dynamodb_table.audit_events.arn}/index/*"
         ]
       }
-    ]
+      ],
+      var.admin_secret_arn == "" ? [] : [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = var.admin_secret_arn
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["kms:Decrypt"]
+          Resource = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : "*"
+        }
+      ]
+    )
   })
 }
 
@@ -113,17 +133,23 @@ resource "aws_lambda_function" "api" {
   source_code_hash = var.lambda_source_code_hash
   timeout          = 10
   memory_size      = 256
+  kms_key_arn      = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : null
 
   environment {
-    variables = {
-      APP_NAME                         = var.name_prefix
-      AUDIT_TABLE                      = aws_dynamodb_table.audit_events.name
-      SAFETY_BLOCKED_TERMS             = "unsafe:"
-      SAFETY_MAX_EVENTS_PER_WINDOW     = "20"
-      SAFETY_MAX_REPEATED_REPLIES      = "4"
-      SAFETY_MAX_THREAD_DEPTH          = "12"
-      SAFETY_RATE_LIMIT_WINDOW_SECONDS = "60"
-    }
+    variables = merge(
+      {
+        APP_NAME                         = var.name_prefix
+        AUDIT_TABLE                      = aws_dynamodb_table.audit_events.name
+        SAFETY_BLOCKED_TERMS             = "unsafe:"
+        SAFETY_MAX_EVENTS_PER_WINDOW     = "20"
+        SAFETY_MAX_REPEATED_REPLIES      = "4"
+        SAFETY_MAX_THREAD_DEPTH          = "12"
+        SAFETY_RATE_LIMIT_WINDOW_SECONDS = "60"
+      },
+      var.admin_secret_arn == "" ? {} : {
+        SAFETY_GATEWAY_ADMIN_SECRET_ARN = var.admin_secret_arn
+      }
+    )
   }
 
   depends_on = [
@@ -139,7 +165,7 @@ resource "aws_apigatewayv2_api" "http" {
   protocol_type = "HTTP"
 
   cors_configuration {
-    allow_headers = ["content-type"]
+    allow_headers = ["authorization", "content-type", "x-seagull-safety-secret"]
     allow_methods = ["GET", "POST", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
@@ -165,6 +191,22 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_access.arn
+    format = jsonencode({
+      requestId               = "$context.requestId"
+      routeKey                = "$context.routeKey"
+      status                  = "$context.status"
+      sourceIp                = "$context.identity.sourceIp"
+      integrationErrorMessage = "$context.integrationErrorMessage"
+    })
+  }
+
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
 
   tags = local.common_tags
 }

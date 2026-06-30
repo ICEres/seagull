@@ -37,10 +37,16 @@ variable "lambda_source_code_hash" {
   description = "Base64-encoded source hash for the AI provider Lambda package."
 }
 
-variable "admin_secret" {
+variable "admin_secret_arn" {
   type        = string
-  description = "Optional AI provider admin secret. Leave empty to require JWT admin claims."
-  sensitive   = true
+  description = "Optional Secrets Manager ARN containing the AI provider admin secret."
+  default     = ""
+}
+
+variable "lambda_kms_key_arn" {
+  type        = string
+  description = "Optional KMS key ARN used to encrypt Lambda environment variables."
+  default     = ""
 }
 
 variable "jwt_issuer" {
@@ -51,4 +57,22 @@ variable "jwt_issuer" {
 variable "jwt_audience" {
   type        = list(string)
   description = "JWT audiences accepted by the AI Provider JWT authorizer."
+}
+
+variable "api_throttling_burst_limit" {
+  type        = number
+  description = "Default API Gateway burst throttle for the AI Provider HTTP API."
+  default     = 100
+}
+
+variable "api_throttling_rate_limit" {
+  type        = number
+  description = "Default API Gateway steady-state requests per second for the AI Provider HTTP API."
+  default     = 50
+}
+
+variable "access_log_retention_days" {
+  type        = number
+  description = "Retention in days for AI Provider API Gateway access logs."
+  default     = 30
 }

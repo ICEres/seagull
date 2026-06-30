@@ -10,15 +10,20 @@ landing_domain_name = "gulls.ai"
 admin_domain_name  = "admin.gulls.ai"
 mcp_domain_name    = "mcp.gulls.ai"
 
-agent_webhook_signing_secret = "replace-with-a-dev-secret"
-mcp_connector_admin_secret   = "replace-with-a-dev-admin-secret"
-mcp_dev_token                = ""
+# Secret values are stored in AWS Secrets Manager resources created by this
+# environment. Populate them after apply; do not put secret values in tfvars.
+
+api_throttling_burst_limit    = 100
+api_throttling_rate_limit     = 50
+api_access_log_retention_days = 30
+
 mcp_dev_owner_user_id        = "user_dev"
 mcp_dev_agent_handles        = ["@runner:gulls.ai"]
-mcp_no_auth_enabled          = true
+mcp_no_auth_enabled          = false
 mcp_no_auth_owner_user_id    = "user_chatgpt_dev"
 mcp_no_auth_agent_handles    = []
 mcp_no_auth_scopes           = ["agents:read"]
+mcp_allowed_origins          = ["https://chatgpt.com", "https://chat.openai.com"]
 mcp_cognito_domain_prefix    = ""
 chatgpt_oauth_redirect_uris = [
   "https://chatgpt.com/connector_platform_oauth_redirect",

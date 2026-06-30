@@ -79,6 +79,13 @@ class FakeTable:
                 item["last_message_at"] = values[":last_message_at"]
             if ":one" in values:
                 item["message_count"] = int(item.get("message_count", 0)) + int(values[":one"])
+            if ":participants" in values:
+                current = item.get("participants", set())
+                if not isinstance(current, set):
+                    current = set(current) if isinstance(current, list) else set()
+                participants = values[":participants"]
+                if isinstance(participants, set):
+                    item["participants"] = current.union(participants)
 
     def _key_for(self, item: dict[str, object]) -> tuple[object, ...]:
         fields = self.PRIMARY_KEYS[self.name]
@@ -88,11 +95,61 @@ class FakeTable:
 class FakeDynamoDbResource:
     def __init__(self) -> None:
         self.tables: dict[str, FakeTable] = {}
+        self.meta = types.SimpleNamespace(client=FakeDynamoDbClient(self))
 
     def Table(self, table_name: str) -> FakeTable:
         if table_name not in self.tables:
             self.tables[table_name] = FakeTable(table_name)
         return self.tables[table_name]
+
+
+class FakeDynamoDbClient:
+    def __init__(self, resource: FakeDynamoDbResource) -> None:
+        self.resource = resource
+
+    def transact_write_items(self, *, TransactItems: list[dict[str, object]]) -> None:
+        for action in TransactItems:
+            put = action.get("Put")
+            if isinstance(put, dict):
+                table = self.resource.Table(str(put["TableName"]))
+                table.put_item(
+                    Item=decode_dynamodb_item(put["Item"]),  # type: ignore[arg-type]
+                    ConditionExpression=put.get("ConditionExpression"),  # type: ignore[arg-type]
+                )
+                continue
+            update = action.get("Update")
+            if isinstance(update, dict):
+                table = self.resource.Table(str(update["TableName"]))
+                values = update.get("ExpressionAttributeValues")
+                table.update_item(
+                    Key=decode_dynamodb_item(update["Key"]),  # type: ignore[arg-type]
+                    ExpressionAttributeValues=decode_dynamodb_item(values) if isinstance(values, dict) else {},
+                )
+
+
+def decode_dynamodb_item(item: dict[str, object]) -> dict[str, object]:
+    return {key: decode_dynamodb_attribute(value) for key, value in item.items()}
+
+
+def decode_dynamodb_attribute(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    if "S" in value:
+        return value["S"]
+    if "N" in value:
+        raw = str(value["N"])
+        return int(raw) if raw.isdigit() else raw
+    if "BOOL" in value:
+        return value["BOOL"]
+    if "NULL" in value:
+        return None
+    if "SS" in value:
+        return set(value["SS"])  # type: ignore[arg-type]
+    if "L" in value:
+        return [decode_dynamodb_attribute(item) for item in value["L"]]  # type: ignore[index]
+    if "M" in value:
+        return decode_dynamodb_item(value["M"])  # type: ignore[arg-type]
+    return value
 
 
 class FakeSqsClient:
@@ -159,6 +216,7 @@ def load_lambda_module(*, queue_url: str = "") -> tuple[types.ModuleType, FakeBo
         "IDEMPOTENCY_TABLE": "idempotency",
         "MESSAGES_TABLE": "messages",
         "MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES": "true",
+        "SAFETY_GATEWAY_ADMIN_SECRET": "safety-secret",
         "SAFETY_GATEWAY_URL": "https://safety.example.test",
         "TASK_RESULTS_TABLE": "task-results",
         "TASKS_TABLE": "tasks",
@@ -222,9 +280,11 @@ class SafetyGatewayStub:
     def __init__(self, *responses: dict[str, object]) -> None:
         self.responses = list(responses)
         self.requests: list[dict[str, object]] = []
+        self.headers: list[dict[str, str]] = []
 
     def __call__(self, request: object, timeout: float) -> FakeSafetyResponse:
         self.requests.append(json.loads(request.data.decode("utf-8")))  # type: ignore[attr-defined]
+        self.headers.append({key.lower(): value for key, value in request.header_items()})  # type: ignore[attr-defined]
         if not self.responses:
             raise AssertionError("unexpected safety gateway request")
         return FakeSafetyResponse(self.responses.pop(0))
@@ -275,6 +335,7 @@ class MessageHubLambdaSafetyGatewayTest(TestCase):
         self.assertEqual("message.send", safety.requests[0]["action_type"])
         self.assertEqual("hello", safety.requests[0]["content"])
         self.assertEqual([payload["deliveries"][0]["recipient_agent_id"]], safety.requests[0]["target_ids"])
+        self.assertEqual("safety-secret", safety.headers[0]["x-seagull-safety-secret"])
 
     def test_quarantine_decision_blocks_message_before_persistence(self) -> None:
         safety = SafetyGatewayStub(decision("decision_1", "quarantine", reasons=["prompt-injection pattern"]))

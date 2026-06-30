@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hmac
 import json
@@ -25,8 +27,29 @@ from ai_provider.providers import FakeProviderAdapter
 from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
 
 
+def secret_env(name: str) -> str:
+    direct = os.environ.get(name, "").strip()
+    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
+    if direct or not secret_arn:
+        return direct
+    try:
+        result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
+        return ""
+    secret = result.get("SecretString")
+    if isinstance(secret, str):
+        return secret.strip()
+    encoded = result.get("SecretBinary")
+    if isinstance(encoded, (bytes, bytearray)):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    if isinstance(encoded, str):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    return ""
+
+
 APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
-ADMIN_SECRET = os.environ.get("AI_PROVIDER_ADMIN_SECRET", "")
+ADMIN_SECRET = secret_env("AI_PROVIDER_ADMIN_SECRET")
 ADMIN_GROUPS = tuple(
     group.strip().casefold()
     for group in os.environ.get("AI_PROVIDER_ADMIN_GROUPS", "seagull-admin,server-owner,admin").split(",")

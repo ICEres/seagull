@@ -17,6 +17,7 @@ from seagull_mcp.client import SeagullHttpClient
 from seagull_mcp.cognito import CognitoJwtVerifier, CognitoPrincipalResolver
 from seagull_mcp.oauth_proxy import CognitoOAuthProxy
 from seagull_mcp.server import McpConnectorApp
+from seagull_mcp.server import allowed_origin_for
 
 
 class FakeSeagullClient:
@@ -319,6 +320,18 @@ class McpConnectorTest(TestCase):
 
         self.assertEqual(401, response.status_code)
         self.assertIn("WWW-Authenticate", response.headers or {})
+
+    def test_cors_origin_uses_configured_allowlist(self) -> None:
+        allowed_origins = ("https://chatgpt.com", "https://chat.openai.com")
+
+        self.assertEqual(
+            "https://chatgpt.com",
+            allowed_origin_for(request_origin="https://chatgpt.com", allowed_origins=allowed_origins),
+        )
+        self.assertEqual(
+            "https://chatgpt.com",
+            allowed_origin_for(request_origin="https://evil.example", allowed_origins=allowed_origins),
+        )
 
     def test_no_auth_dev_mode_connects_with_read_only_tool_list(self) -> None:
         app = McpConnectorApp(

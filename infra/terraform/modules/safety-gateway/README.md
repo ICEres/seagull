@@ -7,6 +7,8 @@ Current MVP resources:
 - API Gateway HTTP API.
 - Lambda function for policy evaluation.
 - DynamoDB table for safety audit events.
+- API Gateway access logs and default route throttling.
+- Shared-secret Lambda auth for evaluation and audit routes.
 
 Later resources:
 

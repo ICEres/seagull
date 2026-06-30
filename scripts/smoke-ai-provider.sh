@@ -9,7 +9,7 @@ if [ -z "$API_URL" ]; then
   API_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw ai_provider_api_url)"
 fi
 
-ADMIN_SECRET="${AI_PROVIDER_ADMIN_SECRET:-${TF_VAR_ai_provider_admin_secret:-}}"
+ADMIN_SECRET="${AI_PROVIDER_ADMIN_SECRET:-}"
 
 mkdir -p .local
 
@@ -22,7 +22,7 @@ python3 -c 'import json; data=json.load(open(".local/ai-provider-smoke-health.js
 
 if [ -z "$ADMIN_SECRET" ]; then
   echo "AI provider health smoke passed for $API_URL"
-  echo "Set AI_PROVIDER_ADMIN_SECRET or TF_VAR_ai_provider_admin_secret for credit/run smoke."
+  echo "Set AI_PROVIDER_ADMIN_SECRET for credit/run smoke."
   exit 0
 fi
 

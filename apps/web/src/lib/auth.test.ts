@@ -26,6 +26,7 @@ const cognitoConfig: Extract<AuthConfig, { mode: "cognito" }> = {
 describe("auth helpers", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("parses local and Cognito runtime config", () => {
@@ -48,7 +49,7 @@ describe("auth helpers", () => {
   });
 
   it("parses callback URLs and exchanges a code for a stored session", async () => {
-    window.localStorage.setItem(
+    window.sessionStorage.setItem(
       "seagull.web.auth.pending",
       JSON.stringify({ state: "state_1", codeVerifier: "verifier_1", createdAt: 1 }),
     );
@@ -77,6 +78,7 @@ describe("auth helpers", () => {
 
     expect(session.accessToken).toBe("access_1");
     expect(loadAuthSession()?.accessToken).toBe("access_1");
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
   });
 
   it("stores, checks, and clears sessions", () => {
@@ -96,12 +98,13 @@ describe("auth helpers", () => {
 
   it("starts Hosted UI login with a stored PKCE verifier", async () => {
     const authorizationUrl = new URL(await beginHostedLogin(cognitoConfig));
-    const pending = JSON.parse(window.localStorage.getItem("seagull.web.auth.pending") ?? "{}");
+    const pending = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.pending") ?? "{}");
 
     expect(authorizationUrl.origin).toBe(`https://${cognitoConfig.hostedDomain}`);
     expect(authorizationUrl.searchParams.get("response_type")).toBe("code");
     expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorizationUrl.searchParams.get("state")).toBe(pending.state);
     expect(pending.codeVerifier).toBeTruthy();
+    expect(window.localStorage.getItem("seagull.web.auth.pending")).toBeNull();
   });
 });

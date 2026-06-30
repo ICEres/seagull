@@ -1,22 +1,51 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import http.client
 import hmac
 import ipaddress
 import json
 import os
 import socket
+import ssl
 from datetime import datetime, timezone
 from typing import Any, Callable
-from urllib import error, request
 from urllib.parse import urlsplit
+
+
+def boto3_client(service_name: str) -> Any:
+    import boto3
+
+    return boto3.client(service_name)
+
+
+def secret_env(name: str) -> str:
+    direct = os.environ.get(name, "").strip()
+    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
+    if direct or not secret_arn:
+        return direct
+    try:
+        result = boto3_client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
+        return ""
+    secret = result.get("SecretString")
+    if isinstance(secret, str):
+        return secret.strip()
+    encoded = result.get("SecretBinary")
+    if isinstance(encoded, (bytes, bytearray)):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    if isinstance(encoded, str):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    return ""
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-message-hub-agent-worker")
 DELIVERIES_TABLE = os.environ.get("DELIVERIES_TABLE", "")
 MESSAGES_TABLE = os.environ.get("MESSAGES_TABLE", "")
 AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "")
-WEBHOOK_SIGNING_SECRET = os.environ.get("SEAGULL_WEBHOOK_SIGNING_SECRET", "")
+WEBHOOK_SIGNING_SECRET = secret_env("SEAGULL_WEBHOOK_SIGNING_SECRET")
 INSECURE_WEBHOOK_SIGNING_SECRET = "dev-only-change-me"
 
 _DYNAMODB = None
@@ -24,6 +53,25 @@ _DYNAMODB = None
 
 class RetryableDispatchError(Exception):
     """Raised when SQS should retry a webhook delivery."""
+
+
+class VettedWebhookEndpoint:
+    def __init__(
+        self,
+        *,
+        url: str,
+        host: str,
+        address: str,
+        port: int,
+        request_target: str,
+        host_header: str,
+    ) -> None:
+        self.url = url
+        self.host = host
+        self.address = address
+        self.port = port
+        self.request_target = request_target
+        self.host_header = host_header
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -87,7 +135,7 @@ def handle_delivery_event(
         mark_delivery_failure(tables.deliveries, delivery_id, "recipient has no webhook_url")
         return
     try:
-        validate_webhook_url(webhook_url, resolve_host=resolve_host)
+        endpoint = validate_webhook_url(webhook_url, resolve_host=resolve_host)
     except ValueError as exc:
         mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
         return
@@ -106,7 +154,7 @@ def handle_delivery_event(
     }
 
     try:
-        status_code = http_post(webhook_url, body, headers)
+        status_code = http_post(endpoint, body, headers)
     except Exception as exc:
         mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
         raise RetryableDispatchError(f"webhook dispatch failed for {delivery_id}: {exc}") from exc
@@ -119,14 +167,32 @@ def handle_delivery_event(
     mark_delivery_sent(tables.deliveries, delivery_id)
 
 
-def post_json(url: str, body: bytes, headers: dict[str, str]) -> int:
-    validate_webhook_url(url)
-    req = request.Request(url, data=body, headers=headers, method="POST")
+def post_json(endpoint: VettedWebhookEndpoint | str, body: bytes, headers: dict[str, str]) -> int:
+    vetted = validate_webhook_url(endpoint) if isinstance(endpoint, str) else endpoint
+    connection = VettedHTTPSConnection(vetted, timeout=5, context=ssl.create_default_context())
+    request_headers = {**headers, "Host": vetted.host_header}
     try:
-        with request.urlopen(req, timeout=5) as response:
-            return int(response.status)
-    except error.HTTPError as exc:
-        return int(exc.code)
+        connection.request("POST", vetted.request_target, body=body, headers=request_headers)
+        return int(connection.getresponse().status)
+    finally:
+        connection.close()
+
+
+class VettedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        endpoint: VettedWebhookEndpoint,
+        *,
+        timeout: float,
+        context: ssl.SSLContext,
+    ) -> None:
+        super().__init__(endpoint.host, endpoint.port, timeout=timeout, context=context)
+        self._connect_address = endpoint.address
+        self._ssl_context = context
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self._connect_address, self.port), self.timeout, self.source_address)
+        self.sock = self._ssl_context.wrap_socket(sock, server_hostname=self.host)
 
 
 def mark_delivery_sent(table: Any, delivery_id: str) -> None:
@@ -184,7 +250,7 @@ def validate_webhook_url(
     url: str,
     *,
     resolve_host: Callable[[str, int | None], list[str]] | None = None,
-) -> None:
+) -> VettedWebhookEndpoint:
     parsed = urlsplit(url)
     if parsed.scheme != "https":
         raise ValueError("webhook_url must use https")
@@ -206,6 +272,7 @@ def validate_webhook_url(
 
     if not addresses:
         raise ValueError("webhook_url host did not resolve")
+    vetted_addresses = []
     for address in addresses:
         try:
             ip = ipaddress.ip_address(address)
@@ -213,6 +280,21 @@ def validate_webhook_url(
             raise ValueError("webhook_url host resolved to an invalid address") from exc
         if not ip.is_global:
             raise ValueError("webhook_url host resolves to a non-public address")
+        vetted_addresses.append(str(ip))
+
+    request_target = parsed.path or "/"
+    if parsed.query:
+        request_target = f"{request_target}?{parsed.query}"
+    service_port = port or 443
+    host_header = host if service_port == 443 else f"{host}:{service_port}"
+    return VettedWebhookEndpoint(
+        url=url,
+        host=host,
+        address=vetted_addresses[0],
+        port=service_port,
+        request_target=request_target,
+        host_header=host_header,
+    )
 
 
 def resolve_host_ips(host: str, port: int | None) -> list[str]:

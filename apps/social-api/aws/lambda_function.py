@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import base64
+import hmac
 import json
 import os
 from typing import Any
@@ -37,8 +40,30 @@ from social_api.domain import (
 from social_api.storage.dynamodb import DynamoDbSocialRepository
 
 
+def secret_env(name: str) -> str:
+    direct = os.environ.get(name, "").strip()
+    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
+    if direct or not secret_arn:
+        return direct
+    try:
+        result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
+        return ""
+    secret = result.get("SecretString")
+    if isinstance(secret, str):
+        return secret.strip()
+    encoded = result.get("SecretBinary")
+    if isinstance(encoded, (bytes, bytearray)):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    if isinstance(encoded, str):
+        return base64.b64decode(encoded).decode("utf-8").strip()
+    return ""
+
+
 APP_NAME = os.environ.get("APP_NAME", "seagull-social-api")
 SOCIAL_AUTH_REQUIRED = os.environ.get("SOCIAL_AUTH_REQUIRED", "true").lower() not in {"0", "false", "no"}
+SOCIAL_AUTH_BYPASS_SECRET = secret_env("SOCIAL_AUTH_BYPASS_SECRET")
 
 dynamodb = boto3.resource("dynamodb")
 repository = DynamoDbSocialRepository(
@@ -96,13 +121,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
 
         if method == "POST" and path == "/identities":
-            body = parse_body(event)
-            identity = service.identify_human(
-                provider=required_string(body, "provider"),
-                subject=required_string(body, "subject"),
-                email=optional_string(body, "email"),
-                display_name=optional_string(body, "display_name"),
-            )
+            identity = identify_human_from_event(event)
             return response(200, {"identity": human_identity_to_dict(identity)})
 
         if method == "POST" and path == "/nodes":
@@ -446,7 +465,7 @@ def register_message_hub_agent(base_url: str, handle: str) -> None:
 def post_message_hub_json(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     payload = json.dumps({key: value for key, value in body.items() if value is not None}).encode("utf-8")
     headers = {"content-type": "application/json"}
-    legacy_secret = os.environ.get("MESSAGE_HUB_LEGACY_ROUTE_SECRET", "").strip()
+    legacy_secret = secret_env("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
     if legacy_secret:
         headers["x-seagull-legacy-secret"] = legacy_secret
     request = Request(f"{base_url}{path}", data=payload, headers=headers, method="POST")
@@ -494,6 +513,7 @@ def owner_user_id_from_value(event: dict[str, Any], owner_user_id: str | None) -
     if identity is None:
         if SOCIAL_AUTH_REQUIRED:
             raise Unauthorized("authentication is required")
+        require_auth_bypass_secret(event)
         if owner_user_id is None:
             raise BadRequest("owner_user_id is required")
         return owner_user_id
@@ -506,6 +526,8 @@ def require_authenticated_identity(event: dict[str, Any]) -> HumanIdentity | Non
     identity = optional_authenticated_identity(event)
     if identity is None and SOCIAL_AUTH_REQUIRED:
         raise Unauthorized("authentication is required")
+    if identity is None:
+        require_auth_bypass_secret(event)
     return identity
 
 
@@ -514,6 +536,38 @@ def identity_from_event(event: dict[str, Any]) -> HumanIdentity:
     if identity is None:
         raise Unauthorized("authentication is required")
     return identity
+
+
+def identify_human_from_event(event: dict[str, Any]) -> HumanIdentity:
+    identity = optional_authenticated_identity(event)
+    if identity is not None:
+        return identity
+    if SOCIAL_AUTH_REQUIRED:
+        raise Unauthorized("authentication is required")
+    require_auth_bypass_secret(event)
+    body = parse_body(event)
+    return service.identify_human(
+        provider=required_string(body, "provider"),
+        subject=required_string(body, "subject"),
+        email=optional_string(body, "email"),
+        display_name=optional_string(body, "display_name"),
+    )
+
+
+def require_auth_bypass_secret(event: dict[str, Any]) -> None:
+    if is_auth_bypass_request(event):
+        return
+    if not SOCIAL_AUTH_BYPASS_SECRET:
+        raise Unauthorized("authentication is required")
+    raise Unauthorized("auth bypass secret is required")
+
+
+def is_auth_bypass_request(event: dict[str, Any]) -> bool:
+    if not SOCIAL_AUTH_BYPASS_SECRET:
+        return False
+    headers = {key.lower(): value for key, value in (event.get("headers") or {}).items()}
+    provided = headers.get("x-seagull-auth-bypass-secret")
+    return isinstance(provided, str) and hmac.compare_digest(provided, SOCIAL_AUTH_BYPASS_SECRET)
 
 
 def optional_authenticated_identity(event: dict[str, Any]) -> HumanIdentity | None:
@@ -571,7 +625,7 @@ def cors_headers() -> dict[str, str]:
     return {
         "access-control-allow-origin": "*",
         "access-control-allow-methods": "GET,OPTIONS,PATCH,POST,PUT",
-        "access-control-allow-headers": "authorization,content-type",
+        "access-control-allow-headers": "authorization,content-type,x-seagull-auth-bypass-secret",
         "access-control-max-age": "300",
     }
 

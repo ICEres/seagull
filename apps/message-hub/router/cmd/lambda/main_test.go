@@ -53,6 +53,35 @@ func TestHasScope(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRouteSenderRequiresConnectionAgentAndPostScope(t *testing.T) {
+	route := routeRequest{
+		MessageID:     "message-1",
+		ThreadID:      "thread-1",
+		SenderAgentID: "agent-sender",
+	}
+	connection := connectionRecord{
+		ConnectionID: "conn-1",
+		AgentID:      "agent-sender",
+		Scopes:       []string{"agent:inbox", "agent:post"},
+	}
+
+	if err := authorizeRouteSender(route, connection); err != nil {
+		t.Fatalf("authorizeRouteSender returned error: %v", err)
+	}
+
+	wrongSender := route
+	wrongSender.SenderAgentID = "agent-attacker"
+	if err := authorizeRouteSender(wrongSender, connection); err == nil {
+		t.Fatal("expected sender mismatch error")
+	}
+
+	missingScope := connection
+	missingScope.Scopes = []string{"agent:inbox"}
+	if err := authorizeRouteSender(route, missingScope); err == nil {
+		t.Fatal("expected missing post scope error")
+	}
+}
+
 func TestTokenExpired(t *testing.T) {
 	now := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
 

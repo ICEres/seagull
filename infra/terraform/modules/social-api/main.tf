@@ -559,13 +559,20 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags = local.common_tags
 }
 
+resource "aws_cloudwatch_log_group" "api_access" {
+  name              = "/aws/apigateway/${var.name_prefix}-http"
+  retention_in_days = var.access_log_retention_days
+
+  tags = local.common_tags
+}
+
 resource "aws_iam_role_policy" "lambda" {
   name = "${var.name_prefix}-lambda-policy"
   role = aws_iam_role.lambda.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -584,7 +591,25 @@ resource "aws_iam_role_policy" "lambda" {
         ]
         Resource = local.table_resources
       }
-    ]
+      ],
+      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" ? [] : [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = compact([
+            var.message_hub_legacy_route_secret_arn,
+            var.auth_bypass_secret_arn,
+          ])
+        },
+      ],
+      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.lambda_kms_key_arn == "" ? [] : [
+        {
+          Effect   = "Allow"
+          Action   = ["kms:Decrypt"]
+          Resource = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : (var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : "*")
+        }
+      ]
+    )
   })
 }
 
@@ -597,29 +622,37 @@ resource "aws_lambda_function" "api" {
   source_code_hash = var.lambda_source_code_hash
   timeout          = 10
   memory_size      = 256
+  kms_key_arn      = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : null
 
   environment {
-    variables = {
-      AGENT_ASSET_BINDINGS_TABLE      = aws_dynamodb_table.agent_asset_bindings.name
-      AGENT_CHAT_MESSAGES_TABLE       = aws_dynamodb_table.agent_chat_messages.name
-      AGENT_CHATS_TABLE               = aws_dynamodb_table.agent_chats.name
-      APP_NAME                        = var.name_prefix
-      FEED_EVENTS_TABLE               = aws_dynamodb_table.feed_events.name
-      FOLLOWS_TABLE                   = aws_dynamodb_table.follows.name
-      IDENTITIES_TABLE                = aws_dynamodb_table.identities.name
-      MODERATION_TABLE                = aws_dynamodb_table.moderation_records.name
-      NODES_TABLE                     = aws_dynamodb_table.nodes.name
-      NOTIFICATIONS_TABLE             = aws_dynamodb_table.notifications.name
-      PAIR_TOKENS_TABLE               = aws_dynamodb_table.pair_tokens.name
-      PERSONAL_AGENT_ASSETS_TABLE     = aws_dynamodb_table.personal_agent_assets.name
-      POSTS_TABLE                     = aws_dynamodb_table.posts.name
-      PROFILES_TABLE                  = aws_dynamodb_table.profiles.name
-      ROOM_MEMBERSHIPS_TABLE          = aws_dynamodb_table.room_memberships.name
-      ROOMS_TABLE                     = aws_dynamodb_table.rooms.name
-      SOCIAL_AUTH_REQUIRED            = "true"
-      MESSAGE_API_URL                 = var.message_api_url
-      MESSAGE_HUB_LEGACY_ROUTE_SECRET = var.message_hub_legacy_route_secret
-    }
+    variables = merge(
+      {
+        AGENT_ASSET_BINDINGS_TABLE  = aws_dynamodb_table.agent_asset_bindings.name
+        AGENT_CHAT_MESSAGES_TABLE   = aws_dynamodb_table.agent_chat_messages.name
+        AGENT_CHATS_TABLE           = aws_dynamodb_table.agent_chats.name
+        APP_NAME                    = var.name_prefix
+        FEED_EVENTS_TABLE           = aws_dynamodb_table.feed_events.name
+        FOLLOWS_TABLE               = aws_dynamodb_table.follows.name
+        IDENTITIES_TABLE            = aws_dynamodb_table.identities.name
+        MODERATION_TABLE            = aws_dynamodb_table.moderation_records.name
+        NODES_TABLE                 = aws_dynamodb_table.nodes.name
+        NOTIFICATIONS_TABLE         = aws_dynamodb_table.notifications.name
+        PAIR_TOKENS_TABLE           = aws_dynamodb_table.pair_tokens.name
+        PERSONAL_AGENT_ASSETS_TABLE = aws_dynamodb_table.personal_agent_assets.name
+        POSTS_TABLE                 = aws_dynamodb_table.posts.name
+        PROFILES_TABLE              = aws_dynamodb_table.profiles.name
+        ROOM_MEMBERSHIPS_TABLE      = aws_dynamodb_table.room_memberships.name
+        ROOMS_TABLE                 = aws_dynamodb_table.rooms.name
+        SOCIAL_AUTH_REQUIRED        = "true"
+        MESSAGE_API_URL             = var.message_api_url
+      },
+      var.auth_bypass_secret_arn == "" ? {} : {
+        SOCIAL_AUTH_BYPASS_SECRET_ARN = var.auth_bypass_secret_arn
+      },
+      var.message_hub_legacy_route_secret_arn == "" ? {} : {
+        MESSAGE_HUB_LEGACY_ROUTE_SECRET_ARN = var.message_hub_legacy_route_secret_arn
+      }
+    )
   }
 
   depends_on = [
@@ -635,7 +668,7 @@ resource "aws_apigatewayv2_api" "http" {
   protocol_type = "HTTP"
 
   cors_configuration {
-    allow_headers = ["authorization", "content-type"]
+    allow_headers = ["authorization", "content-type", "x-seagull-auth-bypass-secret"]
     allow_methods = ["GET", "PATCH", "POST", "PUT", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
@@ -693,6 +726,22 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_access.arn
+    format = jsonencode({
+      requestId               = "$context.requestId"
+      routeKey                = "$context.routeKey"
+      status                  = "$context.status"
+      sourceIp                = "$context.identity.sourceIp"
+      integrationErrorMessage = "$context.integrationErrorMessage"
+    })
+  }
+
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
 
   tags = local.common_tags
 }

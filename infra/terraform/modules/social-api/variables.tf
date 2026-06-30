@@ -43,11 +43,16 @@ variable "message_api_url" {
   default     = ""
 }
 
-variable "message_hub_legacy_route_secret" {
+variable "message_hub_legacy_route_secret_arn" {
   type        = string
-  description = "Optional Message Hub legacy route secret for handle-addressed delivery."
+  description = "Optional Secrets Manager ARN containing the Message Hub legacy route secret."
   default     = ""
-  sensitive   = true
+}
+
+variable "lambda_kms_key_arn" {
+  type        = string
+  description = "Optional KMS key ARN used to encrypt Lambda environment variables."
+  default     = ""
 }
 
 variable "jwt_issuer" {
@@ -58,4 +63,28 @@ variable "jwt_issuer" {
 variable "jwt_audience" {
   type        = list(string)
   description = "JWT audiences accepted by the Social API JWT authorizer."
+}
+
+variable "auth_bypass_secret_arn" {
+  type        = string
+  description = "Optional Secrets Manager ARN containing the shared secret required when SOCIAL_AUTH_REQUIRED is disabled."
+  default     = ""
+}
+
+variable "api_throttling_burst_limit" {
+  type        = number
+  description = "Default API Gateway burst throttle for the Social API HTTP API."
+  default     = 100
+}
+
+variable "api_throttling_rate_limit" {
+  type        = number
+  description = "Default API Gateway steady-state requests per second for the Social API HTTP API."
+  default     = 50
+}
+
+variable "access_log_retention_days" {
+  type        = number
+  description = "Retention in days for Social API Gateway access logs."
+  default     = 30
 }

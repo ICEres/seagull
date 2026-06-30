@@ -58,13 +58,6 @@ variable "mcp_domain_name" {
   default     = "mcp.gulls.ai"
 }
 
-variable "agent_webhook_signing_secret" {
-  type        = string
-  description = "Signing secret used for outbound Seagull agent webhooks. Leave empty only to disable webhook dispatch."
-  default     = ""
-  sensitive   = true
-}
-
 variable "dynamodb_point_in_time_recovery_enabled" {
   type        = bool
   description = "Enable point-in-time recovery for DynamoDB tables."
@@ -77,25 +70,22 @@ variable "dynamodb_deletion_protection_enabled" {
   default     = true
 }
 
-variable "mcp_connector_admin_secret" {
-  type        = string
-  description = "Optional admin secret for creating and revoking connector tokens. Leave empty to disable secret-based admin access."
-  default     = ""
-  sensitive   = true
+variable "api_throttling_burst_limit" {
+  type        = number
+  description = "Default API Gateway burst throttle for public APIs in this environment."
+  default     = 100
 }
 
-variable "ai_provider_admin_secret" {
-  type        = string
-  description = "Optional AI provider admin secret. Leave empty to require Cognito admin claims."
-  default     = ""
-  sensitive   = true
+variable "api_throttling_rate_limit" {
+  type        = number
+  description = "Default API Gateway steady-state requests per second for public APIs in this environment."
+  default     = 50
 }
 
-variable "mcp_dev_token" {
-  type        = string
-  description = "Optional development bearer token accepted by the hosted MCP connector."
-  default     = ""
-  sensitive   = true
+variable "api_access_log_retention_days" {
+  type        = number
+  description = "Retention in days for API Gateway access logs."
+  default     = 30
 }
 
 variable "mcp_dev_owner_user_id" {
@@ -112,8 +102,8 @@ variable "mcp_dev_agent_handles" {
 
 variable "mcp_no_auth_enabled" {
   type        = bool
-  description = "Enable restricted no-auth MCP access for ChatGPT developer-mode smoke tests in dev."
-  default     = true
+  description = "Enable restricted no-auth MCP access for ChatGPT developer-mode smoke tests. Only honored when environment is dev."
+  default     = false
 }
 
 variable "mcp_no_auth_owner_user_id" {
@@ -132,6 +122,15 @@ variable "mcp_no_auth_scopes" {
   type        = list(string)
   description = "Scopes exposed to restricted no-auth MCP access."
   default     = ["agents:read"]
+}
+
+variable "mcp_allowed_origins" {
+  type        = list(string)
+  description = "Browser origins allowed by the hosted MCP connector CORS policy."
+  default = [
+    "https://chatgpt.com",
+    "https://chat.openai.com",
+  ]
 }
 
 variable "mcp_cognito_domain_prefix" {

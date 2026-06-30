@@ -111,7 +111,7 @@ aws-dev-web-smoke:
 	./scripts/smoke-web.sh
 
 aws-dev-router-smoke:
-	./scripts/smoke-router-ws.mjs "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_router_websocket_url)"
+	./scripts/smoke-router-ws.mjs "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_router_websocket_url)" "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_api_url)"
 
 aws-dev-destroy:
 	terraform -chdir=infra/terraform/envs/dev destroy

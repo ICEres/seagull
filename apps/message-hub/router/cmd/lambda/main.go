@@ -162,7 +162,7 @@ func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocket
 }
 
 func (h handler) requireAgentToken(ctx context.Context, request events.APIGatewayWebsocketProxyRequest, requiredScope string) (agentTokenRecord, *events.APIGatewayProxyResponse, error) {
-	bearerToken, err := bearerTokenFromHeaders(request.Headers)
+	bearerToken, err := bearerTokenFromRequest(request)
 	if err != nil {
 		response, responseErr := jsonResponse(http.StatusUnauthorized, map[string]any{
 			"error":   "unauthorized",
@@ -236,6 +236,28 @@ func (h handler) requireAgentToken(ctx context.Context, request events.APIGatewa
 		return agentTokenRecord{}, &response, responseErr
 	}
 	return record, nil, nil
+}
+
+func bearerTokenFromRequest(request events.APIGatewayWebsocketProxyRequest) (string, error) {
+	token, err := bearerTokenFromHeaders(request.Headers)
+	if err == nil {
+		return token, nil
+	}
+
+	queryToken := strings.TrimSpace(firstNonEmpty(
+		request.QueryStringParameters["access_token"],
+		request.QueryStringParameters["token"],
+	))
+	if queryToken == "" {
+		return "", err
+	}
+	if strings.HasPrefix(strings.ToLower(queryToken), "bearer ") {
+		queryToken = strings.TrimSpace(queryToken[len("bearer "):])
+	}
+	if queryToken == "" {
+		return "", errors.New("authorization token is required")
+	}
+	return queryToken, nil
 }
 
 func (h handler) disconnect(ctx context.Context, request events.APIGatewayWebsocketProxyRequest) (events.APIGatewayProxyResponse, error) {

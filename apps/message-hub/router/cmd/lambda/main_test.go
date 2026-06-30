@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/aws/aws-lambda-go/events"
 )
 
 func TestParseAgentToken(t *testing.T) {
@@ -41,6 +43,18 @@ func TestBearerTokenFromHeaders(t *testing.T) {
 
 	if _, err := bearerTokenFromHeaders(map[string]string{"Authorization": "Basic abc"}); err == nil {
 		t.Fatal("expected non-bearer authorization error")
+	}
+}
+
+func TestBearerTokenFromRequestAcceptsQueryToken(t *testing.T) {
+	token, err := bearerTokenFromRequest(events.APIGatewayWebsocketProxyRequest{
+		QueryStringParameters: map[string]string{"access_token": "sga_tokenid_secret"},
+	})
+	if err != nil {
+		t.Fatalf("bearerTokenFromRequest returned error: %v", err)
+	}
+	if token != "sga_tokenid_secret" {
+		t.Fatalf("unexpected token: %q", token)
 	}
 }
 

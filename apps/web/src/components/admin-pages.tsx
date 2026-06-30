@@ -1,4 +1,4 @@
-import { Database, KeyRound, Save, ServerCog, ShieldCheck, Wallet } from "lucide-react";
+import { Bot, Check, Database, KeyRound, Plus, Save, ServerCog, ShieldCheck, SlidersHorizontal, Wallet, X } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -13,6 +13,23 @@ import { formatTimestamp, parseCommaList } from "../lib/state";
 import { EmptyState, StatusPill, type Notice } from "./shared";
 
 const ADMIN_ACTOR_STORAGE_KEY = "seagull.web.ai_provider.admin_actor";
+
+const PROVIDER_PRESETS = [
+  {
+    provider: "openai",
+    label: "OpenAI",
+    defaultModels: ["gpt-5.5", "gpt-5.4-mini"],
+    suggestedModels: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+    reason: "enable openai",
+  },
+  {
+    provider: "fake",
+    label: "Fake",
+    defaultModels: ["fake-small"],
+    suggestedModels: ["fake-small"],
+    reason: "provider config update",
+  },
+] as const;
 
 type AdminError = Error | AiProviderApiError;
 
@@ -32,6 +49,8 @@ export function AdminPage({
   const [allowedModels, setAllowedModels] = useState("fake-small");
   const [secretRef, setSecretRef] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [modelEntry, setModelEntry] = useState("");
+  const [showAdvancedProviderFields, setShowAdvancedProviderFields] = useState(false);
   const [region, setRegion] = useState("");
   const [reason, setReason] = useState("provider config update");
   const [serverCreditAmount, setServerCreditAmount] = useState("10000");
@@ -77,8 +96,10 @@ export function AdminPage({
   });
 
   const saveProviderMutation = useMutation({
-    mutationFn: () =>
-      aiProvider.saveProviderConfig(provider.trim(), {
+    mutationFn: () => {
+      const providerName = provider.trim();
+      const presetProvider = PROVIDER_PRESETS.find((preset) => preset.provider === providerName.toLowerCase())?.provider;
+      return aiProvider.saveProviderConfig(presetProvider ?? providerName, {
         admin_actor_id: adminActorId.trim(),
         enabled,
         allowed_models: parseCommaList(allowedModels),
@@ -86,7 +107,8 @@ export function AdminPage({
         api_key: apiKey.trim() || undefined,
         region: region.trim() || null,
         reason: reason.trim() || "provider config update",
-      }),
+      });
+    },
     onSuccess: (result) => {
       onNotice({ tone: "ok", message: `${result.provider_config.provider} saved.` });
       setApiKey("");
@@ -128,8 +150,36 @@ export function AdminPage({
     setAllowedModels(config.allowed_models.join(", "));
     setSecretRef(config.secret_ref ?? "");
     setApiKey("");
+    setModelEntry("");
+    setShowAdvancedProviderFields(Boolean(config.secret_ref || config.region));
     setRegion(config.region ?? "");
     setReason("provider config update");
+  }
+
+  function applyProviderPreset(preset: (typeof PROVIDER_PRESETS)[number]) {
+    setProvider(preset.provider);
+    setEnabled(true);
+    setAllowedModels(preset.defaultModels.join(", "));
+    setSecretRef("");
+    setApiKey("");
+    setModelEntry("");
+    setRegion("");
+    setReason(preset.reason);
+    setShowAdvancedProviderFields(false);
+  }
+
+  function addModels(value: string) {
+    const incoming = parseCommaList(value);
+    if (incoming.length === 0) {
+      return;
+    }
+    const next = Array.from(new Set([...currentModels, ...incoming]));
+    setAllowedModels(next.join(", "));
+    setModelEntry("");
+  }
+
+  function removeModel(model: string) {
+    setAllowedModels(currentModels.filter((item) => item !== model).join(", "));
   }
 
   const configs = providerConfigsQuery.data?.provider_configs ?? [];
@@ -137,6 +187,10 @@ export function AdminPage({
   const auditEvents = auditQuery.data?.events ?? [];
   const adminError =
     providerConfigsQuery.error ?? serverBalanceQuery.error ?? serverLedgerQuery.error ?? auditQuery.error;
+  const providerKey = provider.trim().toLowerCase();
+  const currentModels = parseCommaList(allowedModels);
+  const selectedPreset = PROVIDER_PRESETS.find((preset) => preset.provider === providerKey);
+  const advancedFieldsVisible = showAdvancedProviderFields || selectedPreset === undefined;
 
   return (
     <div className="grid gap-4">
@@ -243,10 +297,28 @@ export function AdminPage({
                 }
               }}
             >
-              <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-                Provider
-                <input value={provider} onChange={(event) => setProvider(event.target.value)} spellCheck={false} />
-              </label>
+              <div className="grid gap-2">
+                <span className="text-[0.82rem] font-black text-muted">Provider</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {PROVIDER_PRESETS.map((preset) => {
+                    const active = providerKey === preset.provider;
+                    return (
+                      <button
+                        className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-extrabold ${
+                          active ? "border-accent bg-accent-soft text-accent-strong" : "border-line bg-white text-ink"
+                        }`}
+                        type="button"
+                        onClick={() => applyProviderPreset(preset)}
+                        key={preset.provider}
+                      >
+                        {active ? <Check size={16} /> : <Bot size={16} />}
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <input value={provider} onChange={(event) => setProvider(event.target.value)} spellCheck={false} aria-label="Provider name" />
+              </div>
               <label className="flex items-center gap-2 text-[0.82rem] font-black text-muted">
                 <input
                   className="h-4 w-4"
@@ -256,15 +328,84 @@ export function AdminPage({
                 />
                 Enabled
               </label>
-              <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-                Allowed models
-                <input value={allowedModels} onChange={(event) => setAllowedModels(event.target.value)} spellCheck={false} />
-              </label>
-              <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-                Secret ref
-                <input value={secretRef} onChange={(event) => setSecretRef(event.target.value)} spellCheck={false} />
-              </label>
-              {provider.trim().toLowerCase() === "openai" ? (
+              <div className="grid gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[0.82rem] font-black text-muted">Allowed models</span>
+                  <button
+                    className="inline-flex min-h-8 items-center justify-center rounded-lg border border-line bg-white px-2.5 text-[0.78rem] font-extrabold text-muted disabled:cursor-not-allowed disabled:opacity-[0.58]"
+                    type="button"
+                    onClick={() => setAllowedModels("")}
+                    disabled={currentModels.length === 0}
+                  >
+                    All
+                  </button>
+                </div>
+                <div className="flex min-h-9 flex-wrap gap-1.5 rounded-lg border border-line bg-white p-1.5">
+                  {currentModels.length === 0 ? (
+                    <span className="rounded-full bg-surface-soft px-2.5 py-1 text-xs font-extrabold text-muted">all models</span>
+                  ) : (
+                    currentModels.map((model) => (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-surface-soft py-1 pl-2.5 pr-1 text-xs font-extrabold text-muted" key={model}>
+                        {model}
+                        <button
+                          className="grid h-5 w-5 place-items-center rounded-full border-0 bg-white text-muted"
+                          type="button"
+                          onClick={() => removeModel(model)}
+                          aria-label={`Remove ${model}`}
+                          title={`Remove ${model}`}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                {selectedPreset ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedPreset.suggestedModels.map((model) => {
+                      const selected = currentModels.includes(model);
+                      return (
+                        <button
+                          className={`inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-[0.78rem] font-extrabold ${
+                            selected ? "border-accent bg-accent-soft text-accent-strong" : "border-line bg-white text-ink"
+                          }`}
+                          type="button"
+                          onClick={() => addModels(model)}
+                          disabled={selected}
+                          key={model}
+                        >
+                          {selected ? <Check size={13} /> : <Plus size={13} />}
+                          {model}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <input
+                    value={modelEntry}
+                    onChange={(event) => setModelEntry(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addModels(modelEntry);
+                      }
+                    }}
+                    spellCheck={false}
+                    aria-label="Model name"
+                  />
+                  <button
+                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58]"
+                    type="button"
+                    onClick={() => addModels(modelEntry)}
+                    disabled={!modelEntry.trim()}
+                  >
+                    <Plus size={16} />
+                    Add
+                  </button>
+                </div>
+              </div>
+              {providerKey === "openai" ? (
                 <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
                   OpenAI API key
                   <input
@@ -276,10 +417,28 @@ export function AdminPage({
                   />
                 </label>
               ) : null}
-              <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-                Region
-                <input value={region} onChange={(event) => setRegion(event.target.value)} spellCheck={false} />
-              </label>
+              {selectedPreset ? (
+                <button
+                  className="inline-flex min-h-9 w-fit items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-[0.82rem] font-extrabold text-ink"
+                  type="button"
+                  onClick={() => setShowAdvancedProviderFields((visible) => !visible)}
+                >
+                  <SlidersHorizontal size={15} />
+                  Advanced
+                </button>
+              ) : null}
+              {advancedFieldsVisible ? (
+                <>
+                  <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
+                    Secret ref
+                    <input value={secretRef} onChange={(event) => setSecretRef(event.target.value)} spellCheck={false} />
+                  </label>
+                  <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
+                    Region
+                    <input value={region} onChange={(event) => setRegion(event.target.value)} spellCheck={false} />
+                  </label>
+                </>
+              ) : null}
               <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
                 Reason
                 <input value={reason} onChange={(event) => setReason(event.target.value)} />

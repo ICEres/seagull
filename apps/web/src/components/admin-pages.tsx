@@ -31,6 +31,7 @@ export function AdminPage({
   const [enabled, setEnabled] = useState(true);
   const [allowedModels, setAllowedModels] = useState("fake-small");
   const [secretRef, setSecretRef] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [region, setRegion] = useState("");
   const [reason, setReason] = useState("provider config update");
   const [serverCreditAmount, setServerCreditAmount] = useState("10000");
@@ -82,11 +83,13 @@ export function AdminPage({
         enabled,
         allowed_models: parseCommaList(allowedModels),
         secret_ref: secretRef.trim() || null,
+        api_key: apiKey.trim() || undefined,
         region: region.trim() || null,
         reason: reason.trim() || "provider config update",
       }),
     onSuccess: (result) => {
       onNotice({ tone: "ok", message: `${result.provider_config.provider} saved.` });
+      setApiKey("");
       void queryClient.invalidateQueries({ queryKey: ["ai-provider-configs"] });
       void queryClient.invalidateQueries({ queryKey: ["ai-provider-audit"] });
     },
@@ -124,6 +127,7 @@ export function AdminPage({
     setEnabled(config.enabled);
     setAllowedModels(config.allowed_models.join(", "));
     setSecretRef(config.secret_ref ?? "");
+    setApiKey("");
     setRegion(config.region ?? "");
     setReason("provider config update");
   }
@@ -260,6 +264,18 @@ export function AdminPage({
                 Secret ref
                 <input value={secretRef} onChange={(event) => setSecretRef(event.target.value)} spellCheck={false} />
               </label>
+              {provider.trim().toLowerCase() === "openai" ? (
+                <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
+                  OpenAI API key
+                  <input
+                    value={apiKey}
+                    type="password"
+                    autoComplete="new-password"
+                    onChange={(event) => setApiKey(event.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
               <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
                 Region
                 <input value={region} onChange={(event) => setRegion(event.target.value)} spellCheck={false} />

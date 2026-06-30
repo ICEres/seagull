@@ -88,6 +88,7 @@ export class AiProviderClient {
       enabled: boolean;
       allowed_models: string[];
       secret_ref?: string | null;
+      api_key?: string;
       region?: string | null;
       reason?: string;
     },

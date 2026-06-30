@@ -22,6 +22,10 @@ locals {
     local.table_arns,
     [for arn in local.table_arns : "${arn}/index/*"],
   )
+
+  provider_secret_resources = [
+    "arn:aws:secretsmanager:*:*:secret:${var.name_prefix}/providers/*",
+  ]
 }
 
 resource "aws_dynamodb_table" "runs" {
@@ -437,6 +441,22 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:UpdateItem"
         ]
         Resource = local.table_resources
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue"
+        ]
+        Resource = local.provider_secret_resources
       }
     ]
   })
@@ -459,6 +479,7 @@ resource "aws_lambda_function" "api" {
       AI_MODEL_POLICIES_TABLE       = aws_dynamodb_table.model_policies.name
       AI_PROVIDER_ADMIN_SECRET      = var.admin_secret
       AI_PROVIDER_CONFIGS_TABLE     = aws_dynamodb_table.provider_configs.name
+      AI_PROVIDER_SECRET_PREFIX     = var.name_prefix
       AI_RUN_EVENTS_TABLE           = aws_dynamodb_table.run_events.name
       AI_RUNS_TABLE                 = aws_dynamodb_table.runs.name
       AI_SERVER_CREDIT_LEDGER_TABLE = aws_dynamodb_table.server_credit_ledger.name

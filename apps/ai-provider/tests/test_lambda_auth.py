@@ -25,6 +25,20 @@ class FakeDynamoDbResource:
         return object()
 
 
+class FakeSecretsManager:
+    def __init__(self) -> None:
+        self.secrets: dict[str, str] = {}
+
+    def create_secret(self, *, Name: str, SecretString: str) -> None:
+        self.secrets[Name] = SecretString
+
+    def put_secret_value(self, *, SecretId: str, SecretString: str) -> None:
+        self.secrets[SecretId] = SecretString
+
+    def get_secret_value(self, *, SecretId: str) -> dict[str, str]:
+        return {"SecretString": self.secrets[SecretId]}
+
+
 class FakeKey:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -192,3 +206,29 @@ class AiProviderLambdaAuthTest(TestCase):
 
         self.assertEqual(200, response["statusCode"])
         self.assertEqual(9000, body(response)["balance"]["available_credits"])
+
+    def test_admin_provider_save_stores_api_key_as_secret_ref(self) -> None:
+        fake_secrets = FakeSecretsManager()
+        self.lambda_module.secretsmanager_client = lambda: fake_secrets
+
+        response = self.lambda_module.handler(
+            event(
+                "POST",
+                "/admin/ai-providers/openai",
+                headers={"x-seagull-admin-secret": "admin-secret"},
+                body={
+                    "admin_actor_id": "admin_1",
+                    "enabled": True,
+                    "allowed_models": ["gpt-test"],
+                    "api_key": "sk-test",
+                    "reason": "enable openai",
+                },
+            ),
+            None,
+        )
+
+        payload = body(response)
+        self.assertEqual(200, response["statusCode"])
+        self.assertEqual("openai", payload["provider_config"]["provider"])
+        self.assertEqual("seagull-ai-provider/providers/openai/api-key", payload["provider_config"]["secret_ref"])
+        self.assertEqual("sk-test", fake_secrets.secrets["seagull-ai-provider/providers/openai/api-key"])

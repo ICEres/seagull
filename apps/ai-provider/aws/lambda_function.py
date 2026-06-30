@@ -23,7 +23,7 @@ from ai_provider.api.local import (
     user_credit_ledger_entry_to_dict,
 )
 from ai_provider.domain import AiProviderService, BudgetLimit, InvalidAiRunError, ModelPolicy
-from ai_provider.providers import FakeProviderAdapter
+from ai_provider.providers import FakeProviderAdapter, OpenAIProviderAdapter
 from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
 
 
@@ -49,6 +49,7 @@ def secret_env(name: str) -> str:
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
+PROVIDER_SECRET_PREFIX = os.environ.get("AI_PROVIDER_SECRET_PREFIX", APP_NAME)
 ADMIN_SECRET = secret_env("AI_PROVIDER_ADMIN_SECRET")
 ADMIN_GROUPS = tuple(
     group.strip().casefold()
@@ -69,7 +70,80 @@ repository = DynamoDbAiProviderRepository(
     model_policies_table=dynamodb.Table(os.environ["AI_MODEL_POLICIES_TABLE"]),
     budget_limits_table=dynamodb.Table(os.environ["AI_BUDGET_LIMITS_TABLE"]),
 )
-service = AiProviderService(repository, {"fake": FakeProviderAdapter()})
+
+
+def provider_api_key(provider: str) -> str:
+    config = repository.get_provider_config(provider)
+    if config is not None and config.secret_ref:
+        return secret_ref_value(config.secret_ref)
+    if provider == "openai":
+        return os.environ.get("OPENAI_API_KEY", "").strip()
+    return ""
+
+
+def secret_ref_value(secret_ref: str) -> str:
+    ref = secret_ref.strip()
+    if not ref:
+        return ""
+    if ref.lower().startswith("env:"):
+        return os.environ.get(ref[4:].strip(), "").strip()
+    if ref in os.environ:
+        return os.environ.get(ref, "").strip()
+    try:
+        result = secretsmanager_client().get_secret_value(SecretId=ref)
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"could not load provider secret {ref}: {exc}"}))
+        return ""
+    return secret_string(result).strip()
+
+
+def save_provider_api_key(provider: str, api_key: str) -> str:
+    secret = api_key.strip()
+    if not secret:
+        raise BadRequest("api_key cannot be empty")
+    secret_name = provider_secret_name(provider)
+    client = secretsmanager_client()
+    try:
+        client.create_secret(Name=secret_name, SecretString=secret)
+    except Exception as exc:
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        if code != "ResourceExistsException":
+            raise
+        client.put_secret_value(SecretId=secret_name, SecretString=secret)
+    return secret_name
+
+
+def provider_secret_name(provider: str) -> str:
+    safe_provider = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "-"
+        for char in provider.strip().casefold()
+    ).strip("-")
+    return f"{PROVIDER_SECRET_PREFIX}/providers/{safe_provider or 'provider'}/api-key"
+
+
+def secretsmanager_client() -> Any:
+    return boto3.client("secretsmanager")
+
+
+def secret_string(result: dict[str, Any]) -> str:
+    secret = result.get("SecretString")
+    if isinstance(secret, str):
+        return secret
+    encoded = result.get("SecretBinary")
+    if isinstance(encoded, (bytes, bytearray)):
+        return base64.b64decode(encoded).decode("utf-8")
+    if isinstance(encoded, str):
+        return base64.b64decode(encoded).decode("utf-8")
+    return ""
+
+
+service = AiProviderService(
+    repository,
+    {
+        "fake": FakeProviderAdapter(),
+        "openai": OpenAIProviderAdapter(api_key_resolver=provider_api_key),
+    },
+)
 
 
 class BadRequest(ValueError):
@@ -210,12 +284,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "POST" and path.startswith("/admin/ai-providers/"):
             body = parse_body(event)
             provider = unquote(path.removeprefix("/admin/ai-providers/").strip("/"))
+            if not provider:
+                raise BadRequest("provider is required")
+            secret_ref = optional_string(body, "secret_ref")
+            api_key = optional_string(body, "api_key")
+            if api_key:
+                secret_ref = save_provider_api_key(provider, api_key)
             config = service.save_provider_config(
                 admin_actor_id=required_string(body, "admin_actor_id"),
                 provider=provider,
                 enabled=optional_bool(body, "enabled", default=True),
                 allowed_models=string_list(body.get("allowed_models", ()), "allowed_models"),
-                secret_ref=optional_string(body, "secret_ref"),
+                secret_ref=secret_ref,
                 region=optional_string(body, "region"),
                 reason=optional_string(body, "reason") or "provider config update",
             )
@@ -266,7 +346,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except InvalidAiRunError as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
+        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
 
 
@@ -283,6 +363,16 @@ def parse_body(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
+
+
+def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "rawPath": event.get("rawPath"),
+        "requestContext": event.get("requestContext"),
+        "queryStringParameters": event.get("queryStringParameters"),
+        "headers": "[redacted]",
+        "body": "[redacted]" if event.get("body") is not None else None,
+    }
 
 
 def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:

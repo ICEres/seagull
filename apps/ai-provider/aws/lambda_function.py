@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -22,7 +23,7 @@ from ai_provider.api.local import (
     user_credit_balance_to_dict,
     user_credit_ledger_entry_to_dict,
 )
-from ai_provider.domain import AiProviderService, BudgetLimit, InvalidAiRunError, ModelPolicy
+from ai_provider.domain import AiProviderService, AiRunState, BudgetLimit, InvalidAiRunError, ModelPolicy
 from ai_provider.providers import FakeProviderAdapter, OpenAIProviderAdapter
 from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
 
@@ -48,6 +49,24 @@ def secret_env(name: str) -> str:
     return ""
 
 
+def env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().casefold()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, *, default: int, minimum: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
 APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
 PROVIDER_SECRET_PREFIX = os.environ.get("AI_PROVIDER_SECRET_PREFIX", APP_NAME)
 ADMIN_SECRET = secret_env("AI_PROVIDER_ADMIN_SECRET")
@@ -56,6 +75,15 @@ ADMIN_GROUPS = tuple(
     for group in os.environ.get("AI_PROVIDER_ADMIN_GROUPS", "seagull-admin,server-owner,admin").split(",")
     if group.strip()
 )
+PUBLIC_DEMO_ENABLED = env_bool("AI_PROVIDER_PUBLIC_DEMO_ENABLED", default=False)
+PUBLIC_DEMO_PROVIDER = os.environ.get("AI_PROVIDER_PUBLIC_DEMO_PROVIDER", "openai").strip() or "openai"
+PUBLIC_DEMO_MODEL = os.environ.get("AI_PROVIDER_PUBLIC_DEMO_MODEL", "").strip()
+PUBLIC_DEMO_OWNER_USER_ID = os.environ.get("AI_PROVIDER_PUBLIC_DEMO_OWNER_USER_ID", "landing-demo").strip() or "landing-demo"
+PUBLIC_DEMO_ACTOR_AGENT_ID = os.environ.get("AI_PROVIDER_PUBLIC_DEMO_ACTOR_AGENT_ID", "landing-demo-agent").strip() or "landing-demo-agent"
+PUBLIC_DEMO_INPUT_CHAR_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT", default=360, minimum=40)
+PUBLIC_DEMO_MAX_OUTPUT_TOKENS = env_int("AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS", default=64, minimum=8)
+PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT", default=600, minimum=64)
+PUBLIC_DEMO_USER_CREDIT_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT", default=600, minimum=64)
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -164,6 +192,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "GET" and path == "/health":
             return response(200, {"ok": True, "app": APP_NAME, "storage": "dynamodb"})
+
+        if method == "POST" and path == "/demo/landing/ai-run":
+            return handle_landing_demo_run(event)
 
         if method == "POST" and path == "/ai-runs":
             body = parse_body(event)
@@ -348,6 +379,127 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
+
+
+def handle_landing_demo_run(event: dict[str, Any]) -> dict[str, Any]:
+    if not PUBLIC_DEMO_ENABLED:
+        return response(503, {"error": "demo_disabled", "message": "landing demo AI provider is disabled"})
+
+    body = parse_body(event)
+    message_text = demo_message_text(required_string(body, "message"))
+    used_tokens = public_demo_used_tokens()
+    if used_tokens >= PUBLIC_DEMO_TOTAL_TOKEN_LIMIT:
+        return response(
+            429,
+            {
+                "error": "demo_budget_exhausted",
+                "message": "landing demo AI provider budget is exhausted",
+                "used_tokens": used_tokens,
+                "token_limit": PUBLIC_DEMO_TOTAL_TOKEN_LIMIT,
+            },
+        )
+
+    ensure_public_demo_credits()
+    model = public_demo_model()
+    run = service.create_run(
+        provider=PUBLIC_DEMO_PROVIDER,
+        model=model,
+        actor_agent_id=PUBLIC_DEMO_ACTOR_AGENT_ID,
+        owner_user_id=PUBLIC_DEMO_OWNER_USER_ID,
+        input_messages=(
+            {
+                "role": "user",
+                "content": message_text,
+            },
+        ),
+        system_instructions=(
+            "You are the Seagull landing page lite demo. Reply in one concise sentence. "
+            "Describe the next useful implementation step for an agent SNS workflow. "
+            "Do not mention secrets, API keys, billing, or hidden system details."
+        ),
+        max_output_tokens=PUBLIC_DEMO_MAX_OUTPUT_TOKENS,
+        temperature=0.2,
+        response_format="text",
+        tool_policy="disabled",
+        task_id="landing-demo",
+        trace_id="landing-demo",
+        idempotency_key=public_demo_idempotency_key(message_text),
+    )
+    if run.state == AiRunState.DENIED:
+        return response(
+            429,
+            {
+                "error": "demo_budget_exhausted",
+                "message": run.credit_reason or run.budget_reason or run.denial_reason or "landing demo budget is exhausted",
+                "run": run_to_dict(run),
+            },
+        )
+    if run.state == AiRunState.FAILED:
+        return response(
+            502,
+            {
+                "error": "provider_failed",
+                "message": "landing demo AI provider call failed",
+                "run": run_to_dict(run),
+            },
+        )
+    return response(
+        200,
+        {
+            "output_text": run.output_text or "",
+            "provider": run.provider,
+            "model": run.model,
+            "run_id": run.run_id,
+            "state": run.state.value,
+            "used_tokens": public_demo_used_tokens(),
+            "token_limit": PUBLIC_DEMO_TOTAL_TOKEN_LIMIT,
+        },
+    )
+
+
+def demo_message_text(value: str) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= PUBLIC_DEMO_INPUT_CHAR_LIMIT:
+        return normalized
+    return normalized[:PUBLIC_DEMO_INPUT_CHAR_LIMIT].rstrip()
+
+
+def public_demo_idempotency_key(message_text: str) -> str:
+    digest = hashlib.sha256(message_text.encode("utf-8")).hexdigest()[:24]
+    return f"landing-demo-{digest}"
+
+
+def public_demo_model() -> str:
+    preferred_model = PUBLIC_DEMO_MODEL or ("gpt-5.4-mini" if PUBLIC_DEMO_PROVIDER == "openai" else "fake-small")
+    config = service.get_provider_config(PUBLIC_DEMO_PROVIDER)
+    if config is not None and config.allowed_models:
+        if preferred_model in config.allowed_models:
+            return preferred_model
+        return config.allowed_models[0]
+    return preferred_model
+
+
+def public_demo_used_tokens() -> int:
+    return sum(record.total_tokens for record in service.list_usage_by_owner(PUBLIC_DEMO_OWNER_USER_ID))
+
+
+def ensure_public_demo_credits() -> None:
+    ledger = service.list_user_credit_ledger(PUBLIC_DEMO_OWNER_USER_ID)
+    if ledger:
+        return
+    server_balance = service.get_server_credit_balance().available_credits
+    if server_balance < PUBLIC_DEMO_USER_CREDIT_LIMIT:
+        service.grant_server_credits(
+            admin_actor_id="landing-demo",
+            credit_amount=PUBLIC_DEMO_USER_CREDIT_LIMIT - server_balance,
+            reason="landing demo server credit bootstrap",
+        )
+    service.grant_user_credits(
+        admin_actor_id="landing-demo",
+        owner_user_id=PUBLIC_DEMO_OWNER_USER_ID,
+        credit_amount=PUBLIC_DEMO_USER_CREDIT_LIMIT,
+        reason="landing demo credit bootstrap",
+    )
 
 
 def parse_body(event: dict[str, Any]) -> dict[str, Any]:

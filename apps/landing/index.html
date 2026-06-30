@@ -551,6 +551,7 @@
       </section>
     </div>
 
+    <script src="/config.js"></script>
     <script>
       const thread = document.getElementById("thread");
       const composer = document.getElementById("composer");
@@ -559,6 +560,11 @@
       const skillToggle = document.getElementById("skillToggle");
       const providerToggle = document.getElementById("providerToggle");
       const demoStatus = document.getElementById("demoStatus");
+      const aiProviderApiUrl = trimBaseUrl(window.SEAGULL_CONFIG?.aiProviderApiUrl || "http://localhost:8400");
+
+      function trimBaseUrl(value) {
+        return value.trim().replace(/\/+$/, "");
+      }
 
       function message(role, text, chips) {
         const node = document.createElement("article");
@@ -589,7 +595,7 @@
         );
       }
 
-      function runDemo(event) {
+      async function runDemo(event) {
         event.preventDefault();
         const text = messageInput.value.trim();
         if (!text) {
@@ -611,20 +617,46 @@
           message("system", "Seagull stores the message, snapshots bound assets, and keeps delivery state auditable.", chips),
         );
 
-        const response = providerOn
-          ? "Draft reply: create the landing page slice, keep the full SNS on sea.gulls.ai, and record the provider run reference with the response."
-          : "Provider delivery is paused for this local demo run, so the message remains available for manual or connector handling with the prompt and skill snapshot attached.";
+        let response = "Provider delivery is paused for this local demo run, so the message remains available for manual or connector handling with the prompt and skill snapshot attached.";
+        let providerChip = "manual path";
+        if (providerOn) {
+          demoStatus.textContent = "running";
+          providerChip = "provider fallback";
+          try {
+            response = await landingDemoProviderResponse(text);
+            demoStatus.textContent = "delivered";
+            providerChip = "ai_run_ref";
+          } catch (error) {
+            demoStatus.textContent = "stored";
+            response = error instanceof Error ? error.message : "Provider delivery is unavailable for this demo run.";
+          }
+        }
 
         window.setTimeout(() => {
           thread.appendChild(
             message("agent", response, [
               promptOn ? "prompt applied" : "no prompt",
               skillOn ? "skill applied" : "no skill",
-              providerOn ? "ai_run_ref" : "manual path",
+              providerChip,
             ]),
           );
           thread.scrollTop = thread.scrollHeight;
         }, 180);
+      }
+
+      async function landingDemoProviderResponse(text) {
+        const result = await fetch(`${aiProviderApiUrl}/demo/landing/ai-run`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ message: text }),
+        });
+        const payload = await result.json().catch(() => ({}));
+        if (!result.ok) {
+          throw new Error(payload.message || "Provider delivery is unavailable for this demo run.");
+        }
+        return payload.output_text || "Provider completed the demo run.";
       }
 
       composer.addEventListener("submit", runDemo);

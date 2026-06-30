@@ -59,6 +59,11 @@ def load_lambda_module() -> types.ModuleType:
         "AI_SERVER_CREDIT_LEDGER_TABLE": "server-credit-ledger",
         "AI_USAGE_LEDGER_TABLE": "usage-ledger",
         "AI_USER_CREDIT_LEDGER_TABLE": "user-credit-ledger",
+        "AI_PROVIDER_PUBLIC_DEMO_ENABLED": "true",
+        "AI_PROVIDER_PUBLIC_DEMO_PROVIDER": "fake",
+        "AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS": "8",
+        "AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT": "64",
+        "AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT": "64",
     }
     module_name = "_ai_provider_lambda_for_test"
     path = Path(__file__).resolve().parents[1] / "aws" / "lambda_function.py"
@@ -232,3 +237,44 @@ class AiProviderLambdaAuthTest(TestCase):
         self.assertEqual("openai", payload["provider_config"]["provider"])
         self.assertEqual("seagull-ai-provider/providers/openai/api-key", payload["provider_config"]["secret_ref"])
         self.assertEqual("sk-test", fake_secrets.secrets["seagull-ai-provider/providers/openai/api-key"])
+
+    def test_landing_demo_run_allows_public_low_limit_run(self) -> None:
+        response = self.lambda_module.handler(
+            event(
+                "POST",
+                "/demo/landing/ai-run",
+                body={"message": "What should I build next?"},
+            ),
+            None,
+        )
+
+        payload = body(response)
+        self.assertEqual(200, response["statusCode"])
+        self.assertEqual("fake", payload["provider"])
+        self.assertEqual("fake-small", payload["model"])
+        self.assertIn("Fake response", payload["output_text"])
+        usage = self.lambda_module.service.list_usage_by_owner("landing-demo")
+        self.assertEqual(1, len(usage))
+
+    def test_landing_demo_run_returns_429_after_budget_exhaustion(self) -> None:
+        self.lambda_module.handler(
+            event(
+                "POST",
+                "/demo/landing/ai-run",
+                body={"message": "What should I build next?"},
+            ),
+            None,
+        )
+        self.lambda_module.PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = 1
+
+        response = self.lambda_module.handler(
+            event(
+                "POST",
+                "/demo/landing/ai-run",
+                body={"message": "What should I build next?"},
+            ),
+            None,
+        )
+
+        self.assertEqual(429, response["statusCode"])
+        self.assertEqual("demo_budget_exhausted", body(response)["error"])

@@ -474,18 +474,26 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      AI_ADMIN_AUDIT_EVENTS_TABLE   = aws_dynamodb_table.admin_audit_events.name
-      AI_BUDGET_LIMITS_TABLE        = aws_dynamodb_table.budget_limits.name
-      AI_MODEL_POLICIES_TABLE       = aws_dynamodb_table.model_policies.name
-      AI_PROVIDER_ADMIN_SECRET      = var.admin_secret
-      AI_PROVIDER_CONFIGS_TABLE     = aws_dynamodb_table.provider_configs.name
-      AI_PROVIDER_SECRET_PREFIX     = var.name_prefix
-      AI_RUN_EVENTS_TABLE           = aws_dynamodb_table.run_events.name
-      AI_RUNS_TABLE                 = aws_dynamodb_table.runs.name
-      AI_SERVER_CREDIT_LEDGER_TABLE = aws_dynamodb_table.server_credit_ledger.name
-      AI_USAGE_LEDGER_TABLE         = aws_dynamodb_table.usage_ledger.name
-      AI_USER_CREDIT_LEDGER_TABLE   = aws_dynamodb_table.user_credit_ledger.name
-      APP_NAME                      = var.name_prefix
+      AI_ADMIN_AUDIT_EVENTS_TABLE               = aws_dynamodb_table.admin_audit_events.name
+      AI_BUDGET_LIMITS_TABLE                    = aws_dynamodb_table.budget_limits.name
+      AI_MODEL_POLICIES_TABLE                   = aws_dynamodb_table.model_policies.name
+      AI_PROVIDER_ADMIN_SECRET                  = var.admin_secret
+      AI_PROVIDER_CONFIGS_TABLE                 = aws_dynamodb_table.provider_configs.name
+      AI_PROVIDER_PUBLIC_DEMO_ACTOR_AGENT_ID    = "${var.name_prefix}-landing-demo-agent"
+      AI_PROVIDER_PUBLIC_DEMO_ENABLED           = "true"
+      AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT  = "360"
+      AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS = "64"
+      AI_PROVIDER_PUBLIC_DEMO_OWNER_USER_ID     = "${var.name_prefix}-landing-demo"
+      AI_PROVIDER_PUBLIC_DEMO_PROVIDER          = "openai"
+      AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = "600"
+      AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT = "600"
+      AI_PROVIDER_SECRET_PREFIX                 = var.name_prefix
+      AI_RUN_EVENTS_TABLE                       = aws_dynamodb_table.run_events.name
+      AI_RUNS_TABLE                             = aws_dynamodb_table.runs.name
+      AI_SERVER_CREDIT_LEDGER_TABLE             = aws_dynamodb_table.server_credit_ledger.name
+      AI_USAGE_LEDGER_TABLE                     = aws_dynamodb_table.usage_ledger.name
+      AI_USER_CREDIT_LEDGER_TABLE               = aws_dynamodb_table.user_credit_ledger.name
+      APP_NAME                                  = var.name_prefix
     }
   }
 

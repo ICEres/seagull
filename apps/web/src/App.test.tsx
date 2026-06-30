@@ -483,7 +483,7 @@ describe("App dashboard", () => {
     });
 
     const container = renderApp("/admin");
-    await waitForText(container, "fake-small");
+    await waitForText(container, "12000");
 
     expect(container.textContent).toContain("fake");
     expect(container.textContent).toContain("fake-small");

@@ -303,9 +303,8 @@ jobs:
             --password "$PASSWORD" \
             --permanent
 
-          TOKEN_JSON="$(aws cognito-idp admin-initiate-auth \
-            --user-pool-id "$USER_POOL_ID" \
-            --auth-flow ADMIN_USER_PASSWORD_AUTH \
+          TOKEN_JSON="$(aws cognito-idp initiate-auth \
+            --auth-flow USER_PASSWORD_AUTH \
             --client-id "$CLIENT_ID" \
             --auth-parameters USERNAME="$USERNAME",PASSWORD="$PASSWORD")"
           ID_TOKEN="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["AuthenticationResult"]["IdToken"])' <<<"$TOKEN_JSON")"

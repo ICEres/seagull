@@ -434,7 +434,6 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:PutItem",
           "dynamodb:Query",
           "dynamodb:Scan",
-          "dynamodb:TransactWriteItems",
           "dynamodb:UpdateItem"
         ]
         Resource = local.table_resources

@@ -117,20 +117,15 @@ class DynamoDbAiProviderRepository:
         minimum_available_balance: int = 0,
     ) -> None:
         try:
-            self._transact_write(
-                [
-                    balance_update(
-                        table=self._user_credit_ledger_table,
-                        key={"entry_id": user_credit_balance_entry_id(entry.owner_user_id)},
-                        delta=entry.credit_delta,
-                        minimum_available_balance=minimum_available_balance,
-                    ),
-                    put_action(
-                        table=self._user_credit_ledger_table,
-                        item=user_credit_ledger_entry_to_item(entry),
-                        condition_expression="attribute_not_exists(entry_id)",
-                    ),
-                ]
+            update_credit_balance(
+                table=self._user_credit_ledger_table,
+                key={"entry_id": user_credit_balance_entry_id(entry.owner_user_id)},
+                delta=entry.credit_delta,
+                minimum_available_balance=minimum_available_balance,
+            )
+            self._user_credit_ledger_table.put_item(
+                Item=user_credit_ledger_entry_to_item(entry),
+                ConditionExpression="attribute_not_exists(entry_id)",
             )
         except Exception as exc:
             if is_conditional_check_failed(exc):
@@ -164,20 +159,15 @@ class DynamoDbAiProviderRepository:
         minimum_available_balance: int = 0,
     ) -> None:
         try:
-            self._transact_write(
-                [
-                    balance_update(
-                        table=self._server_credit_ledger_table,
-                        key={"entry_id": SERVER_BALANCE_ENTRY_ID},
-                        delta=entry.credit_delta,
-                        minimum_available_balance=minimum_available_balance,
-                    ),
-                    put_action(
-                        table=self._server_credit_ledger_table,
-                        item=server_credit_ledger_entry_to_item(entry),
-                        condition_expression="attribute_not_exists(entry_id)",
-                    ),
-                ]
+            update_credit_balance(
+                table=self._server_credit_ledger_table,
+                key={"entry_id": SERVER_BALANCE_ENTRY_ID},
+                delta=entry.credit_delta,
+                minimum_available_balance=minimum_available_balance,
+            )
+            self._server_credit_ledger_table.put_item(
+                Item=server_credit_ledger_entry_to_item(entry),
+                ConditionExpression="attribute_not_exists(entry_id)",
             )
         except Exception as exc:
             if is_conditional_check_failed(exc):
@@ -211,30 +201,24 @@ class DynamoDbAiProviderRepository:
         minimum_server_available_balance: int,
     ) -> None:
         try:
-            self._transact_write(
-                [
-                    balance_update(
-                        table=self._server_credit_ledger_table,
-                        key={"entry_id": SERVER_BALANCE_ENTRY_ID},
-                        delta=server_entry.credit_delta,
-                        minimum_available_balance=minimum_server_available_balance,
-                    ),
-                    put_action(
-                        table=self._server_credit_ledger_table,
-                        item=server_credit_ledger_entry_to_item(server_entry),
-                        condition_expression="attribute_not_exists(entry_id)",
-                    ),
-                    balance_update(
-                        table=self._user_credit_ledger_table,
-                        key={"entry_id": user_credit_balance_entry_id(user_entry.owner_user_id)},
-                        delta=user_entry.credit_delta,
-                    ),
-                    put_action(
-                        table=self._user_credit_ledger_table,
-                        item=user_credit_ledger_entry_to_item(user_entry),
-                        condition_expression="attribute_not_exists(entry_id)",
-                    ),
-                ]
+            update_credit_balance(
+                table=self._server_credit_ledger_table,
+                key={"entry_id": SERVER_BALANCE_ENTRY_ID},
+                delta=server_entry.credit_delta,
+                minimum_available_balance=minimum_server_available_balance,
+            )
+            self._server_credit_ledger_table.put_item(
+                Item=server_credit_ledger_entry_to_item(server_entry),
+                ConditionExpression="attribute_not_exists(entry_id)",
+            )
+            update_credit_balance(
+                table=self._user_credit_ledger_table,
+                key={"entry_id": user_credit_balance_entry_id(user_entry.owner_user_id)},
+                delta=user_entry.credit_delta,
+            )
+            self._user_credit_ledger_table.put_item(
+                Item=user_credit_ledger_entry_to_item(user_entry),
+                ConditionExpression="attribute_not_exists(entry_id)",
             )
         except Exception as exc:
             if is_conditional_check_failed(exc):
@@ -285,10 +269,6 @@ class DynamoDbAiProviderRepository:
             ScanIndexForward=True,
         )
         return tuple(item_to_budget_limit(item) for item in result.get("Items", []))
-
-    def _transact_write(self, actions: list[dict[str, Any]]) -> None:
-        self._user_credit_ledger_table.meta.client.transact_write_items(TransactItems=actions)
-
 
 def run_to_item(run: AiRun) -> dict[str, Any]:
     return without_none(
@@ -582,68 +562,24 @@ def user_credit_balance_entry_id(owner_user_id: str) -> str:
     return f"{USER_BALANCE_ENTRY_PREFIX}{owner_user_id}"
 
 
-def put_action(
-    *,
-    table: Any,
-    item: dict[str, Any],
-    condition_expression: str | None = None,
-) -> dict[str, Any]:
-    action: dict[str, Any] = {
-        "Put": {
-            "TableName": table.name,
-            "Item": dynamodb_item(item),
-        }
-    }
-    if condition_expression is not None:
-        action["Put"]["ConditionExpression"] = condition_expression
-    return action
-
-
-def balance_update(
+def update_credit_balance(
     *,
     table: Any,
     key: dict[str, Any],
     delta: int,
     minimum_available_balance: int = 0,
-) -> dict[str, Any]:
-    update: dict[str, Any] = {
-        "TableName": table.name,
-        "Key": dynamodb_item(key),
+) -> None:
+    update_args: dict[str, Any] = {
+        "Key": key,
         "UpdateExpression": "ADD available_credits :delta",
         "ExpressionAttributeValues": {
-            ":delta": dynamodb_attribute(delta),
+            ":delta": delta,
         },
     }
     if minimum_available_balance > 0:
-        update["ConditionExpression"] = "available_credits >= :minimum_available_balance"
-        update["ExpressionAttributeValues"][":minimum_available_balance"] = dynamodb_attribute(
-            minimum_available_balance
-        )
-    return {"Update": update}
-
-
-def dynamodb_item(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: dynamodb_attribute(value) for key, value in item.items() if value is not None}
-
-
-def dynamodb_attribute(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {"NULL": True}
-    if isinstance(value, bool):
-        return {"BOOL": value}
-    if isinstance(value, str):
-        return {"S": value}
-    if isinstance(value, (int, Decimal)):
-        return {"N": str(value)}
-    if isinstance(value, float):
-        return {"N": str(Decimal(str(value)))}
-    if isinstance(value, set):
-        return {"SS": sorted(str(item) for item in value)}
-    if isinstance(value, (list, tuple)):
-        return {"L": [dynamodb_attribute(item) for item in value]}
-    if isinstance(value, dict):
-        return {"M": dynamodb_item(value)}
-    raise TypeError(f"unsupported DynamoDB attribute type: {type(value).__name__}")
+        update_args["ConditionExpression"] = "available_credits >= :minimum_available_balance"
+        update_args["ExpressionAttributeValues"][":minimum_available_balance"] = minimum_available_balance
+    table.update_item(**update_args)
 
 
 def is_conditional_check_failed(exc: Exception) -> bool:

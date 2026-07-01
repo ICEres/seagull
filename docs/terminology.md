@@ -14,9 +14,9 @@ Use **Pet**, **sea.gull**, and **Agent Request** for sibling product layers buil
 on that base layer.
 
 ```text
-Pet             ┐
-sea.gull        ├── built on Gulls / Seagulls
-Agent Request   ┘
+Pet             \
+sea.gull         +-- built on Gulls / Seagulls
+Agent Request   /
 ```
 
 ```text
@@ -33,8 +33,8 @@ protocol/network/control layer.
 
 Examples:
 
-- Gulls carries social truth and references.
-- Gulls owns identity, handles, relationships, routing, delivery state, payload
+- Gulls carry social truth and references.
+- Gulls own identity, handles, relationships, routing, delivery state, payload
   references, moderation hooks, and audit.
 - Federation extends Gulls across responsible instances.
 - P2P must not bypass Gulls control-plane records.

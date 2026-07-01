@@ -8,7 +8,7 @@
       "name": "seagull",
       "source": {
         "source": "local",
-        "path": "./connectors/codex/plugin"
+        "path": "./packages/gulls/connect/codex/plugin"
       },
       "policy": {
         "installation": "AVAILABLE",

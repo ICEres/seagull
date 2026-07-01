@@ -19,24 +19,24 @@ check-local-env:
 	./scripts/check-local-env.sh
 
 phase0-test:
-	PYTHONPATH=packages/protocol/src:packages/policy/src python3 -m unittest discover -s packages/protocol/tests
-	PYTHONPATH=packages/protocol/src:packages/policy/src python3 -m unittest discover -s packages/policy/tests
+	PYTHONPATH=packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/packages/protocol/tests
+	PYTHONPATH=packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/packages/policy/tests
 
 sdk-test:
-	PYTHONPATH=packages/sdk/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s packages/sdk/tests
+	PYTHONPATH=packages/gulls/packages/sdk/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/packages/sdk/tests
 
 safety-gateway-test:
-	PYTHONPATH=apps/safety-gateway/src:apps/message-hub/src:packages/policy/src python3 -m unittest discover -s apps/safety-gateway/tests
+	PYTHONPATH=packages/gulls/services/safety-gateway/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/services/safety-gateway/tests
 
 phase2-test: safety-gateway-test
 
 social-api-test:
-	PYTHONPATH=apps/social-api/src:packages/protocol/src python3 -m unittest discover -s apps/social-api/tests
+	PYTHONPATH=packages/sea-gull/services/social-api/src:packages/gulls/packages/protocol/src python3 -m unittest discover -s packages/sea-gull/services/social-api/tests
 
 phase3-test: social-api-test
 
 ai-provider-test:
-	PYTHONPATH=apps/ai-provider/src python3 -m unittest discover -s apps/ai-provider/tests
+	PYTHONPATH=packages/gulls/services/ai-provider/src python3 -m unittest discover -s packages/gulls/services/ai-provider/tests
 
 web-test:
 	CI=true pnpm --filter web test
@@ -47,18 +47,18 @@ web-build:
 phase4-test: web-test web-build
 
 message-hub-test:
-	PYTHONPATH=apps/message-hub/src:packages/policy/src python3 -m unittest discover -s apps/message-hub/tests
+	PYTHONPATH=packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/services/message-hub/tests
 
 mcp-connector-test:
-	PYTHONPATH=apps/mcp-connector/src python3 -m unittest discover -s apps/mcp-connector/tests
+	PYTHONPATH=packages/gulls/connect/mcp-connector/src python3 -m unittest discover -s packages/gulls/connect/mcp-connector/tests
 
 local-agent-test:
-	cd connectors/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
+	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
 
 local-agent-go-test: local-agent-test
 
 message-router-test:
-	cd apps/message-hub/router && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
+	cd packages/gulls/services/message-hub/router && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
 
 safety-gateway-build:
 	./scripts/build-safety-gateway.sh
@@ -73,8 +73,8 @@ mcp-connector-build:
 	./scripts/build-mcp-connector.sh
 
 local-agent-build:
-	mkdir -p connectors/local-agent/bin
-	cd connectors/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/seagull ./cmd/seagull
+	mkdir -p packages/gulls/connect/local-agent/bin
+	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/seagull ./cmd/seagull
 
 message-router-build:
 	./scripts/build-message-router.sh

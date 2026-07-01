@@ -6,7 +6,7 @@ BUILD_DIR="$ROOT_DIR/infra/terraform/envs/dev/.terraform/build/message-router"
 
 mkdir -p "$BUILD_DIR"
 
-cd "$ROOT_DIR/apps/message-hub/router"
+cd "$ROOT_DIR/packages/gulls/services/message-hub/router"
 
 GOOS=linux \
 GOARCH=arm64 \

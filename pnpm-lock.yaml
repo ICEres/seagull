@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  apps/web:
+  packages/sea-gull/apps/web:
     dependencies:
       '@tanstack/react-query':
         specifier: ^5.101.0

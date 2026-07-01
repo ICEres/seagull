@@ -16,7 +16,7 @@ Current resources:
   work records.
 
 The current module still needs the payload and task-credit expansion described
-in [AWS Dev Payload And Task Systems Plan](../../../../docs/aws-dev-payload-task-plan.md):
+in [AWS Dev Payload And Task Systems Plan](../../../../packages/agent-request/docs/aws-dev-payload-task-plan.md):
 task capacity policies, task quotes, task escrows, task credit ledger entries,
 worker reputation events, retention worker wiring, and basic alarms.
 

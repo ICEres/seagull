@@ -41,8 +41,31 @@ env:
   SAFETY_GATEWAY_ADMIN_SECRET: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
 
 jobs:
-  python-tests:
-    name: Python tests
+  layer-folder-check:
+    name: ${{ matrix.layer }} layer folder shape
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        layer:
+          - gulls
+          - sea-gull
+          - pet
+          - agent-request
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Check layer folders
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "packages/${{ matrix.layer }}"
+          test -d "packages/${{ matrix.layer }}/docs"
+          test -d "packages/${{ matrix.layer }}/connect"
+
+  gulls-python-tests:
+    name: Gulls layer Python tests
     runs-on: ubuntu-latest
 
     steps:
@@ -54,17 +77,33 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run Python tests
+      - name: Run Gulls Python tests
         run: |
           make phase0-test
+          make sdk-test
           make safety-gateway-test
-          make social-api-test
           make ai-provider-test
           make message-hub-test
           make mcp-connector-test
 
-  web-test-build:
-    name: Web test and build
+  sea-gull-python-tests:
+    name: Sea-gull layer Python tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+
+      - name: Run Sea-gull Python tests
+        run: make social-api-test
+
+  sea-gull-web-test-build:
+    name: Sea-gull layer web test and build
     runs-on: ubuntu-latest
 
     steps:
@@ -96,12 +135,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: web-dist
-          path: apps/web/dist
+          path: packages/sea-gull/apps/web/dist
           if-no-files-found: error
           retention-days: 1
 
-  router-test-build:
-    name: Router test and build
+  gulls-router-test-build:
+    name: Gulls layer router test and build
     runs-on: ubuntu-latest
 
     steps:
@@ -111,8 +150,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version-file: apps/message-hub/router/go.mod
-          cache-dependency-path: apps/message-hub/router/go.sum
+          go-version-file: packages/gulls/services/message-hub/router/go.mod
+          cache-dependency-path: packages/gulls/services/message-hub/router/go.sum
 
       - name: Test router
         run: make message-router-test
@@ -128,8 +167,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  local-agent-test:
-    name: Local agent CLI tests
+  gulls-local-agent-test:
+    name: Gulls layer local agent CLI tests
     runs-on: ubuntu-latest
 
     steps:
@@ -139,35 +178,52 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version-file: connectors/local-agent/go.mod
+          go-version-file: packages/gulls/connect/local-agent/go.mod
 
       - name: Test local agent CLI
         run: make local-agent-test
 
-  lambda-builds:
-    name: Lambda package builds
+  gulls-lambda-builds:
+    name: Gulls layer Lambda package builds
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Build Lambda packages
+      - name: Build Gulls Lambda packages
         run: |
           make safety-gateway-build
-          make social-api-build
           make ai-provider-build
           make mcp-connector-build
 
-      - name: Upload Lambda package artifacts
+      - name: Upload Gulls Lambda package artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: lambda-packages
+          name: gulls-lambda-packages
           path: |
             infra/terraform/envs/dev/.terraform/build/safety-gateway/package
-            infra/terraform/envs/dev/.terraform/build/social-api/package
             infra/terraform/envs/dev/.terraform/build/ai-provider/package
             infra/terraform/envs/dev/.terraform/build/mcp-connector/package
+          if-no-files-found: error
+          retention-days: 1
+
+  sea-gull-lambda-builds:
+    name: Sea-gull layer Lambda package builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Build Sea-gull Lambda packages
+        run: make social-api-build
+
+      - name: Upload Sea-gull Lambda package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sea-gull-lambda-packages
+          path: infra/terraform/envs/dev/.terraform/build/social-api/package
           if-no-files-found: error
           retention-days: 1
 
@@ -197,11 +253,14 @@ jobs:
     name: Deploy dev
     runs-on: ubuntu-latest
     needs:
-      - python-tests
-      - web-test-build
-      - router-test-build
-      - local-agent-test
-      - lambda-builds
+      - layer-folder-check
+      - gulls-python-tests
+      - sea-gull-python-tests
+      - sea-gull-web-test-build
+      - gulls-router-test-build
+      - gulls-local-agent-test
+      - gulls-lambda-builds
+      - sea-gull-lambda-builds
       - terraform-fmt
 
     steps:
@@ -231,11 +290,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Download Lambda package artifacts
+      - name: Download Gulls Lambda package artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: lambda-packages
+          name: gulls-lambda-packages
           path: infra/terraform/envs/dev/.terraform/build
+
+      - name: Download Sea-gull Lambda package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: sea-gull-lambda-packages
+          path: infra/terraform/envs/dev/.terraform/build/social-api/package
 
       - name: Download router artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -250,7 +315,18 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: web-dist
-          path: apps/web/dist
+          path: packages/sea-gull/apps/web/dist
+
+      - name: Check deploy artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f infra/terraform/envs/dev/.terraform/build/safety-gateway/package/lambda_function.py
+          test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/lambda_function.py
+          test -f infra/terraform/envs/dev/.terraform/build/mcp-connector/package/lambda_function.py
+          test -f infra/terraform/envs/dev/.terraform/build/social-api/package/lambda_function.py
+          test -x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
+          test -f packages/sea-gull/apps/web/dist/index.html
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c

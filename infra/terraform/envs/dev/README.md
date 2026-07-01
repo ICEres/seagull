@@ -30,6 +30,7 @@ The first deployable stack is intentionally small:
 - Message router Go Lambda.
 - API Gateway WebSocket API.
 - DynamoDB storage tables.
+- Message Hub payload storage table and private payload object bucket.
 - Web frontend S3 bucket.
 - Web frontend CloudFront distribution.
 - `gulls.ai`, `sea.gulls.ai`, and `admin.gulls.ai` Route 53 aliases and CloudFront ACM
@@ -38,7 +39,7 @@ The first deployable stack is intentionally small:
 - API Gateway default route throttling.
 - IAM role and inline policy.
 
-Payload storage, payload retention workers, task quotes, escrows, capacity
+Payload API routes, payload retention workers, task quotes, escrows, capacity
 policies, task-credit ledger entries, and worker reputation events are planned
 as the next Message Hub dev expansion. See
 [`docs/aws-dev-payload-task-plan.md`](../../../../docs/aws-dev-payload-task-plan.md)

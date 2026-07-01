@@ -23,6 +23,11 @@ output "message_hub_table_arns" {
   value       = module.message_hub_storage.table_arns
 }
 
+output "message_hub_payload_objects_bucket_name" {
+  description = "S3 bucket name for Message Hub compressed payload objects."
+  value       = module.message_hub_storage.payload_objects_bucket_name
+}
+
 output "message_hub_agent_jobs_queue_url" {
   description = "SQS FIFO queue URL for async agent delivery jobs."
   value       = aws_sqs_queue.agent_jobs.url

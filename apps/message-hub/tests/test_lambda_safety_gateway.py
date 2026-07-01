@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
+import hashlib
 import json
 import os
 import sys
@@ -36,6 +38,7 @@ class FakeTable:
         "tool-requests": ("tool_request_id",),
         "task-results": ("result_id",),
         "agent-tokens": ("token_id",),
+        "payloads": ("content_ref",),
     }
 
     def __init__(self, name: str) -> None:
@@ -110,21 +113,50 @@ class FakeSqsClient:
         self.messages.append(kwargs)
 
 
+class FakeS3Body:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class FakeS3Client:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes, **kwargs: object) -> None:
+        self.objects[(Bucket, Key)] = Body
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        try:
+            body = self.objects[(Bucket, Key)]
+        except KeyError as exc:
+            raise FakeClientError("NoSuchKey") from exc
+        return {"Body": FakeS3Body(body)}
+
+    def delete_object(self, *, Bucket: str, Key: str) -> None:
+        self.objects.pop((Bucket, Key), None)
+
+
 class FakeBoto3(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("boto3")
         self.dynamodb = FakeDynamoDbResource()
         self.sqs = FakeSqsClient()
+        self.s3 = FakeS3Client()
 
     def resource(self, service_name: str) -> FakeDynamoDbResource:
         if service_name != "dynamodb":
             raise ValueError(service_name)
         return self.dynamodb
 
-    def client(self, service_name: str) -> FakeSqsClient:
-        if service_name != "sqs":
-            raise ValueError(service_name)
-        return self.sqs
+    def client(self, service_name: str) -> object:
+        if service_name == "sqs":
+            return self.sqs
+        if service_name == "s3":
+            return self.s3
+        raise ValueError(service_name)
 
 
 class FakeSafetyResponse:
@@ -166,6 +198,8 @@ def load_lambda_module(*, queue_url: str = "") -> tuple[types.ModuleType, FakeBo
         "IDEMPOTENCY_TABLE": "idempotency",
         "MESSAGES_TABLE": "messages",
         "MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES": "true",
+        "PAYLOAD_OBJECTS_BUCKET": "payload-bucket",
+        "PAYLOADS_TABLE": "payloads",
         "SAFETY_GATEWAY_ADMIN_SECRET": "safety-secret",
         "SAFETY_GATEWAY_URL": "https://safety.example.test",
         "TASK_RESULTS_TABLE": "task-results",
@@ -210,6 +244,7 @@ def event(
     path: str,
     body: dict[str, object] | None = None,
     headers: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
 ) -> dict[str, object]:
     request: dict[str, object] = {
         "rawPath": path,
@@ -217,6 +252,8 @@ def event(
     }
     if headers is not None:
         request["headers"] = headers
+    if query is not None:
+        request["queryStringParameters"] = query
     if body is not None:
         request["body"] = json.dumps(body)
     return request
@@ -238,6 +275,122 @@ class SafetyGatewayStub:
         if not self.responses:
             raise AssertionError("unexpected safety gateway request")
         return FakeSafetyResponse(self.responses.pop(0))
+
+
+class MessageHubLambdaPayloadTest(TestCase):
+    def setUp(self) -> None:
+        self.lambda_module, self.fake_boto3 = load_lambda_module()
+
+    def register_agent(self, handle: str) -> None:
+        response = self.lambda_module.handler(event("POST", "/agents", {"handle": handle}), None)
+        self.assertIn(response["statusCode"], {200, 201})
+
+    def create_payload(self, content: str, **overrides: object) -> dict[str, object]:
+        body = {
+            "content": content,
+            "media_type": "text/markdown",
+            **overrides,
+        }
+        response = self.lambda_module.handler(event("POST", "/payloads", body), None)
+        self.assertEqual(201, response["statusCode"])
+        return response_body(response)
+
+    def test_create_and_read_public_payload_from_s3(self) -> None:
+        content = "Large payload.\n" * 500
+        result = self.create_payload(
+            content,
+            access_scope="public",
+            ttl_expires_at="2027-06-28T00:00:00+00:00",
+        )
+        content_ref = str(result["content_ref"])
+        payload = result["payload"]
+        self.assertIsInstance(payload, dict)
+
+        self.assertTrue(content_ref.startswith("payload://payload_"))
+        self.assertEqual("text/markdown", payload["media_type"])
+        self.assertEqual(len(content.encode("utf-8")), payload["byte_length"])
+        self.assertEqual(f"sha256:{hashlib.sha256(content.encode('utf-8')).hexdigest()}", payload["hash"])
+        self.assertEqual("gzip", payload["compression"])
+        self.assertEqual("ready", payload["retention_state"])
+        self.assertEqual("public", payload["access_scope"])
+        self.assertEqual("aws_s3", payload["storage_provider"])
+        self.assertEqual("2027-06-28T00:00:00Z", payload["ttl_expires_at"])
+        self.assertIn("payload-bucket", payload["storage_ref"])
+
+        storage_key = str(payload["storage_ref"]).removeprefix("s3://payload-bucket/")
+        stored = self.fake_boto3.s3.objects[("payload-bucket", storage_key)]
+        self.assertEqual(content.encode("utf-8"), gzip.decompress(stored))
+        self.assertEqual(f"sha256:{hashlib.sha256(stored).hexdigest()}", payload["compressed_hash"])
+
+        read_response = self.lambda_module.handler(
+            event("GET", "/payloads", query={"content_ref": content_ref}),
+            None,
+        )
+        self.assertEqual(200, read_response["statusCode"])
+        read_body = response_body(read_response)
+        self.assertEqual(content, read_body["content"])
+        self.assertEqual(content_ref, read_body["content_ref"])
+        self.assertNotIn("ttl_expires_at_epoch", read_body["payload"])
+
+    def test_recipient_payload_requires_message_association(self) -> None:
+        self.register_agent("@sender:seagull.local")
+        self.register_agent("@recipient:seagull.local")
+        payload = self.create_payload("secret context")
+        content_ref = str(payload["content_ref"])
+
+        denied = self.lambda_module.handler(
+            event("GET", "/payloads", query={"content_ref": content_ref}),
+            None,
+        )
+        self.assertEqual(403, denied["statusCode"])
+
+        self.lambda_module.urlopen = SafetyGatewayStub(decision("decision_1", "allow"))
+        sent = self.lambda_module.handler(
+            event(
+                "POST",
+                "/messages",
+                {
+                    "sender_handle": "@sender:seagull.local",
+                    "recipient_handles": ["@recipient:seagull.local"],
+                    "content_ref": content_ref,
+                },
+            ),
+            None,
+        )
+        self.assertEqual(201, sent["statusCode"])
+
+        allowed = self.lambda_module.handler(
+            event(
+                "GET",
+                "/payloads",
+                query={
+                    "content_ref": content_ref,
+                    "requester_handle": "@recipient:seagull.local",
+                },
+            ),
+            None,
+        )
+        self.assertEqual(200, allowed["statusCode"])
+        self.assertEqual("secret context", response_body(allowed)["content"])
+
+    def test_expired_payload_returns_gone_and_preserves_metadata(self) -> None:
+        result = self.create_payload(
+            "short lived",
+            access_scope="public",
+            ttl_expires_at="2020-01-01T00:00:00+00:00",
+        )
+        content_ref = str(result["content_ref"])
+        storage_key = str(result["payload"]["storage_ref"]).removeprefix("s3://payload-bucket/")
+
+        response = self.lambda_module.handler(
+            event("GET", "/payloads", query={"content_ref": content_ref}),
+            None,
+        )
+
+        self.assertEqual(410, response["statusCode"])
+        stored = self.fake_boto3.dynamodb.tables["payloads"].items[(content_ref,)]
+        self.assertEqual("expired", stored["retention_state"])
+        self.assertNotIn(("payload-bucket", storage_key), self.fake_boto3.s3.objects)
 
 
 class MessageHubLambdaSafetyGatewayTest(TestCase):

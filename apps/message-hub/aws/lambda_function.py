@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -96,6 +97,8 @@ THREAD_SUMMARIES_TABLE = os.environ["THREAD_SUMMARIES_TABLE"]
 TASKS_TABLE = os.environ.get("TASKS_TABLE")
 TOOL_REQUESTS_TABLE = os.environ.get("TOOL_REQUESTS_TABLE")
 TASK_RESULTS_TABLE = os.environ.get("TASK_RESULTS_TABLE")
+PAYLOADS_TABLE = os.environ.get("PAYLOADS_TABLE")
+PAYLOAD_OBJECTS_BUCKET = os.environ.get("PAYLOAD_OBJECTS_BUCKET", "").strip()
 AGENT_JOBS_QUEUE_URL = os.environ.get("AGENT_JOBS_QUEUE_URL")
 ALLOW_LEGACY_HANDLE_AGENT_ROUTES = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES", "").lower() in {
     "1",
@@ -106,6 +109,7 @@ LEGACY_HANDLE_ROUTE_SECRET = os.environ.get("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
 
 dynamodb = boto3.resource("dynamodb")
 sqs = boto3.client("sqs")
+s3 = boto3.client("s3")
 agents_table = dynamodb.Table(AGENTS_TABLE)
 messages_table = dynamodb.Table(MESSAGES_TABLE)
 threads_table = dynamodb.Table(THREADS_TABLE)
@@ -117,6 +121,7 @@ thread_summaries_table = dynamodb.Table(THREAD_SUMMARIES_TABLE)
 tasks_table = dynamodb.Table(TASKS_TABLE) if TASKS_TABLE else None
 tool_requests_table = dynamodb.Table(TOOL_REQUESTS_TABLE) if TOOL_REQUESTS_TABLE else None
 task_results_table = dynamodb.Table(TASK_RESULTS_TABLE) if TASK_RESULTS_TABLE else None
+payloads_table = dynamodb.Table(PAYLOADS_TABLE) if PAYLOADS_TABLE else None
 
 
 class BadRequest(ValueError):
@@ -143,6 +148,10 @@ class Unauthorized(ValueError):
     pass
 
 
+class PayloadUnavailable(ValueError):
+    pass
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
@@ -163,6 +172,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET" and public_agent_profile_path(path):
             handle = unquote(path.removeprefix("/agents/").strip("/"))
             return read_agent(handle)
+
+        if method == "POST" and path == "/payloads":
+            return create_payload(event)
+
+        if method == "GET" and path == "/payloads":
+            return read_payload(event)
 
         require_legacy_handle_routes_enabled(event)
 
@@ -265,6 +280,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response(403, {"error": "forbidden", "message": str(exc)})
     except Unauthorized as exc:
         return response(401, {"error": "unauthorized", "message": str(exc)})
+    except PayloadUnavailable as exc:
+        return response(410, {"error": "payload_unavailable", "message": str(exc)})
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
         return response(500, {"error": "internal_error"})
@@ -361,6 +378,89 @@ def issue_agent_token(agent: dict[str, Any], body: dict[str, Any]) -> dict[str, 
 def read_agent(handle: str) -> dict[str, Any]:
     agent = require_agent_by_handle(handle)
     return response(200, {"agent": public_agent(agent)})
+
+
+def create_payload(event: dict[str, Any]) -> dict[str, Any]:
+    require_payload_storage()
+    body = parse_body(event)
+    content = payload_content(body)
+    content_bytes = content.encode("utf-8")
+    media_type = optional_string(body, "media_type") or "text/plain; charset=utf-8"
+    access_scope = normalize_payload_access_scope(optional_string(body, "access_scope") or "recipients")
+    ttl_expires_at = optional_datetime_string(body, "ttl_expires_at")
+    compressed_content = gzip.compress(content_bytes, compresslevel=6, mtime=0)
+    payload_id = f"payload_{uuid.uuid4().hex}"
+    content_ref = f"payload://{payload_id}"
+    object_key = f"payloads/{payload_id}.gz"
+    storage_ref = f"s3://{PAYLOAD_OBJECTS_BUCKET}/{object_key}"
+    now = now_iso()
+    payload = without_none(
+        {
+            "content_ref": content_ref,
+            "media_type": media_type,
+            "byte_length": len(content_bytes),
+            "hash": payload_hash(content_bytes),
+            "compression": "gzip",
+            "compressed_byte_length": len(compressed_content),
+            "compressed_hash": payload_hash(compressed_content),
+            "ttl_expires_at": ttl_expires_at,
+            "ttl_expires_at_epoch": ttl_epoch(ttl_expires_at),
+            "retention_state": "ready",
+            "access_scope": access_scope,
+            "fetch_policy_ref": optional_string(body, "fetch_policy_ref"),
+            "chunk_manifest_ref": optional_string(body, "chunk_manifest_ref"),
+            "storage_provider": "aws_s3",
+            "storage_ref": storage_ref,
+            "created_at": now,
+        }
+    )
+    s3.put_object(
+        Bucket=PAYLOAD_OBJECTS_BUCKET,
+        Key=object_key,
+        Body=compressed_content,
+        ContentType="application/gzip",
+        Metadata={
+            "content-ref": content_ref,
+            "media-type": media_type,
+        },
+    )
+    payloads_table.put_item(Item=payload, ConditionExpression="attribute_not_exists(content_ref)")
+    return response(201, {"content_ref": content_ref, "payload": payload_record(payload)})
+
+
+def read_payload(event: dict[str, Any]) -> dict[str, Any]:
+    require_payload_storage()
+    params = query_params(event)
+    content_ref = required(params, "content_ref")
+    payload = require_payload(content_ref)
+    payload = refresh_payload_retention(payload)
+    require_payload_fetch_authorized(
+        payload,
+        optional_string(params, "requester_handle"),
+    )
+    if payload.get("retention_state") != "ready":
+        raise PayloadUnavailable(f"payload content is {payload.get('retention_state')}: {payload['content_ref']}")
+
+    object_key = payload_object_key(payload)
+    try:
+        object_response = s3.get_object(Bucket=PAYLOAD_OBJECTS_BUCKET, Key=object_key)
+        compressed_content = object_response["Body"].read()
+    except ClientError as exc:
+        raise PayloadUnavailable(f"payload content is unavailable: {payload['content_ref']}") from exc
+
+    if payload.get("compression") == "gzip":
+        content_bytes = gzip.decompress(compressed_content)
+    else:
+        content_bytes = compressed_content
+    result: dict[str, Any] = {
+        "content_ref": payload["content_ref"],
+        "payload": payload_record(payload),
+    }
+    try:
+        result["content"] = content_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        result["content_bytes_base64"] = base64.b64encode(content_bytes).decode("ascii")
+    return response(200, result)
 
 
 def create_routing_rule(event: dict[str, Any]) -> dict[str, Any]:
@@ -1822,6 +1922,90 @@ def require_agent_tokens_table() -> None:
         raise BadRequest("agent token table is not configured")
 
 
+def require_payload_storage() -> None:
+    if payloads_table is None or not PAYLOAD_OBJECTS_BUCKET:
+        raise BadRequest("payload storage is not configured")
+
+
+def require_payload(content_ref: str) -> dict[str, Any]:
+    require_payload_storage()
+    normalized = normalize_required_ref(content_ref, "content_ref")
+    payload = payloads_table.get_item(Key={"content_ref": normalized}).get("Item")
+    if payload is None:
+        raise NotFound(f"payload not found: {normalized}")
+    return payload
+
+
+def refresh_payload_retention(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("retention_state") != "ready":
+        return payload
+    expires_at = payload.get("ttl_expires_at")
+    if not isinstance(expires_at, str) or not expires_at.strip():
+        return payload
+    if parse_iso_datetime(expires_at) > datetime.now(timezone.utc):
+        return payload
+
+    updated = dict(payload)
+    updated["retention_state"] = "expired"
+    payloads_table.put_item(Item=without_none(updated))
+    try:
+        s3.delete_object(Bucket=PAYLOAD_OBJECTS_BUCKET, Key=payload_object_key(updated))
+    except ClientError:
+        pass
+    return updated
+
+
+def require_payload_fetch_authorized(payload: dict[str, Any], requester_handle: str | None) -> None:
+    access_scope = str(payload.get("access_scope") or "recipients").strip().lower()
+    if access_scope == "public":
+        return
+    if requester_handle is None:
+        raise Forbidden(f"requester_handle is required for {access_scope} payload access")
+
+    requester = require_agent_by_handle(requester_handle)
+    if payload_fetch_is_allowed_for_agent(payload, requester, access_scope):
+        return
+    raise Forbidden(f"agent cannot fetch payload: {requester['handle']}")
+
+
+def payload_fetch_is_allowed_for_agent(
+    payload: dict[str, Any],
+    agent: dict[str, Any],
+    access_scope: str,
+) -> bool:
+    messages = messages_for_content_ref(payload["content_ref"])
+    if not messages:
+        return False
+
+    if access_scope == "owner":
+        return any(message.get("sender_agent_id") == agent["agent_id"] for message in messages)
+    if access_scope == "recipients":
+        return any(agent["agent_id"] in collection_values(message.get("recipient_agent_ids")) for message in messages)
+    if access_scope == "thread":
+        for message in messages:
+            thread = get_thread_record(str(message.get("thread_id") or ""))
+            if thread is not None and agent["agent_id"] in collection_values(thread.get("participants")):
+                return True
+    return False
+
+
+def messages_for_content_ref(content_ref: str) -> list[dict[str, Any]]:
+    result = messages_table.scan()
+    return [
+        message
+        for message in result.get("Items", [])
+        if message.get("content_ref") == content_ref
+    ]
+
+
+def collection_values(value: Any) -> set[Any]:
+    if isinstance(value, set):
+        return value
+    if isinstance(value, (list, tuple)):
+        return set(value)
+    return set()
+
+
 def public_agent_profile_path(path: str) -> bool:
     parts = [part for part in path.strip("/").split("/") if part]
     return len(parts) == 2 and parts[0] == "agents"
@@ -2364,12 +2548,91 @@ def optional_datetime_string(body: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = parse_iso_datetime(value)
     except ValueError as exc:
         raise BadRequest(f"{key} must be an ISO datetime") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise BadRequest(f"{key} must include a timezone")
     return parsed.isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def ttl_epoch(value: str | None) -> int | None:
+    if value is None:
+        return None
+    return int(parse_iso_datetime(value).timestamp())
+
+
+def payload_content(body: dict[str, Any]) -> str:
+    value = body.get("content")
+    if value is None:
+        value = body.get("content_inline")
+    if value is None:
+        value = body.get("content_bytes")
+    if value is None:
+        raise BadRequest("payload content is required")
+    if not isinstance(value, str):
+        raise BadRequest("payload content must be a string")
+    return value
+
+
+def normalize_payload_access_scope(access_scope: str) -> str:
+    normalized = access_scope.strip().lower()
+    if normalized not in {"owner", "thread", "recipients", "public"}:
+        raise BadRequest("access_scope must be owner, thread, recipients, or public")
+    return normalized
+
+
+def normalize_required_ref(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise BadRequest(f"{field_name} is required")
+    if private_context_value(normalized):
+        raise BadRequest(f"{field_name} contains private or credential-bearing data")
+    return normalized
+
+
+def payload_hash(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def payload_record(payload: dict[str, Any]) -> dict[str, Any]:
+    return clean_item(
+        {
+            "content_ref": payload.get("content_ref"),
+            "media_type": payload.get("media_type"),
+            "byte_length": payload.get("byte_length"),
+            "hash": payload.get("hash"),
+            "compression": payload.get("compression"),
+            "compressed_byte_length": payload.get("compressed_byte_length"),
+            "compressed_hash": payload.get("compressed_hash"),
+            "ttl_expires_at": payload.get("ttl_expires_at"),
+            "retention_state": payload.get("retention_state"),
+            "access_scope": payload.get("access_scope"),
+            "fetch_policy_ref": payload.get("fetch_policy_ref"),
+            "chunk_manifest_ref": payload.get("chunk_manifest_ref"),
+            "storage_provider": payload.get("storage_provider"),
+            "storage_ref": payload.get("storage_ref"),
+            "created_at": payload.get("created_at"),
+        }
+    )
+
+
+def payload_object_key(payload: dict[str, Any]) -> str:
+    storage_ref = str(payload.get("storage_ref") or "")
+    prefix = f"s3://{PAYLOAD_OBJECTS_BUCKET}/"
+    if storage_ref.startswith(prefix):
+        key = storage_ref.removeprefix(prefix)
+        if key:
+            return key
+    content_ref = str(payload.get("content_ref") or "")
+    payload_id = content_ref.removeprefix("payload://").strip("/")
+    if not payload_id:
+        raise PayloadUnavailable("payload storage reference is invalid")
+    return f"payloads/{payload_id}.gz"
 
 
 def public_agent_token_record(record: dict[str, Any]) -> dict[str, Any]:

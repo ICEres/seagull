@@ -23,6 +23,7 @@ locals {
   web_bucket_name        = "${local.web_prefix}-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   web_dist_dir           = "${path.module}/../../../../apps/web/dist"
   landing_dist_dir       = "${path.module}/../../../../apps/landing"
+  payload_objects_bucket = "${var.project}-${var.environment}-msg-payloads-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   lambda_src             = "${path.module}/../../../../apps/message-hub/aws/lambda_function.py"
   agent_worker_src       = "${path.module}/../../../../apps/message-hub/aws/agent_worker.py"
   router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
@@ -153,6 +154,15 @@ resource "aws_iam_role_policy" "lambda" {
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.agent_jobs.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "${module.message_hub_storage.payload_objects_bucket_arn}/*"
       }
     ]
   })
@@ -177,6 +187,8 @@ resource "aws_lambda_function" "message_hub_api" {
       DELIVERIES_TABLE            = module.message_hub_storage.table_names.deliveries
       IDEMPOTENCY_TABLE           = module.message_hub_storage.table_names.idempotency_keys
       MESSAGES_TABLE              = module.message_hub_storage.table_names.messages
+      PAYLOAD_OBJECTS_BUCKET      = module.message_hub_storage.payload_objects_bucket_name
+      PAYLOADS_TABLE              = module.message_hub_storage.table_names.payloads
       ROUTING_RULES_TABLE         = module.message_hub_storage.table_names.routing_rules
       SAFETY_BLOCKED_TERMS        = "unsafe:"
       SAFETY_GATEWAY_ADMIN_SECRET = var.safety_gateway_admin_secret
@@ -875,6 +887,7 @@ module "message_hub_storage" {
   name_prefix                    = local.message_hub_prefix
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
+  payload_objects_bucket_name    = local.payload_objects_bucket
   tags                           = local.message_hub_tags
 }
 

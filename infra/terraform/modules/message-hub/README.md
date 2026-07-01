@@ -10,14 +10,15 @@ Current resources:
 - DynamoDB `deliveries` table with recipient, sender, and message indexes.
 - DynamoDB `idempotency_keys` table with TTL.
 - DynamoDB `thread_summaries` table for compact context.
+- DynamoDB `payloads` table and private S3 payload object bucket for compressed
+  payload refs.
 - DynamoDB `tasks`, `tool_requests`, and `task_results` tables for delegated
   work records.
 
 The current module still needs the payload and task-credit expansion described
 in [AWS Dev Payload And Task Systems Plan](../../../../docs/aws-dev-payload-task-plan.md):
-payloads, task capacity policies, task quotes, task escrows, task credit ledger
-entries, worker reputation events, a private payload object bucket, retention
-worker wiring, and basic alarms.
+task capacity policies, task quotes, task escrows, task credit ledger entries,
+worker reputation events, retention worker wiring, and basic alarms.
 
 Logical table map:
 
@@ -49,6 +50,11 @@ thread_summaries
   PK thread_id
   SK created_at
 
+payloads
+  PK content_ref
+  GSI retention-state-created-at-index(retention_state, created_at)
+  TTL ttl_expires_at_epoch
+
 tasks
   PK task_id
   GSI thread-created-at-index(thread_id, created_at)
@@ -67,11 +73,6 @@ task_results
 Planned next table map:
 
 ```text
-payloads
-  PK content_ref
-  GSI retention-state-created-at-index(retention_state, created_at)
-  TTL ttl_expires_at_epoch
-
 task_capacity_policies
   PK policy_id
   GSI task-created-at-index(task_id, created_at)

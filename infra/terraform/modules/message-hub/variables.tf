@@ -21,6 +21,12 @@ variable "dynamodb_kms_key_arn" {
   default     = ""
 }
 
+variable "payload_objects_bucket_name" {
+  type        = string
+  description = "Optional globally unique S3 bucket name for compressed payload objects."
+  default     = ""
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to message hub resources."

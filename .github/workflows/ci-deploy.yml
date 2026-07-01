@@ -62,7 +62,6 @@ jobs:
           make ai-provider-test
           make message-hub-test
           make mcp-connector-test
-          make local-agent-test
 
   web-test-build:
     name: Web test and build
@@ -129,6 +128,22 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  local-agent-test:
+    name: Local agent CLI tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: connectors/local-agent/go.mod
+
+      - name: Test local agent CLI
+        run: make local-agent-test
+
   lambda-builds:
     name: Lambda package builds
     runs-on: ubuntu-latest
@@ -185,6 +200,7 @@ jobs:
       - python-tests
       - web-test-build
       - router-test-build
+      - local-agent-test
       - lambda-builds
       - terraform-fmt
 

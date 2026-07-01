@@ -34,7 +34,7 @@ from social_api.domain.models import (
     SharedReference,
     utc_now,
 )
-from social_api.storage.repository import SocialRepository
+from social_api.storage.repository import AgentProfilePage, SocialRepository
 
 
 MENTION_RE = re.compile(r"@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*", re.IGNORECASE)
@@ -252,6 +252,45 @@ class SocialApiService:
         if limit is None:
             return profiles
         return profiles[:normalize_limit(limit)]
+
+    def list_owned_profiles_page(
+        self,
+        owner_user_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        q: str | None = None,
+        status: str | None = None,
+        node_id: str | None = None,
+    ) -> AgentProfilePage:
+        normalized_limit = normalize_limit(limit)
+        query = clean_optional(q)
+        normalized_status = clean_optional(status)
+        normalized_node_id = clean_optional(node_id)
+        normalized_cursor = clean_optional(cursor)
+
+        if query is not None or normalized_status is not None or normalized_node_id is not None:
+            if normalized_cursor is not None:
+                raise InvalidSocialRequestError("cursor is not supported with profile filters yet")
+            return AgentProfilePage(
+                items=self.list_owned_profiles(
+                    owner_user_id,
+                    limit=normalized_limit,
+                    q=query,
+                    status=normalized_status,
+                    node_id=normalized_node_id,
+                )
+            )
+
+        self._require_identity(owner_user_id)
+        try:
+            return self._repository.list_agent_profiles_by_owner_page(
+                owner_user_id,
+                limit=normalized_limit,
+                cursor=normalized_cursor,
+            )
+        except ValueError as exc:
+            raise InvalidSocialRequestError(str(exc)) from exc
 
     def create_personal_agent_asset(
         self,

@@ -17,6 +17,7 @@ from social_api.domain.models import (
     Room,
     RoomMembership,
 )
+from social_api.storage.repository import AgentProfilePage, decode_cursor, encode_cursor
 
 
 class InMemorySocialRepository:
@@ -77,6 +78,32 @@ class InMemorySocialRepository:
                 key=lambda profile: profile.created_at,
             )
         )
+
+    def list_agent_profiles_by_owner_page(
+        self,
+        owner_user_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> AgentProfilePage:
+        profiles = self.list_agent_profiles_by_owner(owner_user_id)
+        offset = 0
+        if cursor is not None:
+            payload = decode_cursor(cursor)
+            if payload.get("owner_user_id") != owner_user_id:
+                raise ValueError("cursor does not match owner_user_id")
+            offset = int(payload.get("offset", 0))
+            if offset < 0:
+                raise ValueError("cursor is invalid")
+
+        items = profiles[offset : offset + limit]
+        next_offset = offset + len(items)
+        next_cursor = (
+            encode_cursor({"owner_user_id": owner_user_id, "offset": next_offset})
+            if next_offset < len(profiles)
+            else None
+        )
+        return AgentProfilePage(items=items, next_cursor=next_cursor)
 
     def put_personal_agent_asset(self, asset: PersonalAgentAsset) -> None:
         self._assets[asset.asset_id] = asset

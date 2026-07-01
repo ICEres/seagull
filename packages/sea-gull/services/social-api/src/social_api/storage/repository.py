@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Protocol
+import base64
+import json
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from social_api.domain.models import (
     AgentAssetBinding,
@@ -19,6 +22,12 @@ from social_api.domain.models import (
     Room,
     RoomMembership,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentProfilePage:
+    items: tuple[AgentProfileRecord, ...]
+    next_cursor: str | None = None
 
 
 class SocialRepository(Protocol):
@@ -42,6 +51,15 @@ class SocialRepository(Protocol):
 
     def list_agent_profiles_by_owner(self, owner_user_id: str) -> tuple[AgentProfileRecord, ...]:
         """Return profiles owned by one human user."""
+
+    def list_agent_profiles_by_owner_page(
+        self,
+        owner_user_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> AgentProfilePage:
+        """Return one bounded page of profiles owned by one human user."""
 
     def put_personal_agent_asset(self, asset: PersonalAgentAsset) -> None:
         """Create or replace a user-owned prompt or skill asset."""
@@ -144,3 +162,20 @@ class SocialRepository(Protocol):
 
     def list_moderation_records(self, *, limit: int = 50) -> tuple[ModerationRecord, ...]:
         """Return recent moderation records."""
+
+
+def encode_cursor(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_cursor(cursor: str) -> dict[str, Any]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("cursor is invalid") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("cursor is invalid")
+    return payload

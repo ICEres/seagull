@@ -190,14 +190,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "GET" and path == "/profiles":
             query = event.get("queryStringParameters") or {}
-            profiles = service.list_owned_profiles(
+            page = service.list_owned_profiles_page(
                 owner_user_id_from_query(event, query),
                 limit=optional_query_int(query, "limit", default=50),
+                cursor=optional_query_string(query, "cursor"),
                 q=optional_query_string(query, "q"),
                 status=optional_query_string(query, "status"),
                 node_id=optional_query_string(query, "node_id"),
             )
-            return response(200, {"items": [agent_profile_to_dict(profile) for profile in profiles]})
+            return response(
+                200,
+                {
+                    "items": [agent_profile_to_dict(profile) for profile in page.items],
+                    "next_cursor": page.next_cursor,
+                },
+            )
 
         if method == "POST" and path == "/personal-agent-assets":
             body = parse_body(event)

@@ -241,15 +241,17 @@ class LocalSocialApi:
         *,
         owner_user_id: str | None = None,
         limit: int | None = None,
+        cursor: str | None = None,
         q: str | None = None,
         status: str | None = None,
         node_id: str | None = None,
         principal: AuthPrincipal | None = None,
     ) -> dict[str, Any]:
         try:
-            profiles = self._service.list_owned_profiles(
+            page = self._service.list_owned_profiles_page(
                 self._owner_user_id_from_value(owner_user_id, principal),
-                limit=limit,
+                limit=50 if limit is None else limit,
+                cursor=cursor,
                 q=q,
                 status=status,
                 node_id=node_id,
@@ -258,7 +260,10 @@ class LocalSocialApi:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
-        return {"items": [agent_profile_to_dict(profile) for profile in profiles]}
+        return {
+            "items": [agent_profile_to_dict(profile) for profile in page.items],
+            "next_cursor": page.next_cursor,
+        }
 
     def create_personal_agent_asset(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
         try:

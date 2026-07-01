@@ -24,6 +24,7 @@ from social_api.domain.models import (
     RoomMembership,
     SharedReference,
 )
+from social_api.storage.repository import AgentProfilePage, decode_cursor, encode_cursor
 
 
 class DynamoDbSocialRepository:
@@ -109,6 +110,40 @@ class DynamoDbSocialRepository:
             ScanIndexForward=True,
         )
         return tuple(item_to_agent_profile(item) for item in result.get("Items", []))
+
+    def list_agent_profiles_by_owner_page(
+        self,
+        owner_user_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> AgentProfilePage:
+        query_args: dict[str, Any] = {
+            "IndexName": "owner-created-at-index",
+            "KeyConditionExpression": Key("owner_user_id").eq(owner_user_id),
+            "ScanIndexForward": True,
+            "Limit": limit,
+        }
+        if cursor is not None:
+            payload = decode_cursor(cursor)
+            if payload.get("owner_user_id") != owner_user_id:
+                raise ValueError("cursor does not match owner_user_id")
+            exclusive_start_key = payload.get("exclusive_start_key")
+            if not isinstance(exclusive_start_key, dict):
+                raise ValueError("cursor is invalid")
+            query_args["ExclusiveStartKey"] = exclusive_start_key
+
+        result = self._profiles_table.query(**query_args)
+        next_key = result.get("LastEvaluatedKey")
+        next_cursor = (
+            encode_cursor({"owner_user_id": owner_user_id, "exclusive_start_key": next_key})
+            if isinstance(next_key, dict)
+            else None
+        )
+        return AgentProfilePage(
+            items=tuple(item_to_agent_profile(item) for item in result.get("Items", [])),
+            next_cursor=next_cursor,
+        )
 
     def put_personal_agent_asset(self, asset: PersonalAgentAsset) -> None:
         self._personal_agent_assets_table.put_item(Item=personal_agent_asset_to_item(asset))

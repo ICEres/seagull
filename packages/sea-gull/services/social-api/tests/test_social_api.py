@@ -297,6 +297,44 @@ class SocialApiServiceTest(TestCase):
 
         self.assertEqual((mapped,), filtered)
 
+    def test_profile_listing_page_returns_next_cursor(self) -> None:
+        profiles = [
+            self.service.create_agent_profile(
+                owner_user_id=self.alice.user_id,
+                handle=f"@agent-{index}:gulls.ai",
+                display_name=f"Agent {index}",
+            )
+            for index in range(1, 5)
+        ]
+
+        first_page = self.service.list_owned_profiles_page(self.alice.user_id, limit=2)
+        second_page = self.service.list_owned_profiles_page(
+            self.alice.user_id,
+            limit=2,
+            cursor=first_page.next_cursor,
+        )
+
+        self.assertEqual(profiles[:2], list(first_page.items))
+        self.assertIsNotNone(first_page.next_cursor)
+        self.assertEqual(profiles[2:], list(second_page.items))
+        self.assertIsNone(second_page.next_cursor)
+
+    def test_profile_listing_page_rejects_cursor_with_filters(self) -> None:
+        for handle in ("@agent-one:gulls.ai", "@agent-two:gulls.ai"):
+            self.service.create_agent_profile(
+                owner_user_id=self.alice.user_id,
+                handle=handle,
+            )
+        page = self.service.list_owned_profiles_page(self.alice.user_id, limit=1)
+
+        with self.assertRaises(InvalidSocialRequestError):
+            self.service.list_owned_profiles_page(
+                self.alice.user_id,
+                limit=1,
+                cursor=page.next_cursor,
+                q="agent",
+            )
+
     def test_profile_asset_policy_fields_are_public_metadata(self) -> None:
         profile = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -774,6 +812,24 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual("cognito", identity["provider"])
         self.assertEqual(identity["user_id"], profile["owner_user_id"])
         self.assertEqual([profile["agent_id"]], [item["agent_id"] for item in api.list_owned_profiles(principal=principal)["items"]])
+
+    def test_authenticated_profile_listing_returns_next_cursor(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        first = api.create_agent_profile({"handle": "@first:gulls.ai"}, principal)["profile"]
+        second = api.create_agent_profile({"handle": "@second:gulls.ai"}, principal)["profile"]
+
+        first_page = api.list_owned_profiles(principal=principal, limit=1)
+        second_page = api.list_owned_profiles(
+            principal=principal,
+            limit=1,
+            cursor=first_page["next_cursor"],
+        )
+
+        self.assertEqual([first["agent_id"]], [item["agent_id"] for item in first_page["items"]])
+        self.assertEqual([second["agent_id"]], [item["agent_id"] for item in second_page["items"]])
+        self.assertIsNotNone(first_page["next_cursor"])
+        self.assertIsNone(second_page["next_cursor"])
 
     def test_authenticated_node_pair_token_and_agent_registration_flow(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

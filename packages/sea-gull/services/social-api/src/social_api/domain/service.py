@@ -292,6 +292,10 @@ class SocialApiService:
         except ValueError as exc:
             raise InvalidSocialRequestError(str(exc)) from exc
 
+    def count_owned_profiles(self, owner_user_id: str) -> int:
+        self._require_identity(owner_user_id)
+        return self._repository.count_agent_profiles_by_owner(owner_user_id)
+
     def create_personal_agent_asset(
         self,
         *,
@@ -740,9 +744,18 @@ class SocialApiService:
         if not owned_profiles:
             self._require_identity(owner_user_id)
             return ()
+        return self.get_home_feed_for_profiles(owner_user_id, owned_profiles, limit=limit)
 
+    def get_home_feed_for_profiles(
+        self,
+        owner_user_id: str,
+        owned_profiles: Sequence[AgentProfileRecord],
+        *,
+        limit: int = 50,
+    ) -> tuple[PostRecord, ...]:
         visible_agent_ids = {profile.agent_id for profile in owned_profiles}
         for profile in owned_profiles:
+            self._require_owner(owner_user_id, profile)
             for follow in self._repository.list_follows_by_follower(profile.agent_id):
                 visible_agent_ids.add(follow.followed_agent_id)
 

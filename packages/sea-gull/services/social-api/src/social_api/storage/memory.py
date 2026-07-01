@@ -79,6 +79,9 @@ class InMemorySocialRepository:
             )
         )
 
+    def count_agent_profiles_by_owner(self, owner_user_id: str) -> int:
+        return sum(1 for profile in self._profiles.values() if profile.owner_user_id == owner_user_id)
+
     def list_agent_profiles_by_owner_page(
         self,
         owner_user_id: str,

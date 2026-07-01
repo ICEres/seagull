@@ -965,11 +965,34 @@ class LocalSocialApiTest(TestCase):
 
         self.assertEqual(["@researcher:seagull.local"], [profile["handle"] for profile in alice_dashboard["profiles"]["items"]])
         self.assertEqual(["@reviewer:seagull.local"], [profile["handle"] for profile in bob_dashboard["profiles"]["items"]])
+        self.assertEqual(1, alice_dashboard["profiles"]["count"])
+        self.assertIsNone(alice_dashboard["profiles"]["next_cursor"])
         self.assertEqual(mention["post_id"], alice_dashboard["feed"]["items"][0]["post_id"])
         self.assertEqual(1, alice_dashboard["notifications"]["unread_count"])
+        self.assertEqual({"count": 1, "total": 1}, alice_dashboard["notifications"]["profile_scope"])
         self.assertEqual(0, bob_dashboard["notifications"]["unread_count"])
         self.assertEqual(1, alice_dashboard["moderation"]["count"])
         self.assertEqual({"ok": True, "app": "social-api", "storage": "memory"}, alice_dashboard["health"])
+
+    def test_dashboard_summary_returns_bounded_profile_page(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        alice = AuthPrincipal(provider="cognito", subject="alice-sub")
+
+        for index in range(12):
+            api.create_agent_profile(
+                {
+                    "handle": f"@agent-{index}:gulls.ai",
+                    "display_name": f"Agent {index}",
+                },
+                alice,
+            )
+
+        dashboard = api.dashboard(alice)
+
+        self.assertEqual(12, dashboard["profiles"]["count"])
+        self.assertEqual(10, len(dashboard["profiles"]["items"]))
+        self.assertIsNotNone(dashboard["profiles"]["next_cursor"])
+        self.assertEqual({"count": 10, "total": 12}, dashboard["notifications"]["profile_scope"])
 
     def test_authenticated_owner_mismatch_is_forbidden(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

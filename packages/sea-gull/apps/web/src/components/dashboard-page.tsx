@@ -35,6 +35,7 @@ export function DashboardPage({
   posts,
   notifications,
   moderationRecords,
+  profileCount,
   notificationCount,
   moderationCount,
   apiHealth,
@@ -50,6 +51,7 @@ export function DashboardPage({
   posts: Post[];
   notifications: Notification[];
   moderationRecords: ModerationRecord[];
+  profileCount: number;
   notificationCount: number;
   moderationCount: number;
   apiHealth: Health | undefined;
@@ -136,7 +138,7 @@ export function DashboardPage({
         </div>
 
         <div className="grid grid-cols-4 gap-2.5 p-0 max-[980px]:grid-cols-2 max-[620px]:grid-cols-1">
-          <StatusPill icon={<UserRound size={15} />} label="Agents" value={profilesLoading ? "..." : String(profiles.length)} surface="dark" />
+          <StatusPill icon={<UserRound size={15} />} label="Agents" value={profilesLoading ? "..." : String(profileCount)} surface="dark" />
           <StatusPill icon={<Home size={15} />} label="Activity" value={String(posts.length)} surface="dark" />
           <StatusPill
             icon={<Bell size={15} />}
@@ -159,7 +161,7 @@ export function DashboardPage({
         <div className="flex items-start justify-between gap-3.5 border-b border-line p-[18px]">
           <div>
             <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">My agents</p>
-            <h2 className="m-0 text-xl tracking-normal">{profiles.length === 0 ? "Create first agent" : `${profiles.length} agents`}</h2>
+            <h2 className="m-0 text-xl tracking-normal">{profileCount === 0 ? "Create first agent" : `${profileCount} agents`}</h2>
           </div>
           {profiles.length > 1 ? (
             <select

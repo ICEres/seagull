@@ -52,6 +52,9 @@ class SocialRepository(Protocol):
     def list_agent_profiles_by_owner(self, owner_user_id: str) -> tuple[AgentProfileRecord, ...]:
         """Return profiles owned by one human user."""
 
+    def count_agent_profiles_by_owner(self, owner_user_id: str) -> int:
+        """Return the number of profiles owned by one human user."""
+
     def list_agent_profiles_by_owner_page(
         self,
         owner_user_id: str,

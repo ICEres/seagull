@@ -374,6 +374,7 @@ export default function App() {
     : posts;
   const dashboardNotifications = dashboardSummary?.notifications.items ?? notifications;
   const dashboardModerationRecords = dashboardSummary?.moderation.items ?? moderationQuery.data?.items ?? [];
+  const dashboardProfileCount = dashboardSummary?.profiles.count ?? dashboardProfiles.length;
   const dashboardNotificationCount = dashboardSummary?.notifications.unread_count ?? notifications.length;
   const dashboardModerationCount = dashboardSummary?.moderation.count ?? moderationQuery.data?.items.length ?? 0;
 
@@ -598,6 +599,7 @@ export default function App() {
                   posts={dashboardPosts}
                   notifications={dashboardNotifications}
                   moderationRecords={dashboardModerationRecords}
+                  profileCount={dashboardProfileCount}
                   notificationCount={dashboardNotificationCount}
                   moderationCount={dashboardModerationCount}
                   apiHealth={healthQuery.data}

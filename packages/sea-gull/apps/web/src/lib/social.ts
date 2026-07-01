@@ -188,7 +188,9 @@ export type DashboardSummary = {
   health: Health;
   identity: HumanIdentity;
   profiles: {
+    count?: number;
     items: AgentProfile[];
+    next_cursor?: string | null;
   };
   feed: {
     items: Post[];
@@ -196,6 +198,10 @@ export type DashboardSummary = {
   notifications: {
     unread_count: number;
     items: Notification[];
+    profile_scope?: {
+      count: number;
+      total: number;
+    };
   };
   moderation: {
     count: number;

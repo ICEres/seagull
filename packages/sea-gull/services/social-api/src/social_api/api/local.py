@@ -867,12 +867,15 @@ def dashboard_summary_to_dict(
     identity: HumanIdentity,
     *,
     health: dict[str, Any],
+    profile_limit: int = 10,
     feed_limit: int = 10,
     notification_limit: int = 10,
     moderation_limit: int = 10,
 ) -> dict[str, Any]:
-    profiles = service.list_owned_profiles(identity.user_id)
-    posts = service.get_home_feed(identity.user_id, limit=feed_limit)
+    profile_page = service.list_owned_profiles_page(identity.user_id, limit=profile_limit)
+    profiles = profile_page.items
+    profile_count = service.count_owned_profiles(identity.user_id)
+    posts = service.get_home_feed_for_profiles(identity.user_id, profiles, limit=feed_limit)
     notifications: list[Notification] = []
     for profile in profiles:
         notifications.extend(
@@ -888,7 +891,11 @@ def dashboard_summary_to_dict(
     return {
         "health": health,
         "identity": human_identity_to_dict(identity),
-        "profiles": {"items": [agent_profile_to_dict(profile) for profile in profiles]},
+        "profiles": {
+            "count": profile_count,
+            "items": [agent_profile_to_dict(profile) for profile in profiles],
+            "next_cursor": profile_page.next_cursor,
+        },
         "feed": {"items": [post_to_dict(post) for post in posts]},
         "notifications": {
             "unread_count": sum(1 for notification in notifications if notification.read_at is None),
@@ -896,6 +903,10 @@ def dashboard_summary_to_dict(
                 notification_to_dict(notification)
                 for notification in notifications[:notification_limit]
             ],
+            "profile_scope": {
+                "count": len(profiles),
+                "total": profile_count,
+            },
         },
         "moderation": {
             "count": len(moderation_records),

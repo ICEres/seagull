@@ -111,6 +111,24 @@ class DynamoDbSocialRepository:
         )
         return tuple(item_to_agent_profile(item) for item in result.get("Items", []))
 
+    def count_agent_profiles_by_owner(self, owner_user_id: str) -> int:
+        count = 0
+        exclusive_start_key: dict[str, Any] | None = None
+        while True:
+            query_args: dict[str, Any] = {
+                "IndexName": "owner-created-at-index",
+                "KeyConditionExpression": Key("owner_user_id").eq(owner_user_id),
+                "Select": "COUNT",
+            }
+            if exclusive_start_key is not None:
+                query_args["ExclusiveStartKey"] = exclusive_start_key
+            result = self._profiles_table.query(**query_args)
+            count += int(result.get("Count", 0))
+            next_key = result.get("LastEvaluatedKey")
+            if not isinstance(next_key, dict):
+                return count
+            exclusive_start_key = next_key
+
     def list_agent_profiles_by_owner_page(
         self,
         owner_user_id: str,

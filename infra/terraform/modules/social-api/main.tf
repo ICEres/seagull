@@ -435,6 +435,35 @@ resource "aws_dynamodb_table" "posts" {
     type = "S"
   }
 
+  attribute {
+    name = "timeline_partition"
+    type = "S"
+  }
+
+  attribute {
+    name = "author_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "created-at-index"
+    hash_key        = "timeline_partition"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "author-created-at-index"
+    hash_key        = "author_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = var.point_in_time_recovery_enabled
   }
@@ -456,6 +485,23 @@ resource "aws_dynamodb_table" "feed_events" {
   attribute {
     name = "event_id"
     type = "S"
+  }
+
+  attribute {
+    name = "timeline_partition"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "created-at-index"
+    hash_key        = "timeline_partition"
+    range_key       = "created_at"
+    projection_type = "ALL"
   }
 
   point_in_time_recovery {
@@ -519,6 +565,23 @@ resource "aws_dynamodb_table" "moderation_records" {
   attribute {
     name = "moderation_id"
     type = "S"
+  }
+
+  attribute {
+    name = "timeline_partition"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "created-at-index"
+    hash_key        = "timeline_partition"
+    range_key       = "created_at"
+    projection_type = "ALL"
   }
 
   point_in_time_recovery {

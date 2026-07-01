@@ -26,6 +26,10 @@ from social_api.domain.models import (
 )
 from social_api.storage.repository import AgentProfilePage, decode_cursor, encode_cursor
 
+RECENT_FEED_EVENTS_PARTITION = "feed_events"
+RECENT_MODERATION_PARTITION = "moderation"
+RECENT_POSTS_PARTITION = "posts"
+
 
 class DynamoDbSocialRepository:
     def __init__(
@@ -320,25 +324,34 @@ class DynamoDbSocialRepository:
         )
 
     def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
-        result = self._posts_table.scan(Limit=limit)
-        posts = sorted(
-            (item_to_post(item) for item in result.get("Items", [])),
-            key=lambda post: post.created_at,
-            reverse=True,
+        result = self._posts_table.query(
+            IndexName="created-at-index",
+            KeyConditionExpression=Key("timeline_partition").eq(RECENT_POSTS_PARTITION),
+            ScanIndexForward=False,
+            Limit=limit,
         )
-        return tuple(posts[:limit])
+        return tuple(item_to_post(item) for item in result.get("Items", []))
+
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        result = self._posts_table.query(
+            IndexName="author-created-at-index",
+            KeyConditionExpression=Key("author_agent_id").eq(author_agent_id),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return tuple(item_to_post(item) for item in result.get("Items", []))
 
     def put_feed_event(self, event: FeedEvent) -> None:
         self._feed_events_table.put_item(Item=feed_event_to_item(event))
 
     def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEvent, ...]:
-        result = self._feed_events_table.scan(Limit=limit)
-        events = sorted(
-            (item_to_feed_event(item) for item in result.get("Items", [])),
-            key=lambda event: event.created_at,
-            reverse=True,
+        result = self._feed_events_table.query(
+            IndexName="created-at-index",
+            KeyConditionExpression=Key("timeline_partition").eq(RECENT_FEED_EVENTS_PARTITION),
+            ScanIndexForward=False,
+            Limit=limit,
         )
-        return tuple(events[:limit])
+        return tuple(item_to_feed_event(item) for item in result.get("Items", []))
 
     def put_notification(self, notification: Notification) -> None:
         self._notifications_table.put_item(Item=notification_to_item(notification))
@@ -361,13 +374,13 @@ class DynamoDbSocialRepository:
         self._moderation_table.put_item(Item=moderation_record_to_item(record))
 
     def list_moderation_records(self, *, limit: int = 50) -> tuple[ModerationRecord, ...]:
-        result = self._moderation_table.scan(Limit=limit)
-        records = sorted(
-            (item_to_moderation_record(item) for item in result.get("Items", [])),
-            key=lambda record: record.created_at,
-            reverse=True,
+        result = self._moderation_table.query(
+            IndexName="created-at-index",
+            KeyConditionExpression=Key("timeline_partition").eq(RECENT_MODERATION_PARTITION),
+            ScanIndexForward=False,
+            Limit=limit,
         )
-        return tuple(records[:limit])
+        return tuple(item_to_moderation_record(item) for item in result.get("Items", []))
 
 
 def human_identity_to_item(identity: HumanIdentity) -> dict[str, Any]:
@@ -693,6 +706,7 @@ def post_to_item(post: PostRecord) -> dict[str, Any]:
     return without_none(
         {
             "post_id": post.post_id,
+            "timeline_partition": RECENT_POSTS_PARTITION,
             "author_agent_id": post.author_agent_id,
             "content": post.content,
             "text": post.text,
@@ -746,6 +760,7 @@ def feed_event_to_item(event: FeedEvent) -> dict[str, Any]:
     return without_none(
         {
             "event_id": event.event_id,
+            "timeline_partition": RECENT_FEED_EVENTS_PARTITION,
             "event_type": event.event_type,
             "actor_agent_id": event.actor_agent_id,
             "object_id": event.object_id,
@@ -800,6 +815,7 @@ def moderation_record_to_item(record: ModerationRecord) -> dict[str, Any]:
     return without_none(
         {
             "moderation_id": record.moderation_id,
+            "timeline_partition": RECENT_MODERATION_PARTITION,
             "created_by_user_id": record.created_by_user_id,
             "target_type": record.target_type,
             "target_id": record.target_id,

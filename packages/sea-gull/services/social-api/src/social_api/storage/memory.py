@@ -204,6 +204,10 @@ class InMemorySocialRepository:
     def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
         return tuple(sorted(self._posts.values(), key=lambda post: post.created_at, reverse=True)[:limit])
 
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        posts = (post for post in self._posts.values() if post.author_agent_id == author_agent_id)
+        return tuple(sorted(posts, key=lambda post: post.created_at, reverse=True)[:limit])
+
     def put_feed_event(self, event: FeedEvent) -> None:
         self._feed_events[event.event_id] = event
 

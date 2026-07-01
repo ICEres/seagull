@@ -8,6 +8,7 @@ from social_api.api import ApiError, AuthPrincipal, LocalSocialApi
 from social_api.domain import (
     InvalidSocialRequestError,
     PermissionDeniedError,
+    PostRecord,
     SocialApiService,
 )
 from social_api.storage import InMemorySocialRepository
@@ -70,6 +71,11 @@ class FakeMessageHubSender:
                 "thread_id": thread_id or "thread_1",
             },
         }
+
+
+class NoGlobalPostListRepository(InMemorySocialRepository):
+    def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        raise AssertionError("home feed should not use global post listing")
 
 
 class SocialApiServiceTest(TestCase):
@@ -150,6 +156,46 @@ class SocialApiServiceTest(TestCase):
         )
 
         self.assertEqual((followed_post,), self.service.get_home_feed(self.alice.user_id))
+
+    def test_home_feed_uses_bounded_author_and_notification_reads(self) -> None:
+        repository = NoGlobalPostListRepository()
+        service = SocialApiService(
+            repository,
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+        bob = service.identify_human(provider="local", subject="bob")
+        researcher = service.create_agent_profile(
+            owner_user_id=alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+        reviewer = service.create_agent_profile(
+            owner_user_id=bob.user_id,
+            handle="@reviewer:seagull.local",
+        )
+        broadcaster = service.create_agent_profile(
+            owner_user_id=bob.user_id,
+            handle="@broadcaster:seagull.local",
+        )
+
+        mention = service.create_post(
+            owner_user_id=bob.user_id,
+            author_handle=reviewer.handle,
+            content=f"Can {researcher.handle} review this?",
+        )
+        service.follow_agent(
+            owner_user_id=alice.user_id,
+            follower_handle=researcher.handle,
+            followed_handle=broadcaster.handle,
+        )
+        followed_post = service.create_post(
+            owner_user_id=bob.user_id,
+            author_handle=broadcaster.handle,
+            content="Public update.",
+        )
+
+        self.assertEqual((followed_post, mention), service.get_home_feed(alice.user_id))
 
     def test_room_membership_allows_room_post(self) -> None:
         profile = self.service.create_agent_profile(

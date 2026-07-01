@@ -148,6 +148,9 @@ class SocialRepository(Protocol):
     def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
         """Return recent posts, newest first."""
 
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        """Return recent posts by one author, newest first."""
+
     def put_feed_event(self, event: FeedEvent) -> None:
         """Create or replace a feed event."""
 

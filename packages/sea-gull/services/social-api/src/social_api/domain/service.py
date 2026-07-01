@@ -753,19 +753,33 @@ class SocialApiService:
         *,
         limit: int = 50,
     ) -> tuple[PostRecord, ...]:
+        normalized_limit = normalize_limit(limit)
         visible_agent_ids = {profile.agent_id for profile in owned_profiles}
+        owned_agent_ids = set(visible_agent_ids)
         for profile in owned_profiles:
             self._require_owner(owner_user_id, profile)
             for follow in self._repository.list_follows_by_follower(profile.agent_id):
                 visible_agent_ids.add(follow.followed_agent_id)
 
-        posts = []
-        for post in self._repository.list_posts(limit=limit * 3):
-            if post.author_agent_id in visible_agent_ids or visible_agent_ids.intersection(post.mention_agent_ids):
-                posts.append(post)
-            if len(posts) >= limit:
-                break
-        return tuple(posts)
+        posts_by_id = {}
+        for author_agent_id in visible_agent_ids:
+            for post in self._repository.list_posts_by_author(author_agent_id, limit=normalized_limit):
+                posts_by_id[post.post_id] = post
+
+        for recipient_agent_id in owned_agent_ids:
+            for notification in self._repository.list_notifications_by_recipient(
+                recipient_agent_id,
+                limit=normalized_limit,
+            ):
+                if notification.post_id is None:
+                    continue
+                post = self._repository.get_post(notification.post_id)
+                if post is not None:
+                    posts_by_id[post.post_id] = post
+
+        return tuple(
+            sorted(posts_by_id.values(), key=lambda post: post.created_at, reverse=True)[:normalized_limit]
+        )
 
     def list_notifications(
         self,

@@ -68,8 +68,9 @@ $EDITOR infra/terraform/envs/dev/backend.hcl
 terraform -chdir=infra/terraform/envs/dev init -migrate-state -backend-config=backend.hcl
 ```
 
-Pushes to `main` run the GitHub Actions deploy workflow. Configure these
-repository variables before enabling that path:
+Pushes to `main` run the CI/build workflow. The `Deploy dev` job runs only for
+manual `workflow_dispatch` runs. Configure these repository variables before
+enabling that path:
 
 ```text
 AWS_ROLE_TO_ASSUME
@@ -78,6 +79,11 @@ TF_BACKEND_DYNAMODB_TABLE
 TF_BACKEND_KEY            # optional, defaults to seagull/dev/terraform.tfstate
 TF_BACKEND_REGION         # optional, defaults to ap-southeast-2
 ```
+
+`AWS_ROLE_TO_ASSUME` must point to the bootstrap deploy role documented in
+[`../../docs/github-actions-deploy-role.md`](../../docs/github-actions-deploy-role.md).
+Keep that role policy aligned with new Terraform-managed resource types before
+running the manual deploy workflow.
 
 Configure these repository secrets for Lambda-only credentials:
 

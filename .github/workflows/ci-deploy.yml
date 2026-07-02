@@ -48,7 +48,7 @@ jobs:
       matrix:
         layer:
           - gulls
-          - sea-gull
+          - seagulls
           - pet
           - agent-request
 
@@ -135,7 +135,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: web-dist
-          path: packages/sea-gull/apps/web/dist
+          path: packages/seagulls/apps/web/dist
           if-no-files-found: error
           retention-days: 1
 
@@ -316,7 +316,7 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: web-dist
-          path: packages/sea-gull/apps/web/dist
+          path: packages/seagulls/apps/web/dist
 
       - name: Check deploy artifacts
         shell: bash
@@ -327,7 +327,7 @@ jobs:
           test -f infra/terraform/envs/dev/.terraform/build/mcp-connector/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/social-api/package/lambda_function.py
           test -x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
-          test -f packages/sea-gull/apps/web/dist/index.html
+          test -f packages/seagulls/apps/web/dist/index.html
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c

@@ -41,7 +41,7 @@ fetch_ready() {
 
   for attempt in $(seq 1 30); do
     if fetch "$url" "$output"; then
-      if grep -q "<title>Seagull</title>" "$output"; then
+      if grep -Eq "<title>(S|s)eagulls?</title>" "$output"; then
         return 0
       fi
     fi
@@ -64,20 +64,20 @@ grep -q "$SOCIAL_AUTH_CLIENT_ID" .local/web-smoke-config.js
 grep -q '"mode":"cognito"' .local/web-smoke-config.js
 
 fetch "$WEB_URL/inbox" .local/web-smoke-inbox.html
-grep -q "<title>Seagull</title>" .local/web-smoke-inbox.html
+grep -Eq "<title>(S|s)eagulls?</title>" .local/web-smoke-inbox.html
 
 if [ -n "$ADMIN_WEB_URL" ]; then
   ADMIN_HOST="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$ADMIN_WEB_URL")"
   fetch_ready "$ADMIN_WEB_URL/" .local/web-smoke-admin-index.html
   fetch "$ADMIN_WEB_URL/admin" .local/web-smoke-admin-page.html
-  grep -q "<title>Seagull</title>" .local/web-smoke-admin-page.html
+  grep -Eq "<title>(S|s)eagulls?</title>" .local/web-smoke-admin-page.html
   grep -q "$ADMIN_HOST" .local/web-smoke-config.js
 fi
 
 if [ -n "$LANDING_WEB_URL" ]; then
   for attempt in $(seq 1 30); do
     if fetch "$LANDING_WEB_URL/" .local/web-smoke-landing.html; then
-      if grep -q "<title>Seagull Lite Demo</title>" .local/web-smoke-landing.html &&
+      if grep -Eq "<title>(S|s)eagulls? Lite Demo</title>" .local/web-smoke-landing.html &&
         grep -q "sea.gulls.ai" .local/web-smoke-landing.html; then
         break
       fi

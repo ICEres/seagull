@@ -24,7 +24,7 @@ from ai_provider.api.local import (
     user_credit_ledger_entry_to_dict,
 )
 from ai_provider.domain import AiProviderService, AiRunState, BudgetLimit, InvalidAiRunError, ModelPolicy
-from ai_provider.providers import FakeProviderAdapter, OpenAIProviderAdapter
+from ai_provider.providers import BedrockConverseProviderAdapter, FakeProviderAdapter, OpenAIProviderAdapter
 from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
 
 
@@ -181,6 +181,7 @@ service = AiProviderService(
     {
         "fake": FakeProviderAdapter(),
         "openai": OpenAIProviderAdapter(api_key_resolver=provider_api_key),
+        "bedrock": BedrockConverseProviderAdapter(),
     },
 )
 

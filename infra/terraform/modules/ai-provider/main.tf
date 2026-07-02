@@ -457,6 +457,13 @@ resource "aws_iam_role_policy" "lambda" {
           "secretsmanager:PutSecretValue"
         ]
         Resource = local.provider_secret_resources
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = "*"
       }
     ]
   })

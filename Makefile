@@ -36,7 +36,7 @@ social-api-test:
 phase3-test: social-api-test
 
 ai-provider-test:
-	PYTHONPATH=packages/gulls/services/ai-provider/src python3 -m unittest discover -s packages/gulls/services/ai-provider/tests
+	PYTHONPATH=packages/gulls/services/ai-provider/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src python3 -m unittest discover -s packages/gulls/services/ai-provider/tests
 
 web-test:
 	CI=true pnpm --filter web test

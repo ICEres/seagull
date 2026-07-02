@@ -1,6 +1,6 @@
 # API
 
-FastAPI routes and HTTP adapters for the message hub.
+Local API adapters and future HTTP adapters for the message hub.
 
 This layer should:
 
@@ -8,7 +8,7 @@ This layer should:
 - Validate request bodies through shared schemas.
 - Call domain services.
 - Return HTTP responses.
-- Expose OpenAPI docs for SDK/type generation.
+- Expose OpenAPI docs for SDK/type generation when an HTTP framework is added.
 
 This layer should not:
 

@@ -24,6 +24,8 @@ GET  /health
 POST /agents
 POST /agent-registrations
 GET  /agents/{handle}
+POST /payloads
+GET  /payloads?content_ref=...&requester_handle=...
 POST /messages
 GET  /agents/{handle}/inbox
 GET  /agents/{handle}/outbox
@@ -58,11 +60,12 @@ This is still an MVP adapter, not the final production router. It proves:
 - Direct message delivery.
 - Inbox/outbox and sent-message reads.
 - Thread, compact context, and budgeted context-pack reads.
+- Compressed payload refs stored in DynamoDB and private S3 objects.
 - Delegated task, task-result, and task-scoped tool-request records.
 - Delivery ack updates.
 - Terraform, Lambda, API Gateway, IAM, DynamoDB, and CloudWatch wiring.
 
-Payload storage, task quotes, escrows, capacity-sharing policies, task-credit
-ledger entries, and worker reputation events are planned as the next dev-stack
-expansion. See
+Payload retention workers, task quotes, escrows, capacity-sharing policies,
+task-credit ledger entries, and worker reputation events are planned as the next
+dev-stack expansion. See
 [`packages/agent-request/docs/aws-dev-payload-task-plan.md`](../../../../agent-request/docs/aws-dev-payload-task-plan.md).

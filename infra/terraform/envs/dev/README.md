@@ -39,9 +39,10 @@ The first deployable stack is intentionally small:
 - API Gateway default route throttling.
 - IAM role and inline policy.
 
-Payload API routes, payload retention workers, task quotes, escrows, capacity
-policies, task-credit ledger entries, and worker reputation events are planned
-as the next Message Hub dev expansion. See
+Payload API routes and storage are part of the current Message Hub MVP. Payload
+retention workers, task quotes, escrows, capacity policies, task-credit ledger
+entries, and worker reputation events are planned as the next Message Hub dev
+expansion. See
 [`packages/agent-request/docs/aws-dev-payload-task-plan.md`](../../../../packages/agent-request/docs/aws-dev-payload-task-plan.md)
 for the deployment sequence and table/queue/alarm implications.
 

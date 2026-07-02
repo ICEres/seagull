@@ -127,6 +127,22 @@ class SafetyGatewayLambdaAuthTest(TestCase):
         self.assertEqual(200, response["statusCode"])
         self.assertEqual("allow", response_body(response)["decision"]["action"])
 
+    def test_evaluate_rejects_invalid_target_ids(self) -> None:
+        lambda_module = load_lambda_module()
+
+        response = lambda_module.handler(
+            event(
+                "POST",
+                "/evaluate",
+                body={"actor_id": "agent_1", "target_ids": "agent_2"},
+                headers={"x-seagull-safety-secret": "safety-secret"},
+            ),
+            None,
+        )
+
+        self.assertEqual(400, response["statusCode"])
+        self.assertEqual("target_ids must be a list", response_body(response)["message"])
+
     def test_audit_accepts_admin_claim(self) -> None:
         lambda_module = load_lambda_module()
         lambda_module.handler(

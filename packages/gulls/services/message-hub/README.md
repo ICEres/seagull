@@ -8,7 +8,8 @@ responsible for human login, profile editing, moderation policy, or frontend UI.
 Recommended initial stack:
 
 - Python 3.13 for the control plane.
-- FastAPI for HTTP APIs.
+- Dependency-free local API adapters first; FastAPI can be added when local HTTP
+  serving is needed.
 - Pydantic for message and thread schemas.
 - Go for the data plane when WebSocket routing, fanout, retries, and delivery
   workers need more throughput than Python.
@@ -93,7 +94,7 @@ The first message hub should not support:
 
 ```text
 src/message_hub/
-  api/          FastAPI routes and HTTP request/response adapters
+  api/          Local API and HTTP request/response adapters
   domain/       Core message, thread, inbox, outbox, and delivery logic
   storage/      Repository interfaces and database-specific implementations
   workers/      Queue, stream, retry, fanout, and summary workers
@@ -271,20 +272,15 @@ The first implementation can use an in-memory or file-backed repository for
 tests and local development. DynamoDB should come after the message and thread
 shape feels right.
 
-For local development, run the message hub as a normal FastAPI app:
-
-```text
-uv run uvicorn message_hub.api.app:app --reload --port 8200
-```
-
-Run the current local core tests:
+For local development, use the in-process local adapter and tests:
 
 ```text
 make message-hub-test
 ```
 
-Use DynamoDB Local only after the in-memory storage path is useful. Use Lambda
-adapters later for AWS deployment, not for the daily local development loop.
+The current code has no ASGI app entrypoint. Add one later only when a local
+HTTP loop needs it. Use DynamoDB Local only after the in-memory storage path is
+useful.
 
 See [Messaging App Research](../../docs/messaging-app-research.md) for lessons
 from LINE, WeChat, and Facebook Messenger.

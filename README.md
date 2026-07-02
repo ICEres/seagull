@@ -83,6 +83,7 @@ gateway, and AWS dev Terraform remain in the repo under the new layout.
 
 ## Documentation
 
+- [Domain Context](CONTEXT.md)
 - [Gulls Spec](packages/gulls/docs/spec.md)
 - [Layer Concept](packages/gulls/docs/concept.md)
 - [Terminology](packages/gulls/docs/terminology.md)

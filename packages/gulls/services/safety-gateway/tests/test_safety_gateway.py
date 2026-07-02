@@ -9,7 +9,7 @@ from message_hub.storage import InMemoryMessageHubRepository
 from seagull_policy import ReviewState, RiskLabel, SafetyAction, TrustLabel
 
 from safety_gateway.adapters import MessageHubSafetyGatewayEvaluator
-from safety_gateway.api import LocalSafetyGatewayApi
+from safety_gateway.api import ApiError, LocalSafetyGatewayApi
 from safety_gateway.domain import SafetyEvaluationRequest, SafetyGatewayPolicy, SafetyGatewayService
 from safety_gateway.storage import InMemorySafetyAuditRepository
 
@@ -244,6 +244,16 @@ class LocalSafetyGatewayApiTest(TestCase):
         audit = api.list_audit_events(actor_id="agent_1")
         self.assertEqual(1, len(audit["items"]))
         self.assertEqual(response["decision"]["decision_id"], audit["items"][0]["decision_id"])
+
+    def test_evaluate_rejects_invalid_trust_label(self) -> None:
+        api = LocalSafetyGatewayApi.in_memory()
+
+        with self.assertRaises(ApiError) as raised:
+            api.evaluate({"actor_id": "agent_1", "trust_label": "mystery"})
+
+        self.assertEqual(400, raised.exception.status_code)
+        self.assertEqual("bad_request", raised.exception.error)
+        self.assertEqual("unsupported trust_label: mystery", raised.exception.message)
 
 
 class MessageHubSafetyGatewayAdapterTest(TestCase):

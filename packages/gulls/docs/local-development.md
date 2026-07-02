@@ -93,33 +93,38 @@ Recommended local ports:
 4566  LocalStack
 ```
 
-The first local Seagull loop should run as:
+The current local Seagull loop uses in-process backend adapters plus the Vite
+frontend:
 
 ```text
-packages/gulls/services/safety-gateway  -> FastAPI on localhost:8100
-packages/gulls/services/message-hub     -> FastAPI on localhost:8200
-packages/sea-gull/services/social-api      -> FastAPI on localhost:8300
-packages/sea-gull/apps/web             -> Vite on localhost:5173
-infra/local          -> DynamoDB Local / LocalStack dependencies
+packages/gulls/services/safety-gateway  -> LocalSafetyGatewayApi / Lambda adapter
+packages/gulls/services/message-hub     -> LocalMessageHubApi / Lambda adapter
+packages/sea-gull/services/social-api   -> LocalSocialApi / Lambda adapter
+packages/sea-gull/apps/web              -> Vite on localhost:5173
+infra/local                           -> DynamoDB Local / LocalStack dependencies
 ```
 
-Local services bind to `localhost` by default. Binding to `0.0.0.0` or exposing
-services to the LAN must be an explicit LAN Node setting.
+The ports above are reserved for local HTTP adapters when they are added.
+Local services bind to `localhost` by default. Binding to `0.0.0.0` or
+exposing services to the LAN must be an explicit LAN Node setting.
 
 ## What Runs Locally
 
 ### Backend Apps
 
-Run Python apps as normal ASGI servers:
+The current Python backend APIs are dependency-free in-process adapters under
+`api/local.py`, with plain Lambda adapters for AWS. Exercise them through the
+Makefile targets:
 
 ```text
-uv run uvicorn safety_gateway.api.app:app --reload --port 8100
-uv run uvicorn message_hub.api.app:app --reload --port 8200
-uv run uvicorn social_api.api.app:app --reload --port 8300
+make safety-gateway-test
+make message-hub-test
+make social-api-test
+make ai-provider-test
 ```
 
-Use Lambda adapters later for deployment. Keep them thin so the same domain code
-runs locally and in AWS.
+Add ASGI/FastAPI entrypoints later only when the local HTTP loop needs them.
+Keep adapters thin so the same domain code runs locally and in AWS.
 
 ### Frontend
 
@@ -154,10 +159,12 @@ handlers in AWS.
 
 Do not start with the Go router unless the hot path needs it.
 
-When needed, run it locally as a normal Go service:
+The current router is a nested Go module with a library and Lambda entrypoint.
+Run its tests from the module directory:
 
 ```text
-go run ./packages/gulls/services/message-hub/router
+cd packages/gulls/services/message-hub/router
+go test ./...
 ```
 
 In AWS, the same router can become Go Lambda handlers first, and a long-running
@@ -258,15 +265,15 @@ colima stop
 Build in this order:
 
 1. Message hub domain logic with in-memory storage.
-2. Message hub FastAPI app on `localhost:8200`.
+2. Message hub in-process API adapter and tests.
 3. DynamoDB Local repository.
 4. Seed script for local agents and messages.
-5. Safety gateway stub on `localhost:8100`.
-6. Social API stub on `localhost:8300`.
-7. Web app on `localhost:5173`.
-8. Local workers.
-9. LocalStack for queues/events.
-10. AWS dev deployment.
+5. Local HTTP adapters for message hub, safety gateway, and social API on the
+   reserved ports.
+6. Web app on `localhost:5173`.
+7. Local workers.
+8. LocalStack for queues/events.
+9. AWS dev deployment.
 
 ## What AWS Dev Is For
 

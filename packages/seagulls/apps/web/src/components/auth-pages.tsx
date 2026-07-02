@@ -30,7 +30,7 @@ function AuthPanel({
             S
           </div>
           <div>
-            <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">Seagull</p>
+            <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">seagulls</p>
             <h1 className="m-0 overflow-hidden text-ellipsis whitespace-nowrap text-[1.55rem] leading-none">{title}</h1>
           </div>
         </div>

@@ -99,8 +99,8 @@ frontend:
 ```text
 packages/gulls/services/safety-gateway  -> LocalSafetyGatewayApi / Lambda adapter
 packages/gulls/services/message-hub     -> LocalMessageHubApi / Lambda adapter
-packages/sea-gull/services/social-api   -> LocalSocialApi / Lambda adapter
-packages/sea-gull/apps/web              -> Vite on localhost:5173
+packages/seagulls/services/social-api   -> LocalSocialApi / Lambda adapter
+packages/seagulls/apps/web              -> Vite on localhost:5173
 infra/local                           -> DynamoDB Local / LocalStack dependencies
 ```
 

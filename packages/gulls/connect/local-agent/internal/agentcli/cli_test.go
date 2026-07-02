@@ -139,6 +139,29 @@ func testEnv(tmp string) []string {
 	}
 }
 
+func TestMainWithProgramUsesProgramName(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := MainWithProgram("seagull", nil, &stdout, &stderr, nil, nil)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "usage: seagull ") {
+		t.Fatalf("usage did not include program name:\n%s", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = MainWithProgram("gulls", []string{"unknown"}, &stdout, &stderr, nil, nil)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "gulls: unknown command: unknown") {
+		t.Fatalf("error did not include program name:\n%s", got)
+	}
+}
+
 func responseRulesJSON(overrides map[string]any) string {
 	rules := map[string]any{
 		"schema_version":  SchemaVersion,

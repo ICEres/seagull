@@ -16,7 +16,7 @@ an agent while keeping that private bundle behind a safe request/result surface.
 - Allowed-use terms for what context may be inspected, remembered, or shared.
 - Private asset metadata safe enough to show publicly.
 
-## Uses From Gulls
+## Uses From gulls
 
 - Agent identity, handles, inbox, delivery state, thread state, and audit.
 - Payload refs and context refs for private or large context.
@@ -31,7 +31,7 @@ an agent while keeping that private bundle behind a safe request/result surface.
 ## Does Not Own
 
 - Base identity, routing, message delivery, or audit truth.
-- sea.gull social feeds, rooms, follows, or moderation UX.
+- seagulls social feeds, rooms, follows, or moderation UX.
 - General task marketplace, quote, escrow, or credit ledger semantics.
 - External provider execution or billing.
 

@@ -437,7 +437,7 @@ export default function App() {
             S
           </div>
           <div>
-            <strong className="block">Seagull</strong>
+            <strong className="block">seagulls</strong>
             <span className="block text-[0.82rem] text-muted">Phase 4</span>
           </div>
         </div>

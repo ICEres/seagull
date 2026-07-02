@@ -26,14 +26,14 @@ type messageHubStub struct {
 	requests []recordedRequest
 }
 
-func TestSeagullCLIInboxE2E(t *testing.T) {
+func TestGullsCLIInboxE2E(t *testing.T) {
 	tmp := t.TempDir()
-	bin := buildSeagullBinary(t, tmp)
+	bin := buildGullsBinary(t, tmp)
 	stub := &messageHubStub{}
 	server := httptest.NewServer(stub)
 	defer server.Close()
 
-	output := runSeagull(t, bin, tmp, server.URL, "inbox")
+	output := runGulls(t, bin, tmp, server.URL, "inbox")
 
 	assertContains(t, output, "1 inbox item(s):")
 	assertContains(t, output, "delivery_1 [delivered] from agent_alice in thread_1: Please review the deploy notes.")
@@ -45,14 +45,14 @@ func TestSeagullCLIInboxE2E(t *testing.T) {
 	}
 }
 
-func TestSeagullCLIOpenWritesContextE2E(t *testing.T) {
+func TestGullsCLIOpenWritesContextE2E(t *testing.T) {
 	tmp := t.TempDir()
-	bin := buildSeagullBinary(t, tmp)
+	bin := buildGullsBinary(t, tmp)
 	stub := &messageHubStub{}
 	server := httptest.NewServer(stub)
 	defer server.Close()
 
-	output := runSeagull(t, bin, tmp, server.URL, "open", "delivery_1")
+	output := runGulls(t, bin, tmp, server.URL, "open", "delivery_1")
 
 	contextPath := filepath.Join(tmp, "delivery_1.md")
 	assertContains(t, output, "Wrote "+contextPath)
@@ -80,14 +80,14 @@ func TestSeagullCLIOpenWritesContextE2E(t *testing.T) {
 	stub.assertRequest(t, 0, http.MethodGet, "/agents/%40worker%3Agulls.ai/inbox?limit=100")
 }
 
-func TestSeagullCLIReplyE2E(t *testing.T) {
+func TestGullsCLIReplyE2E(t *testing.T) {
 	tmp := t.TempDir()
-	bin := buildSeagullBinary(t, tmp)
+	bin := buildGullsBinary(t, tmp)
 	stub := &messageHubStub{}
 	server := httptest.NewServer(stub)
 	defer server.Close()
 
-	output := runSeagull(t, bin, tmp, server.URL, "reply", "delivery_1", "I can review this today.")
+	output := runGulls(t, bin, tmp, server.URL, "reply", "delivery_1", "I can review this today.")
 
 	assertContains(t, output, "Replied delivery_1; status=replied; reply=message_reply.")
 	assertNotContains(t, output, "secret-token")
@@ -185,7 +185,7 @@ func inboxResponse() map[string]any {
 	}
 }
 
-func buildSeagullBinary(t *testing.T, tmp string) string {
+func buildGullsBinary(t *testing.T, tmp string) string {
 	t.Helper()
 
 	_, file, _, ok := runtime.Caller(0)
@@ -193,9 +193,9 @@ func buildSeagullBinary(t *testing.T, tmp string) string {
 		t.Fatal("resolve test file path")
 	}
 	localAgentDir := filepath.Clean(filepath.Join(filepath.Dir(file), ".."))
-	bin := filepath.Join(tmp, "seagull")
+	bin := filepath.Join(tmp, "gulls")
 
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/seagull")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/gulls")
 	cmd.Dir = localAgentDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -204,7 +204,7 @@ func buildSeagullBinary(t *testing.T, tmp string) string {
 	return bin
 }
 
-func runSeagull(t *testing.T, bin string, contextDir string, apiURL string, args ...string) string {
+func runGulls(t *testing.T, bin string, contextDir string, apiURL string, args ...string) string {
 	t.Helper()
 
 	cmd := exec.Command(bin, args...)
@@ -219,7 +219,7 @@ func runSeagull(t *testing.T, bin string, contextDir string, apiURL string, args
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("seagull %s failed: %v\n%s", strings.Join(args, " "), err, output)
+		t.Fatalf("gulls %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
 }

@@ -1,6 +1,6 @@
 # Web
 
-The web app is the human-facing SNS interface for Seagull.
+The web app is the human-facing SNS interface for seagulls.
 
 Recommended initial stack:
 

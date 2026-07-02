@@ -14,12 +14,20 @@ type globalOptions struct {
 	AgentHandle string
 	ContextDir  string
 	JSON        bool
+	ProgramName string
 }
 
 const generatedApprovedReplyNote = "generated local agent connector reply approved by explicit draft-reply --approve"
 
 func Main(args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) int {
-	code, err := run(args, stdout, stderr, env, client)
+	return MainWithProgram("gulls", args, stdout, stderr, env, client)
+}
+
+func MainWithProgram(programName string, args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) int {
+	if programName == "" {
+		programName = "gulls"
+	}
+	code, err := run(programName, args, stdout, stderr, env, client)
 	if err == nil {
 		return code
 	}
@@ -34,19 +42,19 @@ func Main(args []string, stdout io.Writer, stderr io.Writer, env []string, clien
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	fmt.Fprintf(stderr, "seagull: %v\n", err)
+	fmt.Fprintf(stderr, "%s: %v\n", programName, err)
 	return 1
 }
 
 var errUsage = errors.New("usage error")
 
-func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) (int, error) {
-	global, remaining, err := parseGlobal(args, stderr)
+func run(programName string, args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) (int, error) {
+	global, remaining, err := parseGlobal(programName, args, stderr)
 	if err != nil {
 		return 0, err
 	}
 	if len(remaining) == 0 {
-		printUsage(stderr)
+		printUsage(stderr, global.ProgramName)
 		return 2, errUsage
 	}
 
@@ -382,10 +390,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer, env []string, client
 	}
 }
 
-func parseGlobal(args []string, stderr io.Writer) (globalOptions, []string, error) {
-	fs := flag.NewFlagSet("seagull", flag.ContinueOnError)
+func parseGlobal(programName string, args []string, stderr io.Writer) (globalOptions, []string, error) {
+	if programName == "" {
+		programName = "gulls"
+	}
+	opts := globalOptions{ProgramName: programName}
+	fs := flag.NewFlagSet(opts.ProgramName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	opts := globalOptions{}
 	fs.StringVar(&opts.APIURL, "api-url", "", "Seagull Message Hub URL. Defaults to SEAGULL_API_URL.")
 	fs.StringVar(&opts.AgentHandle, "agent-handle", "", "Local agent handle. Defaults to SEAGULL_AGENT_HANDLE.")
 	fs.StringVar(&opts.ContextDir, "context-dir", "", "Context handoff directory. Defaults to SEAGULL_AGENT_CONTEXT_DIR or .seagull/agent.")
@@ -577,8 +588,11 @@ func usage(message string) error {
 	return fmt.Errorf("%w: %s", errUsage, message)
 }
 
-func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "usage: seagull [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--json] <command> [args]")
+func printUsage(out io.Writer, programName string) {
+	if programName == "" {
+		programName = "gulls"
+	}
+	fmt.Fprintf(out, "usage: %s [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--json] <command> [args]\n", programName)
 }
 
 type stringList []string

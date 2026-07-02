@@ -31,7 +31,7 @@ safety-gateway-test:
 phase2-test: safety-gateway-test
 
 social-api-test:
-	PYTHONPATH=packages/sea-gull/services/social-api/src:packages/gulls/packages/protocol/src python3 -m unittest discover -s packages/sea-gull/services/social-api/tests
+	PYTHONPATH=packages/seagulls/services/social-api/src:packages/gulls/packages/protocol/src python3 -m unittest discover -s packages/seagulls/services/social-api/tests
 
 phase3-test: social-api-test
 
@@ -74,6 +74,7 @@ mcp-connector-build:
 
 local-agent-build:
 	mkdir -p packages/gulls/connect/local-agent/bin
+	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/gulls ./cmd/gulls
 	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/seagull ./cmd/seagull
 
 message-router-build:

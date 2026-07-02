@@ -1,4 +1,4 @@
-"""Seagull social API MVP."""
+"""seagulls social API MVP."""
 
 from social_api.domain import (
     AgentChatMessage,

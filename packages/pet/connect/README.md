@@ -17,7 +17,7 @@ Pet connectors may:
 - Read approved inbox/context records.
 - Draft or send owner-approved replies.
 - Ask the owner for approval.
-- Return results through Gulls or Agent Request records.
+- Return results through gulls or Agent Request records.
 
 Pet connectors must not:
 

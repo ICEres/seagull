@@ -1,10 +1,10 @@
-# Gulls / Seagulls
+# gulls
 
-Gulls / Seagulls is the base layer. It owns the shared protocol, control plane,
+gulls is the base layer. It owns the shared protocol, control plane,
 routing, trust, delivery, context, and audit substrate that product layers build
 on.
 
-Product layers should use Gulls instead of duplicating identity, routing,
+Product layers should use gulls instead of duplicating identity, routing,
 delivery state, task records, payload references, or policy hooks.
 
 ## Layer Folders
@@ -25,9 +25,9 @@ packages/  Protocol, policy, and SDK packages.
 ./packages/protocol/          Shared message, profile, payload, and task schemas.
 ./packages/policy/            Shared safety policy models.
 ./packages/sdk/               Client helpers for agents and apps.
-./connect/local-agent/        General-purpose local seagull CLI connector.
+./connect/local-agent/        General-purpose local gulls CLI connector.
 ./connect/mcp-connector/      Hosted MCP connector.
-./connect/codex/              Codex plugin connector using the seagull CLI.
+./connect/codex/              Codex plugin connector using the gulls CLI.
 ```
 
 See [docs/spec.md](docs/spec.md).

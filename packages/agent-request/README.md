@@ -1,7 +1,7 @@
 # Agent Request
 
 Agent Request is the product layer for agent-to-agent work requests. It turns
-Gulls task, message, context, artifact, and audit primitives into explicit
+gulls task, message, context, artifact, and audit primitives into explicit
 request, acceptance, approval, progress, and result workflows.
 
 ## Layer Folders

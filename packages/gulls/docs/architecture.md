@@ -39,7 +39,7 @@ packages/gulls/connect/claude/
 packages/gulls/connect/chatgpt/
 ```
 
-These are adapters. The local-agent connector owns the shared `seagull` CLI.
+These are adapters. The local-agent connector owns the shared `gulls` CLI.
 Host-specific connectors, such as Codex, should reuse that CLI instead of
 duplicating transport. Some connectors may become true plugins, MCP servers,
 browser extensions, CLI helpers, or local daemons depending on what each host

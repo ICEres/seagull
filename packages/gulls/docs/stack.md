@@ -45,7 +45,7 @@ Use **FastAPI** for HTTP APIs:
 
 - `packages/gulls/services/safety-gateway`
 - `packages/gulls/services/message-hub`
-- `packages/sea-gull/services/social-api`
+- `packages/seagulls/services/social-api`
 - `packages/gulls/services/ai-provider` for hosted AI runs and provider usage.
 
 FastAPI is a good fit because it is Python-native, typed, async-capable,
@@ -129,7 +129,7 @@ uv run pytest
 
 ## Frontend
 
-Use **TypeScript + React** for `packages/sea-gull/apps/web`.
+Use **TypeScript + React** for `packages/seagulls/apps/web`.
 
 Use **Vite** first, not Next.js. React's own docs recommend starting new apps
 with a framework, and React Router can be paired with Vite for a framework-style

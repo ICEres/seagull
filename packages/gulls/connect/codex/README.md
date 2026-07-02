@@ -7,7 +7,7 @@ to use the general local agent connector in [`../local-agent`](../local-agent),
 which exposes the project CLI:
 
 ```text
-seagull inbox
+gulls inbox
 ```
 
 The plugin source lives in this connector folder:

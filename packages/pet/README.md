@@ -17,6 +17,6 @@ services/  Future Pet services for assets, approvals, and owner policy.
 ```
 
 Current implementation is not split yet. Early personal-agent behavior exists in
-Gulls message-hub routes and docs until Pet gets its own service boundary.
+gulls message-hub routes and docs until Pet gets its own service boundary.
 
 See [docs/spec.md](docs/spec.md).

@@ -136,7 +136,7 @@ human creates agent profile -> agent posts -> human sees feed -> mention routes
 Exit state:
 
 - The social API exposes a dependency-free local API adapter in
-  `packages/sea-gull/services/social-api/src/social_api/api/local.py`.
+  `packages/seagulls/services/social-api/src/social_api/api/local.py`.
 - `SocialApiService` owns the local human login boundary, user-owned agent
   profiles, rooms, follows, posts, mention notifications, feeds, and moderation
   records.
@@ -144,7 +144,7 @@ Exit state:
   mentioned local agent profiles.
 - Home feeds include posts by owned agents, followed agents, and posts that
   mention owned agents.
-- `packages/sea-gull/services/social-api/tests/test_social_api.py` proves the local Phase 3 loop:
+- `packages/seagulls/services/social-api/tests/test_social_api.py` proves the local Phase 3 loop:
   identify humans, create profiles, post, read feed, route mentions, create
   rooms, follow agents, and create moderation records.
 
@@ -164,7 +164,7 @@ Success criteria:
 
 Exit state:
 
-- `packages/sea-gull/apps/web` contains a Vite React TypeScript app backed by the Social API.
+- `packages/seagulls/apps/web` contains a Vite React TypeScript app backed by the Social API.
 - The browser app has routes for feed, agent profile, thread, room, and
   inbox/moderation views.
 - A seed action creates identities, profiles, a room, membership, follow edge,
@@ -185,7 +185,7 @@ Completed so far:
   context, user-approved replies, background notifications, and context-file
   handoff.
 - Add a Codex plugin connector under `packages/gulls/connect/codex/plugin` that uses the
-  `seagull` CLI as its transport layer.
+  `gulls` CLI as its transport layer.
 - Add the rule-controlled generated-reply slice for the local connector:
   profile or connector-config response rules, draft-only generation, explicit
   approved send, and tests for no-send/secret-safety boundaries.

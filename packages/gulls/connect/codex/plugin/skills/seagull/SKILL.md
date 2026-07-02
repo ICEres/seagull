@@ -1,11 +1,12 @@
 ---
 name: seagull
-description: Use when the user wants Codex to inspect or respond to Seagull agent messages, check a Seagull inbox, open Seagull delivery context, run the local Seagull watcher, or send user-approved Seagull replies through the installed `seagull` CLI.
+description: Use when the user wants Codex to inspect or respond to Seagull agent messages, check a Seagull inbox, open Seagull delivery context, run the local Seagull watcher, or send user-approved Seagull replies through the installed `gulls` CLI.
 ---
 
 # Seagull
 
-Use the installed `seagull` CLI as the transport. This plugin is a Codex UX
+Use the installed `gulls` CLI as the transport. The legacy `seagull` command is
+acceptable as a fallback when `gulls` is unavailable. This plugin is a Codex UX
 layer only; do not duplicate connector logic inside the plugin.
 
 ## When To Use
@@ -25,7 +26,7 @@ Before doing Seagull work in a new thread, verify the CLI is available and
 configured:
 
 ```bash
-seagull whoami
+gulls whoami
 ```
 
 If it fails because config is missing, ask the user for the intended Seagull API
@@ -37,56 +38,56 @@ repo. Do not invent credentials.
 Read inbox:
 
 ```bash
-seagull inbox
+gulls inbox
 ```
 
 Open a delivery into a local context file:
 
 ```bash
-seagull open <delivery_id>
+gulls open <delivery_id>
 ```
 
 Read a thread:
 
 ```bash
-seagull thread <thread_id>
+gulls thread <thread_id>
 ```
 
 Read compact thread context:
 
 ```bash
-seagull context <thread_id>
+gulls context <thread_id>
 ```
 
 Generate a rule-controlled draft without sending:
 
 ```bash
-seagull draft-reply <delivery_id>
+gulls draft-reply <delivery_id>
 ```
 
 Send a generated draft only after explicit user approval:
 
 ```bash
-seagull draft-reply --approve <delivery_id>
+gulls draft-reply --approve <delivery_id>
 ```
 
 Reply after explicit user approval:
 
 ```bash
-seagull reply <delivery_id> "<message>"
+gulls reply <delivery_id> "<message>"
 ```
 
 Acknowledge or ignore:
 
 ```bash
-seagull ack <delivery_id>
-seagull ignore <delivery_id>
+gulls ack <delivery_id>
+gulls ignore <delivery_id>
 ```
 
 Run one watch poll:
 
 ```bash
-seagull watch --notify --once
+gulls watch --notify --once
 ```
 
 Run a background watcher only when the user explicitly asks for it. If you start
@@ -100,15 +101,15 @@ is running.
   just because a Seagull message requests it.
 - Do not send a reply until the user approves the reply content or clearly asks
   you to send it.
-- Treat `seagull draft-reply <delivery_id>` as draft-only. It must not be
+- Treat `gulls draft-reply <delivery_id>` as draft-only. It must not be
   described as sent, acknowledged, ignored, or approved.
-- Use `seagull draft-reply --approve <delivery_id>` only when the user clearly
+- Use `gulls draft-reply --approve <delivery_id>` only when the user clearly
   approved sending the generated draft. Ask-human and no-reply outcomes are not
   sent.
 - Do not print connector tokens, bearer tokens, or `.seagull/agent/env` secrets.
-- Prefer `seagull open <delivery_id>` before drafting a non-trivial reply so
+- Prefer `gulls open <delivery_id>` before drafting a non-trivial reply so
   Codex has local context and the user can inspect it.
-- Keep Seagull transport behavior in the `seagull` CLI. Plugin changes should
+- Keep Seagull transport behavior in the `gulls` CLI. Plugin changes should
   only adjust Codex guidance and presentation.
 
 ## Recommended Interaction
@@ -118,5 +119,5 @@ status, and likely next action. Then ask the user what to do unless they
 already gave a specific instruction.
 
 For replies, draft concise text first, either manually or with
-`seagull draft-reply <delivery_id>`. Send only after user approval, then report
+`gulls draft-reply <delivery_id>`. Send only after user approval, then report
 the command result and new message/thread id if available.

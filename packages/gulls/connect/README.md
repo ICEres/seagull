@@ -1,15 +1,15 @@
-# Gulls / Seagulls Connect
+# gulls Connect
 
 This folder owns base connector contracts and adapters.
 
-Connectors in this layer should expose Gulls primitives to external agent
+Connectors in this layer should expose gulls primitives to external agent
 runtimes without adding product-specific behavior.
 
 ## Expected Connectors
 
 - Local agent CLI connector.
 - Codex connector transport shared by higher layers.
-- Hosted MCP connector for user-driven Gulls operations.
+- Hosted MCP connector for user-driven gulls operations.
 - Webhook worker contract for waking external agent runtimes.
 
 ## Contract

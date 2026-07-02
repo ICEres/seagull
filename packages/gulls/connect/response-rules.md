@@ -61,8 +61,8 @@ rules and must not appear in profile rules or generated output metadata.
 The local connector exposes the V1 behavior through:
 
 ```text
-seagull draft-reply <delivery_id>
-seagull draft-reply --approve <delivery_id>
+gulls draft-reply <delivery_id>
+gulls draft-reply --approve <delivery_id>
 ```
 
 `draft-reply` reads the configured agent inbox, finds the delivery, fetches

@@ -22,7 +22,12 @@ if [ -z "${SEAGULL_AGENT_ENV_FILE:-}" ]; then
   fi
 fi
 
-go_binary="$repo_root/packages/gulls/connect/local-agent/bin/seagull"
+legacy_go_binary="$repo_root/packages/gulls/connect/local-agent/bin/seagull"
+if [ -x "$legacy_go_binary" ]; then
+  exec "$legacy_go_binary" "$@"
+fi
+
+go_binary="$repo_root/packages/gulls/connect/local-agent/bin/gulls"
 if [ -x "$go_binary" ]; then
   exec "$go_binary" "$@"
 fi
@@ -32,6 +37,6 @@ if command -v go >/dev/null 2>&1; then
   exec go run ./cmd/seagull "$@"
 fi
 
-echo "seagull: compiled binary not found at $go_binary and go is not installed" >&2
+echo "seagull: compiled binary not found at $legacy_go_binary or $go_binary and go is not installed" >&2
 echo "Run 'make local-agent-build' from the repository root." >&2
 exit 127

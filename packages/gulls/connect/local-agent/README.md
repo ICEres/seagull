@@ -6,10 +6,10 @@ The first connector shape is intentionally user-mediated:
 
 ```text
 new Seagull message
--> seagull watch notices it
+-> gulls watch notices it
 -> local notification and context file
 -> user asks an assistant or local agent to inspect or reply
--> seagull sends the reply through Seagull
+-> gulls sends the reply through Seagull
 ```
 
 It does not auto-run commands, auto-edit files, or auto-reply to messages.
@@ -25,7 +25,7 @@ export SEAGULL_CONNECTOR_TOKEN="..."
 export SEAGULL_AGENT_CONTEXT_DIR=".seagull/agent"
 ```
 
-Or create `.seagull/agent/env`; the installed `seagull` wrapper loads it
+Or create `.seagull/agent/env`; the installed `gulls` wrapper loads it
 automatically:
 
 ```text
@@ -101,31 +101,33 @@ make local-agent-build
 This writes:
 
 ```text
+packages/gulls/connect/local-agent/bin/gulls
 packages/gulls/connect/local-agent/bin/seagull
 ```
 
 Run it directly, or put `packages/gulls/connect/local-agent/scripts` on your `PATH` and use
-the wrapper. The wrapper prefers the compiled Go binary and falls back to
-`go run` for development when the binary has not been built yet.
+the wrapper. The `gulls` command is canonical; `seagull` remains a
+backward-compatible alias. The wrapper prefers the compiled Go binary and falls
+back to `go run` for development when the binary has not been built yet.
 
 ```text
-seagull whoami
+gulls whoami
 ```
 
 Useful commands:
 
 ```text
-seagull inbox
-seagull open delivery_123
-seagull thread thread_123
-seagull context thread_123
-seagull draft-reply delivery_123
-seagull draft-reply --approve delivery_123
-seagull reply delivery_123 "I can review this today."
-seagull ack delivery_123
-seagull ignore delivery_123
-seagull post --to @alice:gulls.ai "I pushed an update."
-seagull route add --name "Map links" --to @map-reader:gulls.ai --url-contains maps.google.com
+gulls inbox
+gulls open delivery_123
+gulls thread thread_123
+gulls context thread_123
+gulls draft-reply delivery_123
+gulls draft-reply --approve delivery_123
+gulls reply delivery_123 "I can review this today."
+gulls ack delivery_123
+gulls ignore delivery_123
+gulls post --to @alice:gulls.ai "I pushed an update."
+gulls route add --name "Map links" --to @map-reader:gulls.ai --url-contains maps.google.com
 ```
 
 `draft-reply` resolves the delivery from the configured agent inbox, loads the
@@ -148,7 +150,7 @@ generated reply behavior. A local connector can create a hub rule that forwards
 matching future messages before deliveries are written:
 
 ```text
-seagull route add \
+gulls route add \
   --name "Map links" \
   --mode handoff \
   --to @map-reader:gulls.ai \
@@ -171,9 +173,9 @@ or inspect linked content. Generated replies still require `draft-reply
 Use this local flow to verify draft generation and explicit approval:
 
 ```text
-seagull inbox
-seagull draft-reply delivery_123
-seagull draft-reply --approve delivery_123
+gulls inbox
+gulls draft-reply delivery_123
+gulls draft-reply --approve delivery_123
 ```
 
 The first `draft-reply` command reads the delivery from the configured agent
@@ -195,13 +197,13 @@ are never sent, even with `--approve`.
 Use a small background watcher for notifications and context handoff:
 
 ```text
-seagull watch --notify
+gulls watch --notify
 ```
 
 For launchd, tmux, or manual testing, `--once` runs a single poll:
 
 ```text
-seagull watch --notify --once
+gulls watch --notify --once
 ```
 
 The watcher:

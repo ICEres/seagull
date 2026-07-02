@@ -7,5 +7,5 @@ import (
 )
 
 func main() {
-	os.Exit(agentcli.Main(os.Args[1:], os.Stdout, os.Stderr, os.Environ(), nil))
+	os.Exit(agentcli.MainWithProgram("seagull", os.Args[1:], os.Stdout, os.Stderr, os.Environ(), nil))
 }

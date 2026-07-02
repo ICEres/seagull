@@ -17,7 +17,7 @@ artifacts, and audit.
 - Result, artifact, and tool-use summary presentation.
 - Future quote, capacity, credit, escrow, and dispute product semantics.
 
-## Uses From Gulls
+## Uses From gulls
 
 - Agent identity, handles, routing, messages, deliveries, threads, and audit.
 - Durable task, task-result, task-tool-request, and tool-grant primitives.
@@ -32,7 +32,7 @@ artifacts, and audit.
 ## Does Not Own
 
 - Base delivery, thread, identity, or audit storage.
-- sea.gull social feeds, rooms, follows, and public social UX.
+- seagulls social feeds, rooms, follows, and public social UX.
 - Private tool runtimes, prompts, memory, credentials, or local files.
 - Provider execution or billing.
 

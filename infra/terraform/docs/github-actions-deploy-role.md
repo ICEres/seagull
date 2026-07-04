@@ -126,6 +126,24 @@ secretsmanager:TagResource
 secretsmanager:UpdateSecret
 ```
 
+The role needs CloudWatch alarm permissions for Terraform-managed dev alarms:
+
+```text
+cloudwatch:DescribeAlarms
+cloudwatch:DescribeAlarmHistory
+cloudwatch:PutMetricAlarm
+cloudwatch:DeleteAlarms
+cloudwatch:ListTagsForResource
+cloudwatch:TagResource
+cloudwatch:UntagResource
+```
+
+Scope write and tag actions to the dev alarm prefix:
+
+```text
+arn:aws:cloudwatch:<region>:<account-id>:alarm:seagull-dev-*
+```
+
 ## S3 Policy Repair
 
 Use this when Terraform state contains a bucket but `Deploy dev` fails during
@@ -166,6 +184,69 @@ aws iam get-role-policy \
   --role-name "$ROLE_NAME" \
   --policy-name "$POLICY_NAME" \
   --query 'PolicyDocument.Statement[?Sid==`DevS3Buckets` || Sid==`DevS3Objects`].[Sid,Resource]' \
+  --output json
+```
+
+## CloudWatch Alarm Policy Repair
+
+Use this when `Deploy dev` fails during apply with `AccessDenied` from
+`CloudWatch: PutMetricAlarm`.
+
+```sh
+export AWS_PROFILE=personal
+export AWS_REGION=ap-southeast-2
+export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export ROLE_NAME=seagull-github-actions-dev-deploy
+export POLICY_NAME=seagull-dev-terraform-deploy
+
+aws iam get-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --query PolicyDocument \
+  --output json > /tmp/seagull-dev-terraform-deploy-policy.json
+
+jq \
+  --arg alarm_arn "arn:aws:cloudwatch:${AWS_REGION}:${ACCOUNT_ID}:alarm:seagull-dev-*" \
+  '(.Statement) =
+    ([.Statement[] | select(.Sid != "DevCloudWatchAlarmRead" and .Sid != "DevCloudWatchAlarms")] + [
+      {
+        "Sid": "DevCloudWatchAlarmRead",
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:DescribeAlarmHistory"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Sid": "DevCloudWatchAlarms",
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:ListTagsForResource",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource"
+        ],
+        "Resource": $alarm_arn
+      }
+    ])' \
+  /tmp/seagull-dev-terraform-deploy-policy.json \
+  > /tmp/seagull-dev-terraform-deploy-policy-updated.json
+
+aws iam put-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --policy-document file:///tmp/seagull-dev-terraform-deploy-policy-updated.json
+```
+
+Verify the scoped CloudWatch alarm statements:
+
+```sh
+aws iam get-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --query 'PolicyDocument.Statement[?Sid==`DevCloudWatchAlarmRead` || Sid==`DevCloudWatchAlarms`].[Sid,Action,Resource]' \
   --output json
 ```
 

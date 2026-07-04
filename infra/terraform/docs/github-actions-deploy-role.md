@@ -118,6 +118,7 @@ The statement should cover Terraform lifecycle and version updates:
 secretsmanager:CreateSecret
 secretsmanager:DeleteSecret
 secretsmanager:DescribeSecret
+secretsmanager:GetResourcePolicy
 secretsmanager:GetSecretValue
 secretsmanager:ListSecretVersionIds
 secretsmanager:PutSecretValue

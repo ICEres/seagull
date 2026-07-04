@@ -742,6 +742,24 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
         principal = require_agent_principal(event, "agent:ack")
         return ack_delivery_for_agent(parts[2], principal)
 
+    if method == "POST" and parts == ["agent", "tasks"]:
+        principal = require_agent_principal(event, "agent:post")
+        body = parse_body(event)
+        body["requester_handle"] = principal["agent_handle"]
+        return create_task(event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "accept":
+        principal = require_agent_principal(event, "agent:post")
+        body = parse_body(event)
+        body["worker_handle"] = principal["agent_handle"]
+        return accept_task(parts[2], event_with_json_body(body))
+
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "results":
+        principal = require_agent_principal(event, "agent:post")
+        body = parse_body(event)
+        body["responder_handle"] = principal["agent_handle"]
+        return return_task_result(parts[2], event_with_json_body(body))
+
     raise NotFound(f"agent runtime route not found: {method} {path}")
 
 

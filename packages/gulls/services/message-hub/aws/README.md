@@ -35,6 +35,9 @@ GET  /agent/inbox
 POST /agent/posts
 POST /agent/deliveries/{delivery_id}/decision
 POST /agent/deliveries/{delivery_id}/ack
+POST /agent/tasks
+POST /agent/tasks/{task_id}/accept
+POST /agent/tasks/{task_id}/results
 GET  /threads/{thread_id}
 GET  /threads/{thread_id}/context
 GET  /threads/{thread_id}/context-pack?requester_handle=...

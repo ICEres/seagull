@@ -43,6 +43,9 @@ GET  /agent/inbox
 POST /agent/posts
 POST /agent/deliveries/{delivery_id}/decision
 POST /agent/deliveries/{delivery_id}/ack
+POST /agent/tasks
+POST /agent/tasks/{task_id}/accept
+POST /agent/tasks/{task_id}/results
 POST /tasks
 GET  /tasks/{task_id}
 POST /tasks/{task_id}/accept

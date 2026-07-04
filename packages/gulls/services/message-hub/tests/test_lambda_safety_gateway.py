@@ -551,6 +551,87 @@ class MessageHubLambdaSafetyGatewayTest(TestCase):
         self.assertEqual("blocked", response_body(response)["error"])
         self.assertEqual({}, self.lambda_module.tasks_table.items)
 
+    def test_agent_runtime_task_routes_work_without_legacy_handle_routes(self) -> None:
+        self.lambda_module, self.fake_boto3 = load_lambda_module(
+            extra_env={"MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES": ""}
+        )
+        self.register_agent("@sender:seagull.local")
+        self.register_agent("@recipient:seagull.local")
+        sender_token = self.issue_agent_token("@sender:seagull.local", ["agent:read", "agent:post"])
+        recipient_token = self.issue_agent_token("@recipient:seagull.local", ["agent:read", "agent:post"])
+        sender_me = response_body(
+            self.lambda_module.handler(
+                event("GET", "/agent/me", headers={"authorization": f"Bearer {sender_token}"}),
+                None,
+            )
+        )
+        recipient_me = response_body(
+            self.lambda_module.handler(
+                event("GET", "/agent/me", headers={"authorization": f"Bearer {recipient_token}"}),
+                None,
+            )
+        )
+        safety = SafetyGatewayStub(
+            decision("decision_task", "allow"),
+            decision("decision_request_message", "allow"),
+            decision("decision_accept_message", "allow"),
+            decision("decision_result_message", "allow"),
+        )
+        self.lambda_module.urlopen = safety
+
+        created = self.lambda_module.handler(
+            event(
+                "POST",
+                "/agent/tasks",
+                {
+                    "recipient_handle": "@recipient:seagull.local",
+                    "objective": "Return a result.",
+                    "requester_handle": "@spoofed:seagull.local",
+                },
+                headers={"authorization": f"Bearer {sender_token}"},
+            ),
+            None,
+        )
+
+        created_body = response_body(created)
+        task_id = created_body["task_id"]
+        self.assertEqual(201, created["statusCode"])
+        self.assertEqual(sender_me["agent"]["agent_id"], created_body["task"]["requester_agent_id"])
+        self.assertEqual("decision_task", created_body["task"]["policy_decision_id"])
+
+        accepted = self.lambda_module.handler(
+            event(
+                "POST",
+                f"/agent/tasks/{task_id}/accept",
+                {"worker_handle": "@spoofed:seagull.local"},
+                headers={"authorization": f"Bearer {recipient_token}"},
+            ),
+            None,
+        )
+
+        accepted_body = response_body(accepted)
+        self.assertEqual(200, accepted["statusCode"])
+        self.assertEqual("accepted", accepted_body["state"])
+        self.assertEqual(recipient_me["agent"]["agent_id"], accepted_body["task"]["accepted_by_agent_id"])
+
+        result = self.lambda_module.handler(
+            event(
+                "POST",
+                f"/agent/tasks/{task_id}/results",
+                {
+                    "responder_handle": "@spoofed:seagull.local",
+                    "content": "Done.",
+                },
+                headers={"authorization": f"Bearer {recipient_token}"},
+            ),
+            None,
+        )
+
+        result_body = response_body(result)
+        self.assertEqual(200, result["statusCode"])
+        self.assertEqual("completed", result_body["state"])
+        self.assertEqual(recipient_me["agent"]["agent_id"], result_body["result"]["responder_agent_id"])
+
     def test_legacy_handle_inbox_requires_matching_agent_token(self) -> None:
         sender_token = self.issue_agent_token("@sender:seagull.local", ["agent:inbox"])
         recipient_token = self.issue_agent_token("@recipient:seagull.local", ["agent:inbox"])

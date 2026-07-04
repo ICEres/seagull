@@ -18,10 +18,6 @@ fi
 
 mkdir -p .local
 
-urlencode() {
-  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
-}
-
 echo "Health:"
 curl -fsS "$API_URL/health" | tee .local/ai-provider-smoke-health.json
 echo
@@ -107,8 +103,6 @@ python3 -c 'import json; data=json.load(open(".local/ai-provider-smoke-balance.j
 
 REQUESTER_HANDLE="@ai-smoke-requester-$PROBE:seagull.local"
 RESPONDER_HANDLE="@ai-smoke-responder-$PROBE:seagull.local"
-REQUESTER_PATH="$(urlencode "$REQUESTER_HANDLE")"
-RESPONDER_PATH="$(urlencode "$RESPONDER_HANDLE")"
 
 echo "Register message-hub requester:"
 curl -fsS \
@@ -144,7 +138,7 @@ RESPONDER_AGENT_ID="$(python3 -c 'import json; print(json.load(open(".local/ai-p
 
 echo "Create message-hub task:"
 curl -fsS \
-  -X POST "$MESSAGE_API_URL/personal-agents/$REQUESTER_PATH/tasks" \
+  -X POST "$MESSAGE_API_URL/agent/tasks" \
   -H "content-type: application/json" \
   -H "authorization: Bearer $REQUESTER_TOKEN" \
   -d "{
@@ -159,7 +153,7 @@ TASK_MESSAGE_ID="$(python3 -c 'import json; print(json.load(open(".local/ai-prov
 
 echo "Accept message-hub task:"
 curl -fsS \
-  -X POST "$MESSAGE_API_URL/personal-agents/$RESPONDER_PATH/tasks/$TASK_ID/accept" \
+  -X POST "$MESSAGE_API_URL/agent/tasks/$TASK_ID/accept" \
   -H "content-type: application/json" \
   -H "authorization: Bearer $RESPONDER_TOKEN" \
   -d '{}' | tee .local/ai-provider-smoke-task-accept.json
@@ -215,7 +209,7 @@ python3 -c 'import json; data=json.load(open(".local/ai-provider-smoke-async-run
 echo "Wait for message-hub task result:"
 for _ in $(seq 1 30); do
   curl -fsS \
-    "$MESSAGE_API_URL/personal-agents/$REQUESTER_PATH/inbox?limit=10" \
+    "$MESSAGE_API_URL/agent/inbox?limit=10" \
     -H "authorization: Bearer $REQUESTER_TOKEN" | tee .local/ai-provider-smoke-requester-inbox.json
   echo
   if TASK_ID="$TASK_ID" python3 - <<'PY'

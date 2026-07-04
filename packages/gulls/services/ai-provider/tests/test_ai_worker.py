@@ -116,7 +116,7 @@ class AiProviderWorkerTest(TestCase):
 
         request = urlopen.requests[0]
         self.assertEqual(
-            "https://message.example.test/personal-agents/%40reviewer%3Agulls.ai/tasks/task_1/results",
+            "https://message.example.test/agent/tasks/task_1/results",
             request.full_url,  # type: ignore[attr-defined]
         )
         body = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]

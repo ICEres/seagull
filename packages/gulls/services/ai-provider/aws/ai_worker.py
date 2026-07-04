@@ -4,7 +4,6 @@ import json
 import os
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from ai_provider.domain import AiRun, AiRunState
@@ -70,7 +69,6 @@ def publish_message_hub_result(run: AiRun, callback: dict[str, Any]) -> None:
     if run.task_id is None:
         raise RuntimeError("message hub callback requires run.task_id")
 
-    responder_handle = required_string(callback, "responder_handle")
     agent_token = required_string(callback, "agent_token")
     state = optional_string(callback, "state") or "completed"
     body = {
@@ -83,7 +81,7 @@ def publish_message_hub_result(run: AiRun, callback: dict[str, Any]) -> None:
         body["content"] = run.output_text
 
     request = Request(
-        f"{MESSAGE_HUB_API_URL}/personal-agents/{quote(responder_handle, safe='')}/tasks/{quote(run.task_id, safe='')}/results",
+        f"{MESSAGE_HUB_API_URL}/agent/tasks/{run.task_id}/results",
         data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
         headers={
             "authorization": f"Bearer {agent_token}",

@@ -139,12 +139,21 @@ class FakeS3Client:
         self.objects.pop((Bucket, Key), None)
 
 
+class FakeSecretsManagerClient:
+    def __init__(self) -> None:
+        self.secrets: dict[str, str] = {}
+
+    def get_secret_value(self, *, SecretId: str) -> dict[str, str]:
+        return {"SecretString": self.secrets[SecretId]}
+
+
 class FakeBoto3(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("boto3")
         self.dynamodb = FakeDynamoDbResource()
         self.sqs = FakeSqsClient()
         self.s3 = FakeS3Client()
+        self.secretsmanager = FakeSecretsManagerClient()
 
     def resource(self, service_name: str) -> FakeDynamoDbResource:
         if service_name != "dynamodb":
@@ -156,6 +165,8 @@ class FakeBoto3(types.ModuleType):
             return self.sqs
         if service_name == "s3":
             return self.s3
+        if service_name == "secretsmanager":
+            return self.secretsmanager
         raise ValueError(service_name)
 
 
@@ -189,7 +200,12 @@ def decision(decision_id: str, action: str, *, reasons: list[str] | None = None)
     }
 
 
-def load_lambda_module(*, queue_url: str = "") -> tuple[types.ModuleType, FakeBoto3]:
+def load_lambda_module(
+    *,
+    queue_url: str = "",
+    extra_env: dict[str, str] | None = None,
+    secrets: dict[str, str] | None = None,
+) -> tuple[types.ModuleType, FakeBoto3]:
     env = {
         "AGENTS_TABLE": "agents",
         "AGENT_TOKENS_TABLE": "agent-tokens",
@@ -210,6 +226,8 @@ def load_lambda_module(*, queue_url: str = "") -> tuple[types.ModuleType, FakeBo
     }
     if queue_url:
         env["AGENT_JOBS_QUEUE_URL"] = queue_url
+    if extra_env:
+        env.update(extra_env)
 
     module_name = "_message_hub_lambda_for_test"
     path = Path(__file__).resolve().parents[1] / "aws" / "lambda_function.py"
@@ -234,6 +252,7 @@ def load_lambda_module(*, queue_url: str = "") -> tuple[types.ModuleType, FakeBo
 
     module = importlib.util.module_from_spec(spec)
     sys.modules.pop(module_name, None)
+    fake_boto3.secretsmanager.secrets.update(secrets or {})
     with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, fake_modules):
         spec.loader.exec_module(module)
     return module, fake_boto3
@@ -560,3 +579,11 @@ class MessageHubLambdaSafetyGatewayTest(TestCase):
         self.assertEqual(401, missing_token["statusCode"])
         self.assertEqual(403, wrong_token["statusCode"])
         self.assertEqual(200, matching_token["statusCode"])
+
+    def test_legacy_route_secret_can_load_from_secret_arn(self) -> None:
+        lambda_module, _ = load_lambda_module(
+            extra_env={"MESSAGE_HUB_LEGACY_ROUTE_SECRET_ARN": "secret:legacy-route"},
+            secrets={"secret:legacy-route": "legacy-secret"},
+        )
+
+        self.assertEqual("legacy-secret", lambda_module.LEGACY_HANDLE_ROUTE_SECRET)

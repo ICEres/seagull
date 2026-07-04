@@ -105,7 +105,7 @@ ALLOW_LEGACY_HANDLE_AGENT_ROUTES = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGEN
     "true",
     "yes",
 }
-LEGACY_HANDLE_ROUTE_SECRET = os.environ.get("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
+LEGACY_HANDLE_ROUTE_SECRET = secret_env("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
 
 dynamodb = boto3.resource("dynamodb")
 sqs = boto3.client("sqs")

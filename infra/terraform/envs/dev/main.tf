@@ -39,6 +39,16 @@ locals {
     values(module.message_hub_storage.table_arns),
     [for arn in values(module.message_hub_storage.table_arns) : "${arn}/index/*"],
   )
+  message_hub_api_secret_arns = [
+    aws_secretsmanager_secret.safety_gateway_admin.arn,
+  ]
+  agent_worker_secret_arns = [
+    aws_secretsmanager_secret.agent_webhook_signing.arn,
+  ]
+  mcp_connector_secret_arns = [
+    aws_secretsmanager_secret.mcp_connector_admin.arn,
+    aws_secretsmanager_secret.mcp_dev_token.arn,
+  ]
 }
 
 data "aws_caller_identity" "current" {}
@@ -46,6 +56,71 @@ data "aws_caller_identity" "current" {}
 data "aws_route53_zone" "root" {
   name         = var.root_domain
   private_zone = false
+}
+
+resource "aws_secretsmanager_secret" "agent_webhook_signing" {
+  name = "${local.message_hub_prefix}/runtime/agent-webhook-signing-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "message-hub-agent-worker"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "agent_webhook_signing" {
+  secret_id     = aws_secretsmanager_secret.agent_webhook_signing.id
+  secret_string = var.agent_webhook_signing_secret
+}
+
+resource "aws_secretsmanager_secret" "safety_gateway_admin" {
+  name = "${local.safety_gateway_prefix}/runtime/admin-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "safety-gateway"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "safety_gateway_admin" {
+  secret_id     = aws_secretsmanager_secret.safety_gateway_admin.id
+  secret_string = var.safety_gateway_admin_secret
+}
+
+resource "aws_secretsmanager_secret" "ai_provider_admin" {
+  name = "${local.ai_provider_prefix}/runtime/admin-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "ai-provider"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "ai_provider_admin" {
+  secret_id     = aws_secretsmanager_secret.ai_provider_admin.id
+  secret_string = var.ai_provider_admin_secret
+}
+
+resource "aws_secretsmanager_secret" "mcp_connector_admin" {
+  name = "${local.mcp_connector_prefix}/runtime/admin-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "mcp-connector"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "mcp_connector_admin" {
+  secret_id     = aws_secretsmanager_secret.mcp_connector_admin.id
+  secret_string = var.mcp_connector_admin_secret
+}
+
+resource "aws_secretsmanager_secret" "mcp_dev_token" {
+  name = "${local.mcp_connector_prefix}/runtime/dev-token"
+
+  tags = merge(local.message_hub_tags, {
+    App = "mcp-connector"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "mcp_dev_token" {
+  secret_id     = aws_secretsmanager_secret.mcp_dev_token.id
+  secret_string = var.mcp_dev_token
 }
 
 data "archive_file" "message_hub_api" {
@@ -130,7 +205,7 @@ resource "aws_iam_role_policy" "lambda" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -164,7 +239,15 @@ resource "aws_iam_role_policy" "lambda" {
         ]
         Resource = "${module.message_hub_storage.payload_objects_bucket_arn}/*"
       }
-    ]
+      ],
+      [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = local.message_hub_api_secret_arns
+        }
+      ]
+    )
   })
 }
 
@@ -180,24 +263,24 @@ resource "aws_lambda_function" "message_hub_api" {
 
   environment {
     variables = {
-      AGENTS_TABLE                = module.message_hub_storage.table_names.agents
-      AGENT_TOKENS_TABLE          = module.message_hub_storage.table_names.agent_tokens
-      AGENT_JOBS_QUEUE_URL        = aws_sqs_queue.agent_jobs.url
-      APP_NAME                    = local.message_hub_prefix
-      DELIVERIES_TABLE            = module.message_hub_storage.table_names.deliveries
-      IDEMPOTENCY_TABLE           = module.message_hub_storage.table_names.idempotency_keys
-      MESSAGES_TABLE              = module.message_hub_storage.table_names.messages
-      PAYLOAD_OBJECTS_BUCKET      = module.message_hub_storage.payload_objects_bucket_name
-      PAYLOADS_TABLE              = module.message_hub_storage.table_names.payloads
-      ROUTING_RULES_TABLE         = module.message_hub_storage.table_names.routing_rules
-      SAFETY_BLOCKED_TERMS        = "unsafe:"
-      SAFETY_GATEWAY_ADMIN_SECRET = var.safety_gateway_admin_secret
-      SAFETY_GATEWAY_URL          = module.safety_gateway.api_endpoint
-      TASK_RESULTS_TABLE          = module.message_hub_storage.table_names.task_results
-      TASKS_TABLE                 = module.message_hub_storage.table_names.tasks
-      THREAD_SUMMARIES_TABLE      = module.message_hub_storage.table_names.thread_summaries
-      THREADS_TABLE               = module.message_hub_storage.table_names.threads
-      TOOL_REQUESTS_TABLE         = module.message_hub_storage.table_names.tool_requests
+      AGENTS_TABLE                    = module.message_hub_storage.table_names.agents
+      AGENT_TOKENS_TABLE              = module.message_hub_storage.table_names.agent_tokens
+      AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
+      APP_NAME                        = local.message_hub_prefix
+      DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
+      IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
+      MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
+      PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
+      PAYLOADS_TABLE                  = module.message_hub_storage.table_names.payloads
+      ROUTING_RULES_TABLE             = module.message_hub_storage.table_names.routing_rules
+      SAFETY_BLOCKED_TERMS            = "unsafe:"
+      SAFETY_GATEWAY_ADMIN_SECRET_ARN = aws_secretsmanager_secret.safety_gateway_admin.arn
+      SAFETY_GATEWAY_URL              = module.safety_gateway.api_endpoint
+      TASK_RESULTS_TABLE              = module.message_hub_storage.table_names.task_results
+      TASKS_TABLE                     = module.message_hub_storage.table_names.tasks
+      THREAD_SUMMARIES_TABLE          = module.message_hub_storage.table_names.thread_summaries
+      THREADS_TABLE                   = module.message_hub_storage.table_names.threads
+      TOOL_REQUESTS_TABLE             = module.message_hub_storage.table_names.tool_requests
     }
   }
 
@@ -285,7 +368,7 @@ resource "aws_iam_role_policy" "agent_worker" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -311,7 +394,15 @@ resource "aws_iam_role_policy" "agent_worker" {
         ]
         Resource = aws_sqs_queue.agent_jobs.arn
       }
-    ]
+      ],
+      [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = local.agent_worker_secret_arns
+        }
+      ]
+    )
   })
 }
 
@@ -327,11 +418,11 @@ resource "aws_lambda_function" "agent_worker" {
 
   environment {
     variables = {
-      AGENTS_TABLE                   = module.message_hub_storage.table_names.agents
-      APP_NAME                       = "${local.message_hub_prefix}-agent-worker"
-      DELIVERIES_TABLE               = module.message_hub_storage.table_names.deliveries
-      MESSAGES_TABLE                 = module.message_hub_storage.table_names.messages
-      SEAGULL_WEBHOOK_SIGNING_SECRET = var.agent_webhook_signing_secret
+      AGENTS_TABLE                       = module.message_hub_storage.table_names.agents
+      APP_NAME                           = "${local.message_hub_prefix}-agent-worker"
+      DELIVERIES_TABLE                   = module.message_hub_storage.table_names.deliveries
+      MESSAGES_TABLE                     = module.message_hub_storage.table_names.messages
+      SEAGULL_WEBHOOK_SIGNING_SECRET_ARN = aws_secretsmanager_secret.agent_webhook_signing.arn
     }
   }
 
@@ -536,7 +627,7 @@ resource "aws_iam_role_policy" "mcp_connector" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -563,7 +654,15 @@ resource "aws_iam_role_policy" "mcp_connector" {
         Action   = ["cognito-idp:AdminGetUser"]
         Resource = aws_cognito_user_pool.mcp_connector.arn
       }
-    ]
+      ],
+      [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = local.mcp_connector_secret_arns
+        }
+      ]
+    )
   })
 }
 
@@ -580,25 +679,25 @@ resource "aws_lambda_function" "mcp_connector" {
   environment {
     variables = merge(
       {
-        APP_NAME                      = local.mcp_connector_prefix
-        CONNECTOR_TOKEN_ADMIN_SECRET  = var.mcp_connector_admin_secret
-        CONNECTOR_TOKENS_TABLE        = aws_dynamodb_table.mcp_connector_tokens.name
-        MCP_AUTHORIZATION_SERVER      = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.mcp_connector.id}"
-        MCP_COGNITO_AUTHORIZATION_URL = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
-        MCP_COGNITO_CLIENT_ID         = aws_cognito_user_pool_client.mcp_connector_chatgpt.id
-        MCP_COGNITO_REGION            = var.aws_region
-        MCP_COGNITO_TOKEN_URL         = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
-        MCP_COGNITO_USER_POOL_ID      = aws_cognito_user_pool.mcp_connector.id
-        MCP_CORS_ALLOWED_ORIGINS      = join(",", var.mcp_allowed_origins)
-        MCP_DEV_OWNER_USER_ID         = var.mcp_dev_owner_user_id
-        MCP_NO_AUTH_ENABLED           = tostring(var.environment == "dev" && var.mcp_no_auth_enabled)
-        MCP_NO_AUTH_OWNER_USER_ID     = var.mcp_no_auth_owner_user_id
-        MCP_NO_AUTH_SCOPES            = join(",", var.mcp_no_auth_scopes)
-        MCP_RESOURCE_URI              = "https://${var.mcp_domain_name}/mcp"
-        MESSAGE_API_URL               = "https://${var.message_api_domain}"
+        APP_NAME                         = local.mcp_connector_prefix
+        CONNECTOR_TOKEN_ADMIN_SECRET_ARN = aws_secretsmanager_secret.mcp_connector_admin.arn
+        CONNECTOR_TOKENS_TABLE           = aws_dynamodb_table.mcp_connector_tokens.name
+        MCP_AUTHORIZATION_SERVER         = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.mcp_connector.id}"
+        MCP_COGNITO_AUTHORIZATION_URL    = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/authorize"
+        MCP_COGNITO_CLIENT_ID            = aws_cognito_user_pool_client.mcp_connector_chatgpt.id
+        MCP_COGNITO_REGION               = var.aws_region
+        MCP_COGNITO_TOKEN_URL            = "https://${aws_cognito_user_pool_domain.mcp_connector.domain}.auth.${var.aws_region}.amazoncognito.com/oauth2/token"
+        MCP_COGNITO_USER_POOL_ID         = aws_cognito_user_pool.mcp_connector.id
+        MCP_CORS_ALLOWED_ORIGINS         = join(",", var.mcp_allowed_origins)
+        MCP_DEV_OWNER_USER_ID            = var.mcp_dev_owner_user_id
+        MCP_NO_AUTH_ENABLED              = tostring(var.environment == "dev" && var.mcp_no_auth_enabled)
+        MCP_NO_AUTH_OWNER_USER_ID        = var.mcp_no_auth_owner_user_id
+        MCP_NO_AUTH_SCOPES               = join(",", var.mcp_no_auth_scopes)
+        MCP_RESOURCE_URI                 = "https://${var.mcp_domain_name}/mcp"
+        MESSAGE_API_URL                  = "https://${var.message_api_domain}"
       },
-      var.mcp_dev_token == "" ? {} : {
-        MCP_DEV_TOKEN = var.mcp_dev_token
+      {
+        MCP_DEV_TOKEN_ARN = aws_secretsmanager_secret.mcp_dev_token.arn
       },
       length(var.mcp_dev_agent_handles) == 0 ? {} : {
         MCP_DEV_AGENT_HANDLES = join(",", var.mcp_dev_agent_handles)
@@ -897,7 +996,7 @@ module "safety_gateway" {
   name_prefix             = local.safety_gateway_prefix
   lambda_package_path     = data.archive_file.safety_gateway.output_path
   lambda_source_code_hash = data.archive_file.safety_gateway.output_base64sha256
-  admin_secret            = var.safety_gateway_admin_secret
+  admin_secret_arn        = aws_secretsmanager_secret.safety_gateway_admin.arn
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
@@ -912,7 +1011,7 @@ module "ai_provider" {
   name_prefix             = local.ai_provider_prefix
   lambda_package_path     = data.archive_file.ai_provider.output_path
   lambda_source_code_hash = data.archive_file.ai_provider.output_base64sha256
-  admin_secret            = var.ai_provider_admin_secret
+  admin_secret_arn        = aws_secretsmanager_secret.ai_provider_admin.arn
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
 

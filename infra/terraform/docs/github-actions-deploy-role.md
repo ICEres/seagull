@@ -53,7 +53,9 @@ AWS_REGION                # optional, defaults to ap-southeast-2
 ```
 
 The workflow also needs the Lambda/admin secrets listed in
-[`../envs/dev/README.md`](../envs/dev/README.md).
+[`../envs/dev/README.md`](../envs/dev/README.md). Terraform materializes those
+GitHub secrets into Secrets Manager; Lambda environment variables receive only
+the resulting secret ARNs.
 
 ## Permission Contract
 
@@ -101,6 +103,26 @@ s3:ListBucket
 s3:GetBucketTagging
 s3:PutBucketTagging
 s3:DeleteBucketTagging
+```
+
+The role also needs Secrets Manager permissions for runtime Lambda secrets under
+the dev stack prefixes, for example:
+
+```text
+arn:aws:secretsmanager:<region>:<account-id>:secret:seagull-dev-*/runtime/*
+```
+
+The statement should cover Terraform lifecycle and version updates:
+
+```text
+secretsmanager:CreateSecret
+secretsmanager:DeleteSecret
+secretsmanager:DescribeSecret
+secretsmanager:GetSecretValue
+secretsmanager:ListSecretVersionIds
+secretsmanager:PutSecretValue
+secretsmanager:TagResource
+secretsmanager:UpdateSecret
 ```
 
 ## S3 Policy Repair
@@ -163,7 +185,8 @@ aws iam get-role-policy \
    ```
 
 3. Prefer the manual GitHub workflow for dev applies, because it supplies the
-   repository secrets used in Lambda environment variables:
+   repository secrets that Terraform writes into Secrets Manager for Lambda
+   runtime lookup:
 
    ```sh
    gh workflow run "CI Deploy" --repo <owner>/<repo> --ref main
@@ -172,4 +195,4 @@ aws iam get-role-policy \
 
 Avoid a local full `terraform apply` unless every sensitive `TF_VAR_*` value used
 by CI is present locally. Applying with missing secret variables can overwrite
-deployed Lambda environment values.
+the deployed Secrets Manager secret versions.

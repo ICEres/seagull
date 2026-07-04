@@ -37,13 +37,6 @@ variable "lambda_source_code_hash" {
   description = "Base64-encoded source hash for the AI provider Lambda package."
 }
 
-variable "admin_secret" {
-  type        = string
-  description = "Optional AI provider admin secret. Leave empty to require Cognito admin claims."
-  default     = ""
-  sensitive   = true
-}
-
 variable "admin_secret_arn" {
   type        = string
   description = "Optional Secrets Manager ARN containing the AI provider admin secret."

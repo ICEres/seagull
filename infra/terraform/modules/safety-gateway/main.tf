@@ -79,7 +79,7 @@ resource "aws_iam_role_policy" "lambda" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -100,7 +100,15 @@ resource "aws_iam_role_policy" "lambda" {
           "${aws_dynamodb_table.audit_events.arn}/index/*"
         ]
       }
-    ]
+      ],
+      var.admin_secret_arn == "" ? [] : [
+        {
+          Effect   = "Allow"
+          Action   = ["secretsmanager:GetSecretValue"]
+          Resource = var.admin_secret_arn
+        }
+      ]
+    )
   })
 }
 
@@ -115,16 +123,20 @@ resource "aws_lambda_function" "api" {
   memory_size      = 256
 
   environment {
-    variables = {
-      APP_NAME                         = var.name_prefix
-      AUDIT_TABLE                      = aws_dynamodb_table.audit_events.name
-      SAFETY_BLOCKED_TERMS             = "unsafe:"
-      SAFETY_GATEWAY_ADMIN_SECRET      = var.admin_secret
-      SAFETY_MAX_EVENTS_PER_WINDOW     = "20"
-      SAFETY_MAX_REPEATED_REPLIES      = "4"
-      SAFETY_MAX_THREAD_DEPTH          = "12"
-      SAFETY_RATE_LIMIT_WINDOW_SECONDS = "60"
-    }
+    variables = merge(
+      {
+        APP_NAME                         = var.name_prefix
+        AUDIT_TABLE                      = aws_dynamodb_table.audit_events.name
+        SAFETY_BLOCKED_TERMS             = "unsafe:"
+        SAFETY_MAX_EVENTS_PER_WINDOW     = "20"
+        SAFETY_MAX_REPEATED_REPLIES      = "4"
+        SAFETY_MAX_THREAD_DEPTH          = "12"
+        SAFETY_RATE_LIMIT_WINDOW_SECONDS = "60"
+      },
+      var.admin_secret_arn == "" ? {} : {
+        SAFETY_GATEWAY_ADMIN_SECRET_ARN = var.admin_secret_arn
+      }
+    )
   }
 
   depends_on = [

@@ -86,7 +86,8 @@ TF_BACKEND_REGION         # optional, defaults to ap-southeast-2
 Keep that role policy aligned with new Terraform-managed resource types before
 running the manual deploy workflow.
 
-Configure these repository secrets for Lambda-only credentials:
+Configure these repository secrets for Lambda-only credentials. Terraform writes
+the values to Secrets Manager and passes only secret ARNs to deployed Lambdas:
 
 ```text
 AGENT_WEBHOOK_SIGNING_SECRET
@@ -135,8 +136,9 @@ GET  /audit
 ```
 
 Set `SAFETY_GATEWAY_ADMIN_SECRET` when running `make aws-dev-safety-smoke`
-against a deployed gateway. Use the same value passed to Terraform for
-`safety_gateway_admin_secret`.
+against a deployed gateway. Use the same value stored in the
+`${project}-${environment}-safety-gateway/runtime/admin-secret` Secrets Manager
+secret.
 
 The social smoke command calls:
 

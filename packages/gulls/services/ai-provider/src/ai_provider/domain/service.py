@@ -35,6 +35,15 @@ Clock = Callable[[], datetime]
 
 DEFAULT_MAX_OUTPUT_TOKENS = 512
 DEFAULT_COST_UNIT_PER_TOKEN = 1
+TERMINAL_RUN_STATES = frozenset(
+    {
+        AiRunState.COMPLETED,
+        AiRunState.DENIED,
+        AiRunState.FAILED,
+        AiRunState.CANCELED,
+        AiRunState.QUARANTINED,
+    }
+)
 
 
 class AiProviderServiceError(Exception):
@@ -84,7 +93,7 @@ class AiProviderService:
         trace_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> AiRun:
-        request = normalize_provider_request(
+        request = self._normalized_request(
             provider=provider,
             model=model,
             actor_agent_id=actor_agent_id,
@@ -103,42 +112,118 @@ class AiProviderService:
             trace_id=trace_id,
             idempotency_key=idempotency_key,
         )
-        if request.provider not in self._providers:
-            raise InvalidAiRunError(f"provider is not configured: {request.provider}")
+        run, created = self._put_requested_run(request)
+        if not created:
+            return run
 
-        now = self._clock()
-        run_id = idempotent_run_id(request) if request.idempotency_key is not None else self._new_id("airun")
-        run = AiRun(
-            run_id=run_id,
-            provider=request.provider,
-            model=request.model,
-            actor_agent_id=request.actor_agent_id,
-            owner_user_id=request.owner_user_id,
-            task_id=request.task_id,
-            message_id=request.message_id,
-            input_ref=request.content_ref,
-            trace_id=request.trace_id,
-            idempotency_key=request.idempotency_key,
-            created_at=now,
-            updated_at=now,
+        run = self._check_and_queue_run(request, run, reason="local run queued")
+        if run.state != AiRunState.QUEUED:
+            return run
+
+        return self._execute_provider_run(run, request)
+
+    def create_queued_run(
+        self,
+        *,
+        provider: str,
+        model: str,
+        actor_agent_id: str,
+        owner_user_id: str,
+        input_messages: Sequence[ProviderMessage | dict[str, str]],
+        system_instructions: str | None = None,
+        system_instructions_ref: str | None = None,
+        context_refs: Sequence[str] = (),
+        content_ref: str | None = None,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        temperature: float = 0.2,
+        response_format: str = "text",
+        tool_policy: str = "disabled",
+        task_id: str | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AiRun:
+        request = self._normalized_request(
+            provider=provider,
+            model=model,
+            actor_agent_id=actor_agent_id,
+            owner_user_id=owner_user_id,
+            input_messages=input_messages,
+            system_instructions=system_instructions,
+            system_instructions_ref=system_instructions_ref,
+            context_refs=context_refs,
+            content_ref=content_ref,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            tool_policy=tool_policy,
+            task_id=task_id,
+            message_id=message_id,
+            trace_id=trace_id,
+            idempotency_key=idempotency_key,
         )
-        if request.idempotency_key is not None:
-            if not self._repository.put_run_if_absent(run):
-                existing_run = self._repository.get_run(run_id)
-                if existing_run is None:
-                    raise InvalidAiRunError("idempotent AI run already exists but could not be loaded")
-                return existing_run
-        else:
-            self._repository.put_run(run)
-        self._append_event(run, AiRunState.REQUESTED, "run requested")
+        run, created = self._put_requested_run(request)
+        if not created:
+            return run
+        return self._check_and_queue_run(request, run, reason="run queued for worker")
 
-        denial = self._preflight_denial(request)
-        if denial is not None:
-            return self._deny(run, denial)
+    def execute_queued_run(
+        self,
+        run_id: str,
+        *,
+        provider: str,
+        model: str,
+        actor_agent_id: str,
+        owner_user_id: str,
+        input_messages: Sequence[ProviderMessage | dict[str, str]],
+        system_instructions: str | None = None,
+        system_instructions_ref: str | None = None,
+        context_refs: Sequence[str] = (),
+        content_ref: str | None = None,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        temperature: float = 0.2,
+        response_format: str = "text",
+        tool_policy: str = "disabled",
+        task_id: str | None = None,
+        message_id: str | None = None,
+        trace_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AiRun:
+        request = self._normalized_request(
+            provider=provider,
+            model=model,
+            actor_agent_id=actor_agent_id,
+            owner_user_id=owner_user_id,
+            input_messages=input_messages,
+            system_instructions=system_instructions,
+            system_instructions_ref=system_instructions_ref,
+            context_refs=context_refs,
+            content_ref=content_ref,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            tool_policy=tool_policy,
+            task_id=task_id,
+            message_id=message_id,
+            trace_id=trace_id,
+            idempotency_key=idempotency_key,
+        )
+        run = self.get_run(run_id)
+        if run.state in TERMINAL_RUN_STATES:
+            return run
+        self._require_run_matches_request(run, request)
+        if run.state == AiRunState.REQUESTED:
+            run = self._check_and_queue_run(request, run, reason="run queued for worker retry")
+        elif run.state == AiRunState.SAFETY_CHECKED:
+            run = self._transition(run, AiRunState.QUEUED, "run queued for worker retry")
+        if run.state != AiRunState.QUEUED and run.state != AiRunState.RUNNING:
+            raise InvalidAiRunError(f"AI run is not queued: {run.run_id}")
 
-        run = self._transition(run, AiRunState.SAFETY_CHECKED, "preflight safety and policy checks passed")
-        run = self._transition(run, AiRunState.QUEUED, "local run queued")
-        run = self._transition(run, AiRunState.RUNNING, "provider call started")
+        return self._execute_provider_run(run, request)
+
+    def _execute_provider_run(self, run: AiRun, request: ProviderRequest) -> AiRun:
+        if run.state != AiRunState.RUNNING:
+            run = self._transition(run, AiRunState.RUNNING, "provider call started")
 
         try:
             response = self._providers[request.provider].generate(request)
@@ -186,6 +271,101 @@ class AiProviderService:
             usage_id=usage.usage_id,
         )
         return self._transition(run, AiRunState.COMPLETED, "run completed", usage_id=usage.usage_id)
+
+    def _normalized_request(
+        self,
+        *,
+        provider: str,
+        model: str,
+        actor_agent_id: str,
+        owner_user_id: str,
+        input_messages: Sequence[ProviderMessage | dict[str, str]],
+        system_instructions: str | None,
+        system_instructions_ref: str | None,
+        context_refs: Sequence[str],
+        content_ref: str | None,
+        max_output_tokens: int,
+        temperature: float,
+        response_format: str,
+        tool_policy: str,
+        task_id: str | None,
+        message_id: str | None,
+        trace_id: str | None,
+        idempotency_key: str | None,
+    ) -> ProviderRequest:
+        request = normalize_provider_request(
+            provider=provider,
+            model=model,
+            actor_agent_id=actor_agent_id,
+            owner_user_id=owner_user_id,
+            input_messages=input_messages,
+            system_instructions=system_instructions,
+            system_instructions_ref=system_instructions_ref,
+            context_refs=context_refs,
+            content_ref=content_ref,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+            response_format=response_format,
+            tool_policy=tool_policy,
+            task_id=task_id,
+            message_id=message_id,
+            trace_id=trace_id,
+            idempotency_key=idempotency_key,
+        )
+        if request.provider not in self._providers:
+            raise InvalidAiRunError(f"provider is not configured: {request.provider}")
+        return request
+
+    def _put_requested_run(self, request: ProviderRequest) -> tuple[AiRun, bool]:
+        now = self._clock()
+        run_id = idempotent_run_id(request) if request.idempotency_key is not None else self._new_id("airun")
+        run = AiRun(
+            run_id=run_id,
+            provider=request.provider,
+            model=request.model,
+            actor_agent_id=request.actor_agent_id,
+            owner_user_id=request.owner_user_id,
+            task_id=request.task_id,
+            message_id=request.message_id,
+            input_ref=request.content_ref,
+            trace_id=request.trace_id,
+            idempotency_key=request.idempotency_key,
+            created_at=now,
+            updated_at=now,
+        )
+        if request.idempotency_key is not None:
+            if not self._repository.put_run_if_absent(run):
+                existing_run = self._repository.get_run(run_id)
+                if existing_run is None:
+                    raise InvalidAiRunError("idempotent AI run already exists but could not be loaded")
+                return existing_run, False
+        else:
+            self._repository.put_run(run)
+        self._append_event(run, AiRunState.REQUESTED, "run requested")
+        return run, True
+
+    def _check_and_queue_run(self, request: ProviderRequest, run: AiRun, *, reason: str) -> AiRun:
+        denial = self._preflight_denial(request)
+        if denial is not None:
+            return self._deny(run, denial)
+        run = self._transition(run, AiRunState.SAFETY_CHECKED, "preflight safety and policy checks passed")
+        return self._transition(run, AiRunState.QUEUED, reason)
+
+    def _require_run_matches_request(self, run: AiRun, request: ProviderRequest) -> None:
+        expected = {
+            "provider": request.provider,
+            "model": request.model,
+            "actor_agent_id": request.actor_agent_id,
+            "owner_user_id": request.owner_user_id,
+            "task_id": request.task_id,
+            "message_id": request.message_id,
+            "input_ref": request.content_ref,
+            "trace_id": request.trace_id,
+            "idempotency_key": request.idempotency_key,
+        }
+        for field_name, expected_value in expected.items():
+            if getattr(run, field_name) != expected_value:
+                raise InvalidAiRunError(f"queued AI run request mismatch: {field_name}")
 
     def get_run(self, run_id: str) -> AiRun:
         normalized_run_id = normalized_required(run_id, "run_id")

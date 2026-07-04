@@ -78,6 +78,21 @@ output "ai_provider_lambda_function_name" {
   value       = module.ai_provider.lambda_function_name
 }
 
+output "ai_provider_worker_lambda_function_name" {
+  description = "AI provider worker Lambda function name."
+  value       = module.ai_provider.worker_lambda_function_name
+}
+
+output "ai_provider_run_worker_queue_url" {
+  description = "SQS FIFO queue URL for async AI provider runs."
+  value       = module.ai_provider.run_worker_queue_url
+}
+
+output "ai_provider_run_worker_dlq_url" {
+  description = "SQS FIFO dead-letter queue URL for async AI provider runs."
+  value       = module.ai_provider.run_worker_dlq_url
+}
+
 output "ai_provider_table_names" {
   description = "DynamoDB table names for the AI provider backend."
   value       = module.ai_provider.table_names

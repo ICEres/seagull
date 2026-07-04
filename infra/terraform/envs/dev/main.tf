@@ -1018,6 +1018,7 @@ module "ai_provider" {
   admin_secret_arn        = aws_secretsmanager_secret.ai_provider_admin.arn
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
+  message_hub_api_url     = "https://${var.message_api_domain}"
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled

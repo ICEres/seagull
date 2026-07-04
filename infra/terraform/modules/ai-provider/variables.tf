@@ -71,6 +71,24 @@ variable "api_throttling_rate_limit" {
   default     = 50
 }
 
+variable "message_hub_api_url" {
+  type        = string
+  description = "Optional Message Hub API URL used by the AI Provider worker for task-result callbacks."
+  default     = ""
+}
+
+variable "worker_timeout_seconds" {
+  type        = number
+  description = "AI Provider worker Lambda timeout in seconds."
+  default     = 60
+}
+
+variable "worker_batch_size" {
+  type        = number
+  description = "Maximum SQS messages delivered to each AI Provider worker invocation."
+  default     = 1
+}
+
 variable "access_log_retention_days" {
   type        = number
   description = "Retention in days for AI Provider API Gateway access logs."

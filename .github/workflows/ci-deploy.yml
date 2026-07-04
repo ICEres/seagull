@@ -324,6 +324,7 @@ jobs:
           set -euo pipefail
           test -f infra/terraform/envs/dev/.terraform/build/safety-gateway/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/lambda_function.py
+          test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/ai_worker.py
           test -f infra/terraform/envs/dev/.terraform/build/mcp-connector/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/social-api/package/lambda_function.py
           test -x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap

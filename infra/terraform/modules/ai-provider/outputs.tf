@@ -8,6 +8,30 @@ output "lambda_function_name" {
   value       = aws_lambda_function.api.function_name
 }
 
+output "worker_lambda_function_name" {
+  description = "AI provider worker Lambda function name."
+  value       = aws_lambda_function.worker.function_name
+}
+
+output "run_worker_queue_url" {
+  description = "SQS FIFO queue URL for async AI provider runs."
+  value       = aws_sqs_queue.run_worker.url
+}
+
+output "run_worker_dlq_url" {
+  description = "SQS FIFO dead-letter queue URL for async AI provider runs."
+  value       = aws_sqs_queue.run_worker_dlq.url
+}
+
+output "alarm_names" {
+  description = "CloudWatch alarm names for AI provider API and worker health."
+  value = {
+    api_errors         = aws_cloudwatch_metric_alarm.api_errors.alarm_name
+    worker_dlq_visible = aws_cloudwatch_metric_alarm.worker_dlq_visible.alarm_name
+    worker_errors      = aws_cloudwatch_metric_alarm.worker_errors.alarm_name
+  }
+}
+
 output "table_names" {
   description = "DynamoDB table names for AI provider storage."
   value = {

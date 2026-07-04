@@ -84,6 +84,7 @@ PUBLIC_DEMO_INPUT_CHAR_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT
 PUBLIC_DEMO_MAX_OUTPUT_TOKENS = env_int("AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS", default=64, minimum=8)
 PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT", default=600, minimum=64)
 PUBLIC_DEMO_USER_CREDIT_LIMIT = env_int("AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT", default=600, minimum=64)
+AI_RUN_QUEUE_URL = os.environ.get("AI_RUN_QUEUE_URL", "").strip()
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -212,25 +213,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             body = parse_body(event)
             owner_user_id = required_string(body, "owner_user_id")
             require_owner_or_admin(event, owner_user_id)
-            run = service.create_run(
-                provider=required_string(body, "provider"),
-                model=required_string(body, "model"),
-                actor_agent_id=required_string(body, "actor_agent_id"),
-                owner_user_id=owner_user_id,
-                input_messages=provider_messages(body.get("input_messages", ())),
-                system_instructions=optional_string(body, "system_instructions"),
-                system_instructions_ref=optional_string(body, "system_instructions_ref"),
-                context_refs=string_list(body.get("context_refs", ()), "context_refs"),
-                content_ref=optional_string(body, "content_ref"),
-                max_output_tokens=optional_int(body, "max_output_tokens", default=512),
-                temperature=optional_float(body, "temperature", default=0.2),
-                response_format=optional_string(body, "response_format") or "text",
-                tool_policy=optional_string(body, "tool_policy") or "disabled",
-                task_id=optional_string(body, "task_id"),
-                message_id=optional_string(body, "message_id"),
-                trace_id=optional_string(body, "trace_id"),
-                idempotency_key=optional_string(body, "idempotency_key"),
-            )
+            run_kwargs = ai_run_request_kwargs(body, owner_user_id=owner_user_id)
+            if async_run_requested(body):
+                if not AI_RUN_QUEUE_URL:
+                    raise BadRequest("AI run queue is not configured")
+                run = service.create_queued_run(**run_kwargs)
+                queued = run.state == AiRunState.QUEUED
+                if queued:
+                    enqueue_ai_run(run.run_id, run.owner_user_id, run_kwargs, message_hub_callback(body))
+                return response(202 if queued else 200, {"run": run_to_dict(run), "queued": queued})
+
+            run = service.create_run(**run_kwargs)
             return response(200, {"run": run_to_dict(run)})
 
         if method == "GET" and path.startswith("/ai-runs/") and path.endswith("/events"):
@@ -541,6 +534,93 @@ def parse_body(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise BadRequest("body must be a JSON object")
     return body
+
+
+def ai_run_request_kwargs(body: dict[str, Any], *, owner_user_id: str) -> dict[str, Any]:
+    return {
+        "provider": required_string(body, "provider"),
+        "model": required_string(body, "model"),
+        "actor_agent_id": required_string(body, "actor_agent_id"),
+        "owner_user_id": owner_user_id,
+        "input_messages": provider_messages(body.get("input_messages", ())),
+        "system_instructions": optional_string(body, "system_instructions"),
+        "system_instructions_ref": optional_string(body, "system_instructions_ref"),
+        "context_refs": string_list(body.get("context_refs", ()), "context_refs"),
+        "content_ref": optional_string(body, "content_ref"),
+        "max_output_tokens": optional_int(body, "max_output_tokens", default=512),
+        "temperature": optional_float(body, "temperature", default=0.2),
+        "response_format": optional_string(body, "response_format") or "text",
+        "tool_policy": optional_string(body, "tool_policy") or "disabled",
+        "task_id": optional_string(body, "task_id"),
+        "message_id": optional_string(body, "message_id"),
+        "trace_id": optional_string(body, "trace_id"),
+        "idempotency_key": optional_string(body, "idempotency_key"),
+    }
+
+
+def async_run_requested(body: dict[str, Any]) -> bool:
+    if optional_bool(body, "async", default=False):
+        return True
+    return (optional_string(body, "execution_mode") or "").casefold() == "async"
+
+
+def enqueue_ai_run(
+    run_id: str,
+    owner_user_id: str,
+    run_kwargs: dict[str, Any],
+    callback: dict[str, Any] | None,
+) -> None:
+    payload = {
+        "run_id": run_id,
+        "request": serializable_run_request(run_kwargs),
+    }
+    if callback is not None:
+        payload["message_hub"] = callback
+    boto3.client("sqs").send_message(
+        QueueUrl=AI_RUN_QUEUE_URL,
+        MessageBody=json.dumps(payload, separators=(",", ":")),
+        MessageGroupId=owner_user_id,
+        MessageDeduplicationId=run_id,
+    )
+
+
+def serializable_run_request(run_kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "provider": run_kwargs["provider"],
+        "model": run_kwargs["model"],
+        "actor_agent_id": run_kwargs["actor_agent_id"],
+        "owner_user_id": run_kwargs["owner_user_id"],
+        "input_messages": list(run_kwargs["input_messages"]),
+        "system_instructions": run_kwargs["system_instructions"],
+        "system_instructions_ref": run_kwargs["system_instructions_ref"],
+        "context_refs": list(run_kwargs["context_refs"]),
+        "content_ref": run_kwargs["content_ref"],
+        "max_output_tokens": run_kwargs["max_output_tokens"],
+        "temperature": run_kwargs["temperature"],
+        "response_format": run_kwargs["response_format"],
+        "tool_policy": run_kwargs["tool_policy"],
+        "task_id": run_kwargs["task_id"],
+        "message_id": run_kwargs["message_id"],
+        "trace_id": run_kwargs["trace_id"],
+        "idempotency_key": run_kwargs["idempotency_key"],
+    }
+
+
+def message_hub_callback(body: dict[str, Any]) -> dict[str, Any] | None:
+    callback = body.get("message_hub")
+    if callback is None:
+        return None
+    if not isinstance(callback, dict):
+        raise BadRequest("message_hub must be an object")
+    responder_handle = optional_string(callback, "responder_handle")
+    agent_token = optional_string(callback, "agent_token")
+    if responder_handle is None or agent_token is None:
+        raise BadRequest("message_hub.responder_handle and message_hub.agent_token are required")
+    return {
+        "responder_handle": responder_handle,
+        "agent_token": agent_token,
+        "state": optional_string(callback, "state") or "completed",
+    }
 
 
 def redacted_event(event: dict[str, Any]) -> dict[str, Any]:

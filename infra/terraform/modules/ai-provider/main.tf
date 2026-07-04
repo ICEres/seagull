@@ -26,6 +26,37 @@ locals {
   provider_secret_resources = [
     "arn:aws:secretsmanager:*:*:secret:${var.name_prefix}/providers/*",
   ]
+
+  lambda_environment = merge(
+    {
+      AI_ADMIN_AUDIT_EVENTS_TABLE               = aws_dynamodb_table.admin_audit_events.name
+      AI_BUDGET_LIMITS_TABLE                    = aws_dynamodb_table.budget_limits.name
+      AI_MODEL_POLICIES_TABLE                   = aws_dynamodb_table.model_policies.name
+      AI_PROVIDER_CONFIGS_TABLE                 = aws_dynamodb_table.provider_configs.name
+      AI_PROVIDER_PUBLIC_DEMO_ACTOR_AGENT_ID    = "${var.name_prefix}-landing-demo-agent"
+      AI_PROVIDER_PUBLIC_DEMO_ENABLED           = "true"
+      AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT  = "360"
+      AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS = "64"
+      AI_PROVIDER_PUBLIC_DEMO_OWNER_USER_ID     = "${var.name_prefix}-landing-demo"
+      AI_PROVIDER_PUBLIC_DEMO_PROVIDER          = "openai"
+      AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = "600"
+      AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT = "600"
+      AI_PROVIDER_SECRET_PREFIX                 = var.name_prefix
+      AI_RUN_EVENTS_TABLE                       = aws_dynamodb_table.run_events.name
+      AI_RUN_QUEUE_URL                          = aws_sqs_queue.run_worker.url
+      AI_RUNS_TABLE                             = aws_dynamodb_table.runs.name
+      AI_SERVER_CREDIT_LEDGER_TABLE             = aws_dynamodb_table.server_credit_ledger.name
+      AI_USAGE_LEDGER_TABLE                     = aws_dynamodb_table.usage_ledger.name
+      AI_USER_CREDIT_LEDGER_TABLE               = aws_dynamodb_table.user_credit_ledger.name
+      APP_NAME                                  = var.name_prefix
+    },
+    var.admin_secret_arn == "" ? {} : {
+      AI_PROVIDER_ADMIN_SECRET_ARN = var.admin_secret_arn
+    },
+    var.message_hub_api_url == "" ? {} : {
+      MESSAGE_HUB_API_URL = var.message_hub_api_url
+    },
+  )
 }
 
 resource "aws_dynamodb_table" "runs" {
@@ -416,6 +447,36 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags = local.common_tags
 }
 
+resource "aws_cloudwatch_log_group" "worker" {
+  name              = "/aws/lambda/${var.name_prefix}-worker"
+  retention_in_days = 7
+
+  tags = local.common_tags
+}
+
+resource "aws_sqs_queue" "run_worker_dlq" {
+  name                        = "${var.name_prefix}-run-worker-dlq.fifo"
+  fifo_queue                  = true
+  content_based_deduplication = false
+  message_retention_seconds   = 1209600
+
+  tags = local.common_tags
+}
+
+resource "aws_sqs_queue" "run_worker" {
+  name                        = "${var.name_prefix}-run-worker.fifo"
+  fifo_queue                  = true
+  content_based_deduplication = false
+  message_retention_seconds   = 1209600
+  visibility_timeout_seconds  = var.worker_timeout_seconds + 30
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.run_worker_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = local.common_tags
+}
+
 resource "aws_iam_role_policy" "lambda" {
   name = "${var.name_prefix}-lambda-policy"
   role = aws_iam_role.lambda.id
@@ -441,6 +502,23 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:UpdateItem"
         ]
         Resource = local.table_resources
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage"
+        ]
+        Resource = aws_sqs_queue.run_worker.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:ChangeMessageVisibility",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:ReceiveMessage"
+        ]
+        Resource = aws_sqs_queue.run_worker.arn
       },
       {
         Effect = "Allow"
@@ -488,32 +566,7 @@ resource "aws_lambda_function" "api" {
   memory_size      = 256
 
   environment {
-    variables = merge(
-      {
-        AI_ADMIN_AUDIT_EVENTS_TABLE               = aws_dynamodb_table.admin_audit_events.name
-        AI_BUDGET_LIMITS_TABLE                    = aws_dynamodb_table.budget_limits.name
-        AI_MODEL_POLICIES_TABLE                   = aws_dynamodb_table.model_policies.name
-        AI_PROVIDER_CONFIGS_TABLE                 = aws_dynamodb_table.provider_configs.name
-        AI_PROVIDER_PUBLIC_DEMO_ACTOR_AGENT_ID    = "${var.name_prefix}-landing-demo-agent"
-        AI_PROVIDER_PUBLIC_DEMO_ENABLED           = "true"
-        AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT  = "360"
-        AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS = "64"
-        AI_PROVIDER_PUBLIC_DEMO_OWNER_USER_ID     = "${var.name_prefix}-landing-demo"
-        AI_PROVIDER_PUBLIC_DEMO_PROVIDER          = "openai"
-        AI_PROVIDER_PUBLIC_DEMO_TOTAL_TOKEN_LIMIT = "600"
-        AI_PROVIDER_PUBLIC_DEMO_USER_CREDIT_LIMIT = "600"
-        AI_PROVIDER_SECRET_PREFIX                 = var.name_prefix
-        AI_RUN_EVENTS_TABLE                       = aws_dynamodb_table.run_events.name
-        AI_RUNS_TABLE                             = aws_dynamodb_table.runs.name
-        AI_SERVER_CREDIT_LEDGER_TABLE             = aws_dynamodb_table.server_credit_ledger.name
-        AI_USAGE_LEDGER_TABLE                     = aws_dynamodb_table.usage_ledger.name
-        AI_USER_CREDIT_LEDGER_TABLE               = aws_dynamodb_table.user_credit_ledger.name
-        APP_NAME                                  = var.name_prefix
-      },
-      var.admin_secret_arn == "" ? {} : {
-        AI_PROVIDER_ADMIN_SECRET_ARN = var.admin_secret_arn
-      }
-    )
+    variables = local.lambda_environment
   }
 
   depends_on = [
@@ -522,6 +575,35 @@ resource "aws_lambda_function" "api" {
   ]
 
   tags = local.common_tags
+}
+
+resource "aws_lambda_function" "worker" {
+  function_name    = "${var.name_prefix}-worker"
+  role             = aws_iam_role.lambda.arn
+  handler          = "ai_worker.handler"
+  runtime          = "python3.13"
+  filename         = var.lambda_package_path
+  source_code_hash = var.lambda_source_code_hash
+  timeout          = var.worker_timeout_seconds
+  memory_size      = 512
+
+  environment {
+    variables = local.lambda_environment
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.worker,
+    aws_iam_role_policy.lambda,
+  ]
+
+  tags = local.common_tags
+}
+
+resource "aws_lambda_event_source_mapping" "run_worker" {
+  event_source_arn        = aws_sqs_queue.run_worker.arn
+  function_name           = aws_lambda_function.worker.arn
+  batch_size              = var.worker_batch_size
+  function_response_types = ["ReportBatchItemFailures"]
 }
 
 resource "aws_apigatewayv2_api" "http" {
@@ -596,4 +678,58 @@ resource "aws_lambda_permission" "api_gateway" {
   function_name = aws_lambda_function.api.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_errors" {
+  alarm_name          = "${var.name_prefix}-api-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.api.function_name
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "worker_errors" {
+  alarm_name          = "${var.name_prefix}-worker-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.worker.function_name
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "worker_dlq_visible" {
+  alarm_name          = "${var.name_prefix}-worker-dlq-visible"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.run_worker_dlq.name
+  }
+
+  tags = local.common_tags
 }

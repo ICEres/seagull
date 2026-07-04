@@ -165,6 +165,39 @@ class AiProviderLambdaAuthTest(TestCase):
         self.assertEqual(200, response["statusCode"])
         self.assertEqual("user_1", body(response)["run"]["owner_user_id"])
 
+    def test_async_create_run_enqueues_without_provider_execution(self) -> None:
+        sent: list[tuple[str, str, dict[str, object], dict[str, object] | None]] = []
+        self.lambda_module.AI_RUN_QUEUE_URL = "https://sqs.example.test/queue.fifo"
+        self.lambda_module.enqueue_ai_run = (
+            lambda run_id, owner_user_id, run_kwargs, callback: sent.append(
+                (run_id, owner_user_id, run_kwargs, callback)
+            )
+        )
+        request_body = {
+            **run_body(),
+            "async": True,
+            "task_id": "task_1",
+            "message_hub": {
+                "responder_handle": "@reviewer:gulls.ai",
+                "agent_token": "sga_test_secret",
+            },
+        }
+
+        response = self.lambda_module.handler(
+            event("POST", "/ai-runs", body=request_body, claims={"custom:seagull_user_id": "user_1"}),
+            None,
+        )
+
+        payload = body(response)
+        self.assertEqual(202, response["statusCode"])
+        self.assertTrue(payload["queued"])
+        self.assertEqual("queued", payload["run"]["state"])
+        self.assertEqual(1, len(sent))
+        self.assertEqual("user_1", sent[0][1])
+        self.assertEqual("task_1", sent[0][2]["task_id"])
+        self.assertEqual("@reviewer:gulls.ai", sent[0][3]["responder_handle"])
+        self.assertEqual((), self.lambda_module.service.list_usage_by_owner("user_1"))
+
     def test_owner_usage_requires_matching_owner_claim(self) -> None:
         self.lambda_module.handler(
             event("POST", "/ai-runs", body=run_body(), claims={"custom:seagull_user_id": "user_1"}),

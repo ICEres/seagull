@@ -117,6 +117,65 @@ class AiProviderServiceTest(TestCase):
             tuple(event.state for event in events),
         )
 
+    def test_queued_provider_run_executes_later_and_records_usage(self) -> None:
+        queued = self.service.create_queued_run(
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "Summarize this task."},),
+            task_id="task_1",
+            message_id="message_1",
+            idempotency_key="queued-1",
+        )
+
+        self.assertEqual(AiRunState.QUEUED, queued.state)
+        self.assertEqual(0, len(self.fake_provider.calls))
+        self.assertEqual((), self.service.list_usage_by_owner("user_1"))
+
+        completed = self.service.execute_queued_run(
+            queued.run_id,
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "Summarize this task."},),
+            task_id="task_1",
+            message_id="message_1",
+            idempotency_key="queued-1",
+        )
+
+        self.assertEqual(AiRunState.COMPLETED, completed.state)
+        self.assertEqual("usage_1", completed.usage_id)
+        self.assertEqual(1, len(self.fake_provider.calls))
+        self.assertEqual(1, len(self.service.list_usage_by_owner("user_1")))
+
+        second = self.service.execute_queued_run(
+            queued.run_id,
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "Summarize this task."},),
+            task_id="task_1",
+            message_id="message_1",
+            idempotency_key="queued-1",
+        )
+        self.assertEqual(completed, second)
+        self.assertEqual(1, len(self.fake_provider.calls))
+
+    def test_queued_run_denial_does_not_enqueue_provider_work(self) -> None:
+        run = self.service.create_queued_run(
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            input_messages=({"role": "user", "content": "unsafe: block this"},),
+        )
+
+        self.assertEqual(AiRunState.DENIED, run.state)
+        self.assertEqual(0, len(self.fake_provider.calls))
+
     def test_idempotency_key_returns_existing_run_without_double_charge(self) -> None:
         first = self.service.create_run(
             provider="fake",

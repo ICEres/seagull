@@ -45,10 +45,10 @@ locals {
   agent_worker_secret_arns = [
     aws_secretsmanager_secret.agent_webhook_signing.arn,
   ]
-  mcp_connector_secret_arns = [
-    aws_secretsmanager_secret.mcp_connector_admin.arn,
-    aws_secretsmanager_secret.mcp_dev_token.arn,
-  ]
+  mcp_connector_secret_arns = concat(
+    [aws_secretsmanager_secret.mcp_connector_admin.arn],
+    var.mcp_dev_token == "" ? [] : [aws_secretsmanager_secret.mcp_dev_token[0].arn],
+  )
 }
 
 data "aws_caller_identity" "current" {}
@@ -111,6 +111,8 @@ resource "aws_secretsmanager_secret_version" "mcp_connector_admin" {
 }
 
 resource "aws_secretsmanager_secret" "mcp_dev_token" {
+  count = var.mcp_dev_token == "" ? 0 : 1
+
   name = "${local.mcp_connector_prefix}/runtime/dev-token"
 
   tags = merge(local.message_hub_tags, {
@@ -119,7 +121,9 @@ resource "aws_secretsmanager_secret" "mcp_dev_token" {
 }
 
 resource "aws_secretsmanager_secret_version" "mcp_dev_token" {
-  secret_id     = aws_secretsmanager_secret.mcp_dev_token.id
+  count = var.mcp_dev_token == "" ? 0 : 1
+
+  secret_id     = aws_secretsmanager_secret.mcp_dev_token[0].id
   secret_string = var.mcp_dev_token
 }
 
@@ -696,8 +700,8 @@ resource "aws_lambda_function" "mcp_connector" {
         MCP_RESOURCE_URI                 = "https://${var.mcp_domain_name}/mcp"
         MESSAGE_API_URL                  = "https://${var.message_api_domain}"
       },
-      {
-        MCP_DEV_TOKEN_ARN = aws_secretsmanager_secret.mcp_dev_token.arn
+      var.mcp_dev_token == "" ? {} : {
+        MCP_DEV_TOKEN_ARN = aws_secretsmanager_secret.mcp_dev_token[0].arn
       },
       length(var.mcp_dev_agent_handles) == 0 ? {} : {
         MCP_DEV_AGENT_HANDLES = join(",", var.mcp_dev_agent_handles)

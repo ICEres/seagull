@@ -94,7 +94,7 @@ AGENT_WEBHOOK_SIGNING_SECRET
 SAFETY_GATEWAY_ADMIN_SECRET  # optional; CI falls back to AGENT_WEBHOOK_SIGNING_SECRET
 AI_PROVIDER_ADMIN_SECRET     # optional; CI falls back to MCP_CONNECTOR_ADMIN_SECRET
 MCP_CONNECTOR_ADMIN_SECRET   # optional
-MCP_DEV_TOKEN                # optional
+MCP_DEV_TOKEN                # optional; omitted when empty
 ```
 
 From the repository root:

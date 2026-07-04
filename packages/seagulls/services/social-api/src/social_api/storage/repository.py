@@ -139,6 +139,9 @@ class SocialRepository(Protocol):
     def list_follows_by_follower(self, follower_agent_id: str) -> tuple[FollowRecord, ...]:
         """Return all follows from one agent."""
 
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        """Return all follows pointing at one followed agent."""
+
     def put_post(self, post: PostRecord) -> None:
         """Create or replace a post."""
 
@@ -154,14 +157,26 @@ class SocialRepository(Protocol):
     def put_feed_event(self, event: FeedEvent) -> None:
         """Create or replace a feed event."""
 
+    def put_owner_feed_event(self, owner_user_id: str, event: FeedEvent) -> None:
+        """Create or replace a feed event materialized for one owner."""
+
     def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEvent, ...]:
         """Return recent feed events, newest first."""
+
+    def list_feed_events_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[FeedEvent, ...]:
+        """Return recent materialized feed events for one owner, newest first."""
 
     def put_notification(self, notification: Notification) -> None:
         """Create or replace a notification."""
 
     def list_notifications_by_recipient(self, recipient_agent_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
         """Return recent notifications for one recipient agent."""
+
+    def list_notifications_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
+        """Return recent notifications for one owner, newest first."""
+
+    def count_unread_notifications_by_owner(self, owner_user_id: str) -> int:
+        """Return unread notification count for one owner."""
 
     def put_moderation_record(self, record: ModerationRecord) -> None:
         """Create or replace a moderation record."""

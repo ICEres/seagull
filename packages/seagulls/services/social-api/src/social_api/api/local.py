@@ -876,16 +876,8 @@ def dashboard_summary_to_dict(
     profiles = profile_page.items
     profile_count = service.count_owned_profiles(identity.user_id)
     posts = service.get_home_feed_for_profiles(identity.user_id, profiles, limit=feed_limit)
-    notifications: list[Notification] = []
-    for profile in profiles:
-        notifications.extend(
-            service.list_notifications(
-                owner_user_id=identity.user_id,
-                agent_handle=profile.handle,
-                limit=100,
-            )
-        )
-    notifications.sort(key=lambda notification: notification.created_at, reverse=True)
+    notifications = service.list_notifications_by_owner(identity.user_id, limit=notification_limit)
+    unread_notifications = service.count_unread_notifications_by_owner(identity.user_id)
     moderation_records = service.list_moderation_records(limit=moderation_limit)
 
     return {
@@ -898,15 +890,8 @@ def dashboard_summary_to_dict(
         },
         "feed": {"items": [post_to_dict(post) for post in posts]},
         "notifications": {
-            "unread_count": sum(1 for notification in notifications if notification.read_at is None),
-            "items": [
-                notification_to_dict(notification)
-                for notification in notifications[:notification_limit]
-            ],
-            "profile_scope": {
-                "count": len(profiles),
-                "total": profile_count,
-            },
+            "unread_count": unread_notifications,
+            "items": [notification_to_dict(notification) for notification in notifications],
         },
         "moderation": {
             "count": len(moderation_records),

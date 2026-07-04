@@ -6,12 +6,15 @@ from unittest import TestCase
 
 from social_api.api import ApiError, AuthPrincipal, LocalSocialApi
 from social_api.domain import (
+    AgentProfileRecord,
     InvalidSocialRequestError,
+    Notification,
     PermissionDeniedError,
     PostRecord,
     SocialApiService,
 )
 from social_api.storage import InMemorySocialRepository
+from social_api.storage.repository import AgentProfilePage
 
 
 class DeterministicIds:
@@ -73,9 +76,40 @@ class FakeMessageHubSender:
         }
 
 
-class NoGlobalPostListRepository(InMemorySocialRepository):
+class NoFanoutReadRepository(InMemorySocialRepository):
+    reject_fanout_reads = False
+
+    def list_agent_profiles_by_owner(self, owner_user_id: str) -> tuple[AgentProfileRecord, ...]:
+        if self.reject_fanout_reads:
+            raise AssertionError("feed reads should not load every owned profile")
+        return super().list_agent_profiles_by_owner(owner_user_id)
+
+    def list_agent_profiles_by_owner_page(
+        self,
+        owner_user_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> AgentProfilePage:
+        reject_fanout_reads = self.reject_fanout_reads
+        self.reject_fanout_reads = False
+        try:
+            return super().list_agent_profiles_by_owner_page(owner_user_id, limit=limit, cursor=cursor)
+        finally:
+            self.reject_fanout_reads = reject_fanout_reads
+
     def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
         raise AssertionError("home feed should not use global post listing")
+
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        if self.reject_fanout_reads:
+            raise AssertionError("home feed should use materialized owner feed events")
+        return super().list_posts_by_author(author_agent_id, limit=limit)
+
+    def list_notifications_by_recipient(self, recipient_agent_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
+        if self.reject_fanout_reads:
+            raise AssertionError("dashboard should use owner notification reads")
+        return super().list_notifications_by_recipient(recipient_agent_id, limit=limit)
 
 
 class SocialApiServiceTest(TestCase):
@@ -157,8 +191,8 @@ class SocialApiServiceTest(TestCase):
 
         self.assertEqual((followed_post,), self.service.get_home_feed(self.alice.user_id))
 
-    def test_home_feed_uses_bounded_author_and_notification_reads(self) -> None:
-        repository = NoGlobalPostListRepository()
+    def test_home_feed_uses_materialized_owner_feed_reads(self) -> None:
+        repository = NoFanoutReadRepository()
         service = SocialApiService(
             repository,
             id_factory=DeterministicIds(),
@@ -195,6 +229,7 @@ class SocialApiServiceTest(TestCase):
             content="Public update.",
         )
 
+        repository.reject_fanout_reads = True
         self.assertEqual((followed_post, mention), service.get_home_feed(alice.user_id))
 
     def test_room_membership_allows_room_post(self) -> None:
@@ -1015,30 +1050,52 @@ class LocalSocialApiTest(TestCase):
         self.assertIsNone(alice_dashboard["profiles"]["next_cursor"])
         self.assertEqual(mention["post_id"], alice_dashboard["feed"]["items"][0]["post_id"])
         self.assertEqual(1, alice_dashboard["notifications"]["unread_count"])
-        self.assertEqual({"count": 1, "total": 1}, alice_dashboard["notifications"]["profile_scope"])
         self.assertEqual(0, bob_dashboard["notifications"]["unread_count"])
         self.assertEqual(1, alice_dashboard["moderation"]["count"])
         self.assertEqual({"ok": True, "app": "social-api", "storage": "memory"}, alice_dashboard["health"])
 
     def test_dashboard_summary_returns_bounded_profile_page(self) -> None:
-        api = LocalSocialApi.in_memory(auth_required=True)
+        repository = NoFanoutReadRepository()
+        api = LocalSocialApi(
+            SocialApiService(
+                repository,
+                id_factory=DeterministicIds(),
+                clock=DeterministicClock(),
+            ),
+            auth_required=True,
+        )
         alice = AuthPrincipal(provider="cognito", subject="alice-sub")
+        bob = AuthPrincipal(provider="cognito", subject="bob-sub")
+        off_page_profile = None
 
         for index in range(12):
-            api.create_agent_profile(
+            off_page_profile = api.create_agent_profile(
                 {
                     "handle": f"@agent-{index}:gulls.ai",
                     "display_name": f"Agent {index}",
                 },
                 alice,
-            )
+            )["profile"]
+        self.assertIsNotNone(off_page_profile)
+        bob_profile = api.create_agent_profile({"handle": "@reviewer:gulls.ai"}, bob)["profile"]
+        mention = api.create_post(
+            {
+                "author_handle": bob_profile["handle"],
+                "content": f"Can {off_page_profile['handle']} review this?",
+            },
+            bob,
+        )["post"]
 
+        repository.reject_fanout_reads = True
         dashboard = api.dashboard(alice)
 
         self.assertEqual(12, dashboard["profiles"]["count"])
         self.assertEqual(10, len(dashboard["profiles"]["items"]))
         self.assertIsNotNone(dashboard["profiles"]["next_cursor"])
-        self.assertEqual({"count": 10, "total": 12}, dashboard["notifications"]["profile_scope"])
+        self.assertEqual(mention["post_id"], dashboard["feed"]["items"][0]["post_id"])
+        self.assertEqual(1, dashboard["notifications"]["unread_count"])
+        self.assertEqual(mention["post_id"], dashboard["notifications"]["items"][0]["post_id"])
+        self.assertNotIn("profile_scope", dashboard["notifications"])
 
     def test_authenticated_owner_mismatch_is_forbidden(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

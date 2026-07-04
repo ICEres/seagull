@@ -675,6 +675,8 @@ class SocialApiService:
             created_at=self._clock(),
         )
         self._repository.put_follow(follow)
+        for post in self._repository.list_posts_by_author(followed.agent_id, limit=50):
+            self._put_owner_feed_event_for_post(follower.owner_user_id, post)
         return follow
 
     def create_post(
@@ -712,17 +714,27 @@ class SocialApiService:
             created_at=now,
         )
         self._repository.put_post(post)
-        self._repository.put_feed_event(
-            FeedEvent(
-                event_id=self._new_id("event"),
-                event_type="post",
-                actor_agent_id=author.agent_id,
-                object_id=post.post_id,
-                target_agent_ids=post.mention_agent_ids,
-                room_id=post.room_id,
-                created_at=now,
-            )
+        feed_event = FeedEvent(
+            event_id=self._new_id("event"),
+            event_type="post",
+            actor_agent_id=author.agent_id,
+            object_id=post.post_id,
+            target_agent_ids=post.mention_agent_ids,
+            room_id=post.room_id,
+            created_at=now,
         )
+        self._repository.put_feed_event(feed_event)
+        owner_feed_user_ids = {author.owner_user_id}
+        owner_feed_user_ids.update(profile.owner_user_id for profile in mentioned_profiles)
+        for follow in self._repository.list_follows_by_followed(author.agent_id):
+            follower = self._repository.get_agent_profile(follow.follower_agent_id)
+            if follower is not None:
+                owner_feed_user_ids.add(follower.owner_user_id)
+        for owner_feed_user_id in owner_feed_user_ids:
+            self._repository.put_owner_feed_event(
+                owner_feed_user_id,
+                replace(feed_event, event_id=owner_feed_event_id(owner_feed_user_id, post.post_id)),
+            )
         for mentioned in mentioned_profiles:
             if mentioned.agent_id == author.agent_id:
                 continue
@@ -731,6 +743,7 @@ class SocialApiService:
                     notification_id=self._new_id("notification"),
                     recipient_agent_id=mentioned.agent_id,
                     notification_type="mention",
+                    owner_user_id=mentioned.owner_user_id,
                     actor_agent_id=author.agent_id,
                     post_id=post.post_id,
                     room_id=post.room_id,
@@ -740,11 +753,12 @@ class SocialApiService:
         return post
 
     def get_home_feed(self, owner_user_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
-        owned_profiles = self._repository.list_agent_profiles_by_owner(owner_user_id)
-        if not owned_profiles:
-            self._require_identity(owner_user_id)
-            return ()
-        return self.get_home_feed_for_profiles(owner_user_id, owned_profiles, limit=limit)
+        self._require_identity(owner_user_id)
+        normalized_limit = normalize_limit(limit)
+        return self._posts_from_feed_events(
+            self._repository.list_feed_events_by_owner(owner_user_id, limit=normalized_limit),
+            limit=normalized_limit,
+        )
 
     def get_home_feed_for_profiles(
         self,
@@ -754,31 +768,12 @@ class SocialApiService:
         limit: int = 50,
     ) -> tuple[PostRecord, ...]:
         normalized_limit = normalize_limit(limit)
-        visible_agent_ids = {profile.agent_id for profile in owned_profiles}
-        owned_agent_ids = set(visible_agent_ids)
         for profile in owned_profiles:
             self._require_owner(owner_user_id, profile)
-            for follow in self._repository.list_follows_by_follower(profile.agent_id):
-                visible_agent_ids.add(follow.followed_agent_id)
-
-        posts_by_id = {}
-        for author_agent_id in visible_agent_ids:
-            for post in self._repository.list_posts_by_author(author_agent_id, limit=normalized_limit):
-                posts_by_id[post.post_id] = post
-
-        for recipient_agent_id in owned_agent_ids:
-            for notification in self._repository.list_notifications_by_recipient(
-                recipient_agent_id,
-                limit=normalized_limit,
-            ):
-                if notification.post_id is None:
-                    continue
-                post = self._repository.get_post(notification.post_id)
-                if post is not None:
-                    posts_by_id[post.post_id] = post
-
-        return tuple(
-            sorted(posts_by_id.values(), key=lambda post: post.created_at, reverse=True)[:normalized_limit]
+        self._require_identity(owner_user_id)
+        return self._posts_from_feed_events(
+            self._repository.list_feed_events_by_owner(owner_user_id, limit=normalized_limit),
+            limit=normalized_limit,
         )
 
     def list_notifications(
@@ -790,7 +785,18 @@ class SocialApiService:
     ) -> tuple[Notification, ...]:
         profile = self._require_profile_by_handle(agent_handle)
         self._require_owner(owner_user_id, profile)
-        return self._repository.list_notifications_by_recipient(profile.agent_id, limit=limit)
+        return self._repository.list_notifications_by_recipient(
+            profile.agent_id,
+            limit=normalize_limit(limit),
+        )
+
+    def list_notifications_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
+        self._require_identity(owner_user_id)
+        return self._repository.list_notifications_by_owner(owner_user_id, limit=normalize_limit(limit))
+
+    def count_unread_notifications_by_owner(self, owner_user_id: str) -> int:
+        self._require_identity(owner_user_id)
+        return self._repository.count_unread_notifications_by_owner(owner_user_id)
 
     def create_moderation_record(
         self,
@@ -836,6 +842,40 @@ class SocialApiService:
             seen_agent_ids.add(profile.agent_id)
             profiles.append(profile)
         return tuple(profiles)
+
+    def _put_owner_feed_event_for_post(self, owner_user_id: str, post: PostRecord) -> None:
+        self._repository.put_owner_feed_event(
+            owner_user_id,
+            FeedEvent(
+                event_id=owner_feed_event_id(owner_user_id, post.post_id),
+                event_type="post",
+                actor_agent_id=post.author_agent_id,
+                object_id=post.post_id,
+                target_agent_ids=post.mention_agent_ids,
+                room_id=post.room_id,
+                created_at=post.created_at,
+            ),
+        )
+
+    def _posts_from_feed_events(
+        self,
+        events: Sequence[FeedEvent],
+        *,
+        limit: int,
+    ) -> tuple[PostRecord, ...]:
+        posts: list[PostRecord] = []
+        seen_post_ids: set[str] = set()
+        for event in events:
+            if event.object_id is None or event.object_id in seen_post_ids:
+                continue
+            post = self._repository.get_post(event.object_id)
+            if post is None:
+                continue
+            seen_post_ids.add(post.post_id)
+            posts.append(post)
+            if len(posts) >= limit:
+                break
+        return tuple(posts)
 
     def _require_identity(self, user_id: str) -> HumanIdentity:
         identity = self._repository.get_human_identity(normalized_required(user_id, "user_id"))
@@ -1022,6 +1062,10 @@ def normalize_pair_token_ttl(ttl_seconds: int) -> int:
     if not isinstance(ttl_seconds, int):
         raise InvalidSocialRequestError("ttl_seconds must be an integer")
     return max(1, min(ttl_seconds, 3600))
+
+
+def owner_feed_event_id(owner_user_id: str, post_id: str) -> str:
+    return f"owner_feed:{owner_user_id}:{post_id}"
 
 
 def normalized_required(value: str, field_name: str) -> str:

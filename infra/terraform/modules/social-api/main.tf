@@ -412,6 +412,13 @@ resource "aws_dynamodb_table" "follows" {
     type = "S"
   }
 
+  global_secondary_index {
+    name            = "followed-index"
+    hash_key        = "followed_agent_id"
+    range_key       = "follower_agent_id"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = var.point_in_time_recovery_enabled
   }
@@ -533,6 +540,11 @@ resource "aws_dynamodb_table" "notifications" {
   }
 
   attribute {
+    name = "owner_user_id"
+    type = "S"
+  }
+
+  attribute {
     name = "created_at"
     type = "S"
   }
@@ -540,6 +552,13 @@ resource "aws_dynamodb_table" "notifications" {
   global_secondary_index {
     name            = "recipient-created-at-index"
     hash_key        = "recipient_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "owner-created-at-index"
+    hash_key        = "owner_user_id"
     range_key       = "created_at"
     projection_type = "ALL"
   }

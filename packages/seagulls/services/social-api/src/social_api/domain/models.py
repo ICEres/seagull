@@ -165,6 +165,7 @@ class Notification:
     notification_id: str
     recipient_agent_id: str
     notification_type: str
+    owner_user_id: str | None = None
     actor_agent_id: str | None = None
     post_id: str | None = None
     room_id: str | None = None

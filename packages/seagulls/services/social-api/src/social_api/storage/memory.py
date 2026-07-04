@@ -42,6 +42,8 @@ class InMemorySocialRepository:
         self._follows: dict[tuple[str, str], FollowRecord] = {}
         self._posts: dict[str, PostRecord] = {}
         self._feed_events: dict[str, FeedEvent] = {}
+        self._feed_event_ids: set[str] = set()
+        self._owner_feed_event_ids: dict[str, set[str]] = {}
         self._notifications: dict[str, Notification] = {}
         self._moderation_records: dict[str, ModerationRecord] = {}
 
@@ -195,6 +197,9 @@ class InMemorySocialRepository:
     def list_follows_by_follower(self, follower_agent_id: str) -> tuple[FollowRecord, ...]:
         return tuple(follow for follow in self._follows.values() if follow.follower_agent_id == follower_agent_id)
 
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        return tuple(follow for follow in self._follows.values() if follow.followed_agent_id == followed_agent_id)
+
     def put_post(self, post: PostRecord) -> None:
         self._posts[post.post_id] = post
 
@@ -210,9 +215,20 @@ class InMemorySocialRepository:
 
     def put_feed_event(self, event: FeedEvent) -> None:
         self._feed_events[event.event_id] = event
+        self._feed_event_ids.add(event.event_id)
+
+    def put_owner_feed_event(self, owner_user_id: str, event: FeedEvent) -> None:
+        self._feed_events[event.event_id] = event
+        self._owner_feed_event_ids.setdefault(owner_user_id, set()).add(event.event_id)
 
     def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEvent, ...]:
-        return tuple(sorted(self._feed_events.values(), key=lambda event: event.created_at, reverse=True)[:limit])
+        events = (self._feed_events[event_id] for event_id in self._feed_event_ids)
+        return tuple(sorted(events, key=lambda event: event.created_at, reverse=True)[:limit])
+
+    def list_feed_events_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[FeedEvent, ...]:
+        event_ids = self._owner_feed_event_ids.get(owner_user_id, set())
+        events = (self._feed_events[event_id] for event_id in event_ids)
+        return tuple(sorted(events, key=lambda event: event.created_at, reverse=True)[:limit])
 
     def put_notification(self, notification: Notification) -> None:
         self._notifications[notification.notification_id] = notification
@@ -224,6 +240,21 @@ class InMemorySocialRepository:
             if notification.recipient_agent_id == recipient_agent_id
         )
         return tuple(sorted(notifications, key=lambda notification: notification.created_at, reverse=True)[:limit])
+
+    def list_notifications_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
+        notifications = (
+            notification
+            for notification in self._notifications.values()
+            if notification.owner_user_id == owner_user_id
+        )
+        return tuple(sorted(notifications, key=lambda notification: notification.created_at, reverse=True)[:limit])
+
+    def count_unread_notifications_by_owner(self, owner_user_id: str) -> int:
+        return sum(
+            1
+            for notification in self._notifications.values()
+            if notification.owner_user_id == owner_user_id and notification.read_at is None
+        )
 
     def put_moderation_record(self, record: ModerationRecord) -> None:
         self._moderation_records[record.moderation_id] = record

@@ -29,6 +29,7 @@ from social_api.storage.repository import AgentProfilePage, decode_cursor, encod
 RECENT_FEED_EVENTS_PARTITION = "feed_events"
 RECENT_MODERATION_PARTITION = "moderation"
 RECENT_POSTS_PARTITION = "posts"
+OWNER_FEED_PARTITION_PREFIX = "owner#"
 
 
 class DynamoDbSocialRepository:
@@ -314,6 +315,13 @@ class DynamoDbSocialRepository:
         )
         return tuple(item_to_follow(item) for item in result.get("Items", []))
 
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        result = self._follows_table.query(
+            IndexName="followed-index",
+            KeyConditionExpression=Key("followed_agent_id").eq(followed_agent_id),
+        )
+        return tuple(item_to_follow(item) for item in result.get("Items", []))
+
     def put_post(self, post: PostRecord) -> None:
         self._posts_table.put_item(Item=post_to_item(post))
 
@@ -344,10 +352,27 @@ class DynamoDbSocialRepository:
     def put_feed_event(self, event: FeedEvent) -> None:
         self._feed_events_table.put_item(Item=feed_event_to_item(event))
 
+    def put_owner_feed_event(self, owner_user_id: str, event: FeedEvent) -> None:
+        self._feed_events_table.put_item(
+            Item=feed_event_to_item(
+                event,
+                timeline_partition=owner_feed_partition(owner_user_id),
+            )
+        )
+
     def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEvent, ...]:
         result = self._feed_events_table.query(
             IndexName="created-at-index",
             KeyConditionExpression=Key("timeline_partition").eq(RECENT_FEED_EVENTS_PARTITION),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return tuple(item_to_feed_event(item) for item in result.get("Items", []))
+
+    def list_feed_events_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[FeedEvent, ...]:
+        result = self._feed_events_table.query(
+            IndexName="created-at-index",
+            KeyConditionExpression=Key("timeline_partition").eq(owner_feed_partition(owner_user_id)),
             ScanIndexForward=False,
             Limit=limit,
         )
@@ -369,6 +394,34 @@ class DynamoDbSocialRepository:
             Limit=limit,
         )
         return tuple(item_to_notification(item) for item in result.get("Items", []))
+
+    def list_notifications_by_owner(self, owner_user_id: str, *, limit: int = 50) -> tuple[Notification, ...]:
+        result = self._notifications_table.query(
+            IndexName="owner-created-at-index",
+            KeyConditionExpression=Key("owner_user_id").eq(owner_user_id),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return tuple(item_to_notification(item) for item in result.get("Items", []))
+
+    def count_unread_notifications_by_owner(self, owner_user_id: str) -> int:
+        count = 0
+        exclusive_start_key: dict[str, Any] | None = None
+        while True:
+            query_args: dict[str, Any] = {
+                "IndexName": "owner-created-at-index",
+                "KeyConditionExpression": Key("owner_user_id").eq(owner_user_id),
+                "FilterExpression": "attribute_not_exists(read_at)",
+                "Select": "COUNT",
+            }
+            if exclusive_start_key is not None:
+                query_args["ExclusiveStartKey"] = exclusive_start_key
+            result = self._notifications_table.query(**query_args)
+            count += int(result.get("Count", 0))
+            next_key = result.get("LastEvaluatedKey")
+            if not isinstance(next_key, dict):
+                return count
+            exclusive_start_key = next_key
 
     def put_moderation_record(self, record: ModerationRecord) -> None:
         self._moderation_table.put_item(Item=moderation_record_to_item(record))
@@ -756,11 +809,15 @@ def item_to_shared_reference(item: dict[str, Any]) -> SharedReference:
     )
 
 
-def feed_event_to_item(event: FeedEvent) -> dict[str, Any]:
+def feed_event_to_item(
+    event: FeedEvent,
+    *,
+    timeline_partition: str = RECENT_FEED_EVENTS_PARTITION,
+) -> dict[str, Any]:
     return without_none(
         {
             "event_id": event.event_id,
-            "timeline_partition": RECENT_FEED_EVENTS_PARTITION,
+            "timeline_partition": timeline_partition,
             "event_type": event.event_type,
             "actor_agent_id": event.actor_agent_id,
             "object_id": event.object_id,
@@ -789,6 +846,7 @@ def notification_to_item(notification: Notification) -> dict[str, Any]:
             "notification_id": notification.notification_id,
             "recipient_agent_id": notification.recipient_agent_id,
             "notification_type": notification.notification_type,
+            "owner_user_id": notification.owner_user_id,
             "actor_agent_id": notification.actor_agent_id,
             "post_id": notification.post_id,
             "room_id": notification.room_id,
@@ -803,6 +861,7 @@ def item_to_notification(item: dict[str, Any]) -> Notification:
         notification_id=item["notification_id"],
         recipient_agent_id=item["recipient_agent_id"],
         notification_type=item["notification_type"],
+        owner_user_id=item.get("owner_user_id"),
         actor_agent_id=item.get("actor_agent_id"),
         post_id=item.get("post_id"),
         room_id=item.get("room_id"),
@@ -850,6 +909,10 @@ def optional_item(item: dict[str, Any] | None, converter):
 
 def provider_subject(provider: str, subject: str) -> str:
     return f"{provider}#{subject}"
+
+
+def owner_feed_partition(owner_user_id: str) -> str:
+    return f"{OWNER_FEED_PARTITION_PREFIX}{owner_user_id}"
 
 
 def without_none(item: dict[str, Any]) -> dict[str, Any]:

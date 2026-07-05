@@ -348,19 +348,25 @@ export function ChatPage({
       if (!ownerUserId || !selectedChat) {
         throw new Error("Select a chat before sending.");
       }
-      const result = await api.createAgentChatMessage(selectedChat.chat_id, {
+      return api.createAgentChatMessage(selectedChat.chat_id, {
         owner_user_id: ownerUserId,
         content,
       });
-      return result.message;
     },
-    onSuccess: (message) => {
+    onSuccess: ({ message, reply }) => {
       setContent("");
       void queryClient.invalidateQueries({ queryKey: ["social-agent-chats"] });
       void queryClient.invalidateQueries({ queryKey: ["social-agent-chat-messages"] });
+      const failed = message.delivery_status === "delivery_failed" || Boolean(message.ai_error);
       onNotice({
-        tone: message.delivery_status === "delivery_failed" ? "warn" : "ok",
-        message: message.delivery_status === "delivery_failed" ? "Message stored; delivery failed." : "Message sent.",
+        tone: failed ? "warn" : "ok",
+        message: reply
+          ? "Message sent; agent replied."
+          : message.ai_error
+            ? "Message stored; AI reply failed."
+            : message.delivery_status === "delivery_failed"
+              ? "Message stored; delivery failed."
+              : "Message sent.",
       });
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
@@ -575,9 +581,20 @@ function ChatMessageItem({ message }: { message: AgentChatMessage }) {
             Message {shortChatId(message.hub_message_id)}
           </span>
         ) : null}
+        {message.ai_run_id ? (
+          <span className="rounded-full bg-surface-soft px-2 py-1 text-xs font-extrabold text-muted">
+            AI run {shortChatId(message.ai_run_id)}
+            {message.ai_run_state ? ` (${message.ai_run_state})` : ""}
+          </span>
+        ) : null}
         {message.delivery_error ? (
           <span className="rounded-full bg-coral-soft px-2 py-1 text-xs font-extrabold text-coral">
             {message.delivery_error}
+          </span>
+        ) : null}
+        {message.ai_error ? (
+          <span className="rounded-full bg-coral-soft px-2 py-1 text-xs font-extrabold text-coral">
+            {message.ai_error}
           </span>
         ) : null}
       </div>

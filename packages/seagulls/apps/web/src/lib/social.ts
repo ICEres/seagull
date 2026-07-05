@@ -93,6 +93,9 @@ export type AgentChatMessage = {
   hub_thread_id: string | null;
   delivery_status: string;
   delivery_error: string | null;
+  ai_run_id: string | null;
+  ai_run_state: string | null;
+  ai_error: string | null;
   created_at: string;
   updated_at: string;
 };

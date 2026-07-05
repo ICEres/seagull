@@ -15,6 +15,7 @@ from social_api.api.local import (
     agent_asset_binding_to_dict,
     agent_chat_message_to_dict,
     agent_chat_session_to_dict,
+    generate_agent_chat_reply,
     agent_profile_to_dict,
     dashboard_summary_to_dict,
     follow_to_dict,
@@ -64,6 +65,12 @@ def secret_env(name: str) -> str:
 APP_NAME = os.environ.get("APP_NAME", "seagull-social-api")
 SOCIAL_AUTH_REQUIRED = os.environ.get("SOCIAL_AUTH_REQUIRED", "true").lower() not in {"0", "false", "no"}
 SOCIAL_AUTH_BYPASS_SECRET = secret_env("SOCIAL_AUTH_BYPASS_SECRET")
+AI_PROVIDER_API_URL = os.environ.get("AI_PROVIDER_API_URL", "").strip().rstrip("/")
+AI_PROVIDER_ADMIN_SECRET = secret_env("AI_PROVIDER_ADMIN_SECRET")
+AI_REPLY_PROVIDER = os.environ.get("AI_REPLY_PROVIDER", "").strip()
+AI_REPLY_MODEL = os.environ.get("AI_REPLY_MODEL", "").strip()
+AI_REPLY_MAX_OUTPUT_TOKENS = int(os.environ.get("AI_REPLY_MAX_OUTPUT_TOKENS", "512"))
+AI_REPLY_TIMEOUT_SECONDS = float(os.environ.get("AI_REPLY_TIMEOUT_SECONDS", "20"))
 
 dynamodb = boto3.resource("dynamodb")
 repository = DynamoDbSocialRepository(
@@ -295,7 +302,22 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 content=required_string(body, "content"),
             )
             message = deliver_agent_chat_message(owner_user_id, chat, message)
-            return response(200, {"message": agent_chat_message_to_dict(message)})
+            reply = None
+            if ai_reply_enabled():
+                message, reply = generate_agent_chat_reply(
+                    service,
+                    AiProviderRunClient(),
+                    owner_user_id=owner_user_id,
+                    chat=chat,
+                    message=message,
+                )
+            return response(
+                200,
+                {
+                    "message": agent_chat_message_to_dict(message),
+                    "reply": None if reply is None else agent_chat_message_to_dict(reply),
+                },
+            )
 
         if method == "GET" and path.startswith("/agent-chats/") and path.endswith("/messages"):
             query = event.get("queryStringParameters") or {}
@@ -418,6 +440,44 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
         return response(500, {"error": "internal_error"})
+
+
+def ai_reply_enabled() -> bool:
+    return bool(AI_PROVIDER_API_URL and AI_PROVIDER_ADMIN_SECRET and AI_REPLY_PROVIDER and AI_REPLY_MODEL)
+
+
+class AiProviderRunClient:
+    """Synchronous AI provider run client for chat response steps."""
+
+    def create_run(self, request: dict[str, Any]) -> dict[str, Any]:
+        body = dict(request)
+        body["provider"] = AI_REPLY_PROVIDER
+        body["model"] = AI_REPLY_MODEL
+        body["max_output_tokens"] = AI_REPLY_MAX_OUTPUT_TOKENS
+        payload = json.dumps(
+            {key: value for key, value in body.items() if value is not None},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        http_request = Request(
+            f"{AI_PROVIDER_API_URL}/ai-runs",
+            data=payload,
+            headers={
+                "content-type": "application/json",
+                "x-seagull-admin-secret": AI_PROVIDER_ADMIN_SECRET,
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(http_request, timeout=AI_REPLY_TIMEOUT_SECONDS) as result:
+                raw = result.read().decode("utf-8")
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"AI provider run failed: HTTP {exc.code} {detail}") from exc
+        parsed = json.loads(raw or "{}")
+        run = parsed.get("run") if isinstance(parsed, dict) else None
+        if not isinstance(run, dict):
+            raise RuntimeError("AI provider response must include a run object")
+        return run
 
 
 def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> Any:

@@ -76,6 +76,27 @@ class FakeMessageHubSender:
         }
 
 
+class FakeAiRunClient:
+    def __init__(
+        self,
+        run: dict[str, object] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.requests: list[dict[str, object]] = []
+        self._run = run or {
+            "run_id": "airun_1",
+            "state": "completed",
+            "output_text": "Here is the plan.",
+        }
+        self._error = error
+
+    def create_run(self, request: dict[str, object]) -> dict[str, object]:
+        self.requests.append(request)
+        if self._error is not None:
+            raise self._error
+        return self._run
+
+
 class NoFanoutReadRepository(InMemorySocialRepository):
     reject_fanout_reads = False
 
@@ -589,6 +610,65 @@ class SocialApiServiceTest(TestCase):
                 agent_handle=assistant.handle,
             )
 
+    def test_agent_chat_reply_records_ai_run_reference(self) -> None:
+        assistant = self.service.create_agent_profile(
+            owner_user_id=self.alice.user_id,
+            handle="@assistant:seagull.local",
+        )
+        chat = self.service.create_agent_chat(
+            owner_user_id=self.alice.user_id,
+            agent_handle=assistant.handle,
+        )
+        message = self.service.create_agent_chat_message(
+            owner_user_id=self.alice.user_id,
+            chat_id=chat.chat_id,
+            content="Plan the MVP.",
+        )
+
+        reply = self.service.create_agent_chat_reply(
+            owner_user_id=self.alice.user_id,
+            chat_id=chat.chat_id,
+            content="Here is the plan.",
+            ai_run_id="airun_1",
+            ai_run_state="completed",
+        )
+        audited = self.service.record_agent_chat_message_ai_state(
+            owner_user_id=self.alice.user_id,
+            chat_message_id=message.chat_message_id,
+            ai_run_id="airun_2",
+            ai_run_state="denied",
+            ai_error="insufficient credits",
+        )
+
+        self.assertEqual("agent", reply.sender_type)
+        self.assertEqual("airun_1", reply.ai_run_id)
+        self.assertEqual("completed", reply.ai_run_state)
+        self.assertEqual("airun_2", audited.ai_run_id)
+        self.assertEqual("denied", audited.ai_run_state)
+        self.assertEqual("insufficient credits", audited.ai_error)
+        self.assertEqual(
+            [message.chat_message_id, reply.chat_message_id],
+            [
+                stored.chat_message_id
+                for stored in self.service.list_agent_chat_messages(
+                    owner_user_id=self.alice.user_id,
+                    chat_id=chat.chat_id,
+                )
+            ],
+        )
+        with self.assertRaises(PermissionDeniedError):
+            self.service.create_agent_chat_reply(
+                owner_user_id=self.bob.user_id,
+                chat_id=chat.chat_id,
+                content="Not allowed.",
+            )
+        with self.assertRaises(PermissionDeniedError):
+            self.service.record_agent_chat_message_ai_state(
+                owner_user_id=self.bob.user_id,
+                chat_message_id=message.chat_message_id,
+                ai_error="not allowed",
+            )
+
     def test_relationship_presets_derive_profile_policy_defaults(self) -> None:
         helper = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -871,6 +951,118 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual("thread_1", message["hub_thread_id"])
         self.assertEqual([message["chat_message_id"]], [item["chat_message_id"] for item in messages])
         self.assertEqual("thread_1", updated_chat["hub_thread_id"])
+
+    def test_local_api_chat_message_generates_provider_backed_reply(self) -> None:
+        ai_client = FakeAiRunClient()
+        api = LocalSocialApi.in_memory(auth_required=True, ai_run_client=ai_client)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+        assistant = api.create_agent_profile(
+            {
+                "handle": "@assistant:seagull.local",
+                "display_name": "Assistant",
+                "bio": "Owned planning agent.",
+            },
+            principal,
+        )["profile"]
+        prompt = api.create_personal_agent_asset(
+            {
+                "asset_type": "prompt",
+                "name": "Concise assistant",
+                "instructions": "Answer directly.",
+            },
+            principal,
+        )["asset"]
+        skill = api.create_personal_agent_asset(
+            {
+                "asset_type": "skill",
+                "name": "Planning skill",
+                "instructions": "Plan in steps.",
+            },
+            principal,
+        )["asset"]
+        api.set_agent_asset_binding(
+            assistant["handle"],
+            {"prompt_asset_id": prompt["asset_id"], "skill_asset_id": skill["asset_id"]},
+            principal,
+        )
+        chat = api.create_agent_chat({"agent_handle": assistant["handle"]}, principal)["chat"]
+
+        result = api.create_agent_chat_message(
+            chat["chat_id"],
+            {"content": "Plan the MVP."},
+            principal,
+        )
+        messages = api.list_agent_chat_messages(chat["chat_id"], principal=principal)["items"]
+
+        reply = result["reply"]
+        self.assertIsNotNone(reply)
+        self.assertEqual("agent", reply["sender_type"])
+        self.assertEqual("Here is the plan.", reply["content"])
+        self.assertEqual("airun_1", reply["ai_run_id"])
+        self.assertEqual("completed", reply["ai_run_state"])
+        self.assertIsNone(result["message"]["ai_error"])
+        self.assertEqual(
+            [result["message"]["chat_message_id"], reply["chat_message_id"]],
+            [item["chat_message_id"] for item in messages],
+        )
+
+        self.assertEqual(1, len(ai_client.requests))
+        request = ai_client.requests[0]
+        self.assertEqual(assistant["agent_id"], request["actor_agent_id"])
+        self.assertEqual([{"role": "user", "content": "Plan the MVP."}], request["input_messages"])
+        self.assertEqual(f"chat-reply:{result['message']['chat_message_id']}", request["idempotency_key"])
+        system_instructions = request["system_instructions"]
+        self.assertIn("Platform rules", system_instructions)
+        self.assertIn("@assistant:seagull.local", system_instructions)
+        self.assertIn("Answer directly.", system_instructions)
+        self.assertIn("Plan in steps.", system_instructions)
+
+    def test_local_api_chat_reply_failure_keeps_message_and_records_ai_state(self) -> None:
+        denied_client = FakeAiRunClient(
+            run={"run_id": "airun_9", "state": "denied", "denial_reason": "insufficient credits"}
+        )
+        api = LocalSocialApi.in_memory(auth_required=True, ai_run_client=denied_client)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        assistant = api.create_agent_profile({"handle": "@assistant:seagull.local"}, principal)["profile"]
+        chat = api.create_agent_chat({"agent_handle": assistant["handle"]}, principal)["chat"]
+
+        denied = api.create_agent_chat_message(chat["chat_id"], {"content": "Plan."}, principal)
+
+        self.assertIsNone(denied["reply"])
+        self.assertEqual("stored", denied["message"]["delivery_status"])
+        self.assertEqual("airun_9", denied["message"]["ai_run_id"])
+        self.assertEqual("denied", denied["message"]["ai_run_state"])
+        self.assertEqual("insufficient credits", denied["message"]["ai_error"])
+
+        error_client = FakeAiRunClient(error=RuntimeError("provider unreachable"))
+        error_api = LocalSocialApi.in_memory(auth_required=True, ai_run_client=error_client)
+        error_assistant = error_api.create_agent_profile({"handle": "@assistant:seagull.local"}, principal)["profile"]
+        error_chat = error_api.create_agent_chat({"agent_handle": error_assistant["handle"]}, principal)["chat"]
+
+        failed = error_api.create_agent_chat_message(error_chat["chat_id"], {"content": "Plan."}, principal)
+
+        self.assertIsNone(failed["reply"])
+        self.assertEqual("stored", failed["message"]["delivery_status"])
+        self.assertEqual("provider unreachable", failed["message"]["ai_error"])
+        self.assertEqual(
+            [failed["message"]["chat_message_id"]],
+            [
+                item["chat_message_id"]
+                for item in error_api.list_agent_chat_messages(error_chat["chat_id"], principal=principal)["items"]
+            ],
+        )
+
+    def test_local_api_chat_message_without_ai_client_returns_no_reply(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        assistant = api.create_agent_profile({"handle": "@assistant:seagull.local"}, principal)["profile"]
+        chat = api.create_agent_chat({"agent_handle": assistant["handle"]}, principal)["chat"]
+
+        result = api.create_agent_chat_message(chat["chat_id"], {"content": "Plan."}, principal)
+
+        self.assertIsNone(result["reply"])
+        self.assertEqual("stored", result["message"]["delivery_status"])
+        self.assertIsNone(result["message"]["ai_run_id"])
 
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)

@@ -108,8 +108,28 @@ const chatMessage: AgentChatMessage = {
   hub_thread_id: null,
   delivery_status: "stored",
   delivery_error: null,
+  ai_run_id: null,
+  ai_run_state: null,
+  ai_error: null,
   created_at: "2026-06-13T00:00:21Z",
   updated_at: "2026-06-13T00:00:21Z",
+};
+
+const chatReply: AgentChatMessage = {
+  chat_message_id: "chatmsg_2",
+  chat_id: "chat_1",
+  owner_user_id: "user_1",
+  sender_type: "agent",
+  content: "The plan looks solid; tighten the hero copy.",
+  hub_message_id: null,
+  hub_thread_id: null,
+  delivery_status: "stored",
+  delivery_error: null,
+  ai_run_id: "airun_1",
+  ai_run_state: "completed",
+  ai_error: null,
+  created_at: "2026-06-13T00:00:22Z",
+  updated_at: "2026-06-13T00:00:22Z",
 };
 
 const roots: Root[] = [];
@@ -235,7 +255,7 @@ describe("App dashboard", () => {
       },
       "/moderation?limit=50": { items: [] },
       "/agent-chats?owner_user_id=user_1": { items: [chat] },
-      "/agent-chats/chat_1/messages?owner_user_id=user_1": { items: [chatMessage] },
+      "/agent-chats/chat_1/messages?owner_user_id=user_1": { items: [chatMessage, chatReply] },
     });
 
     const container = renderApp("/chat/chat_1");
@@ -246,6 +266,9 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("Skill asset_skill");
     expect(container.textContent).toContain("stored");
     expect(container.textContent).toContain("New chat");
+    expect(container.textContent).toContain("The plan looks solid; tighten the hero copy.");
+    expect(container.textContent).toContain("agent");
+    expect(container.textContent).toContain("AI run airun_1 (completed)");
   });
 
   it("renders lifecycle inbox original and current messages", async () => {

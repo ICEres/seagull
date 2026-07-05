@@ -382,6 +382,16 @@ class SocialApiService:
         self._repository.put_agent_asset_binding(binding)
         return binding
 
+    def get_owned_profile(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+    ) -> AgentProfileRecord:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        return profile
+
     def get_agent_asset_binding(
         self,
         *,
@@ -502,6 +512,55 @@ class SocialApiService:
                 updated_at=now,
             )
         )
+        return updated
+
+    def create_agent_chat_reply(
+        self,
+        *,
+        owner_user_id: str,
+        chat_id: str,
+        content: str,
+        ai_run_id: str | None = None,
+        ai_run_state: str | None = None,
+    ) -> AgentChatMessage:
+        chat = self._require_agent_chat(chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        now = self._clock()
+        reply = AgentChatMessage(
+            chat_message_id=self._new_id("chatmsg"),
+            chat_id=chat.chat_id,
+            owner_user_id=owner_user_id,
+            sender_type="agent",
+            content=normalized_required(content, "content"),
+            ai_run_id=clean_optional(ai_run_id),
+            ai_run_state=clean_optional(ai_run_state),
+            created_at=now,
+            updated_at=now,
+        )
+        self._repository.put_agent_chat_message(reply)
+        self._repository.put_agent_chat_session(replace(chat, updated_at=now))
+        return reply
+
+    def record_agent_chat_message_ai_state(
+        self,
+        *,
+        owner_user_id: str,
+        chat_message_id: str,
+        ai_run_id: str | None = None,
+        ai_run_state: str | None = None,
+        ai_error: str | None = None,
+    ) -> AgentChatMessage:
+        message = self._require_agent_chat_message(chat_message_id)
+        chat = self._require_agent_chat(message.chat_id)
+        self._require_chat_owner(owner_user_id, chat)
+        updated = replace(
+            message,
+            ai_run_id=clean_optional(ai_run_id),
+            ai_run_state=clean_optional(ai_run_state),
+            ai_error=clean_optional(ai_error),
+            updated_at=self._clock(),
+        )
+        self._repository.put_agent_chat_message(updated)
         return updated
 
     def create_node(

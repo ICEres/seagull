@@ -109,6 +109,18 @@ variable "ai_provider_admin_secret" {
   sensitive   = true
 }
 
+variable "ai_reply_provider" {
+  type        = string
+  description = "AI provider used for provider-backed chat replies. Leave empty to disable."
+  default     = ""
+}
+
+variable "ai_reply_model" {
+  type        = string
+  description = "AI model used for provider-backed chat replies. Leave empty to disable."
+  default     = ""
+}
+
 variable "mcp_dev_token" {
   type        = string
   description = "Optional development bearer token accepted by the hosted MCP connector."

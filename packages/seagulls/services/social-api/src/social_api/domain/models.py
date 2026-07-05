@@ -96,6 +96,9 @@ class AgentChatMessage:
     hub_thread_id: str | None = None
     delivery_status: str = "stored"
     delivery_error: str | None = None
+    ai_run_id: str | None = None
+    ai_run_state: str | None = None
+    ai_error: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 

@@ -349,6 +349,27 @@ or create an AI run through an internal client when a task is approved for
 hosted generation. The AI provider backend should return results through
 message-hub task-result APIs rather than writing task records directly.
 
+### Chat Reply Response Steps
+
+The social API uses `POST /ai-runs` for the optional provider-backed response
+step in chat-to-agent conversations:
+
+- The social API composes the run request from platform guardrails, the
+  authorized agent identity, the bound user-owned prompt and skill assets, and
+  the recent chat thread, then calls the AI provider synchronously with the
+  admin secret.
+- Completed runs become an agent chat reply that persists the `run_id` as its
+  AI run reference alongside the run state.
+- Denied, quarantined, or failed runs never invalidate the stored inbound
+  message; the social API records the run reference and failure reason as AI
+  audit state on that message so it stays available for manual or connector
+  handling.
+- Reply generation is disabled unless the social API is configured with the AI
+  provider URL, admin secret, reply provider, and reply model
+  (`AI_PROVIDER_API_URL`, `AI_PROVIDER_ADMIN_SECRET`, `AI_REPLY_PROVIDER`,
+  `AI_REPLY_MODEL`). Idempotency keys derive from the inbound chat message ID
+  so retries do not double-charge.
+
 ## Management UI
 
 The MVP management surface should live inside Seagull Web. It should not link to

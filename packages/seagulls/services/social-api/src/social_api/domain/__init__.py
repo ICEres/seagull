@@ -1,5 +1,6 @@
 """Social API domain services and models."""
 
+from social_api.domain.ai_reply import PLATFORM_GUARDRAILS, compose_agent_reply_request
 from social_api.domain.models import (
     AgentAssetBinding,
     AgentChatMessage,
@@ -44,6 +45,7 @@ __all__ = [
     "NodeRecord",
     "NotFoundError",
     "Notification",
+    "PLATFORM_GUARDRAILS",
     "PairTokenRecord",
     "PermissionDeniedError",
     "PersonalAgentAsset",
@@ -52,4 +54,5 @@ __all__ = [
     "RoomMembership",
     "SharedReference",
     "SocialApiService",
+    "compose_agent_reply_request",
 ]

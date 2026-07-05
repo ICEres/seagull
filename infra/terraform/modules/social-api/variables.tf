@@ -49,6 +49,30 @@ variable "message_hub_legacy_route_secret_arn" {
   default     = ""
 }
 
+variable "ai_provider_api_url" {
+  type        = string
+  description = "Optional AI provider API URL for provider-backed chat replies."
+  default     = ""
+}
+
+variable "ai_provider_admin_secret_arn" {
+  type        = string
+  description = "Optional Secrets Manager ARN containing the AI provider admin secret used for chat reply runs."
+  default     = ""
+}
+
+variable "ai_reply_provider" {
+  type        = string
+  description = "AI provider name used for chat reply runs (empty disables provider-backed replies)."
+  default     = ""
+}
+
+variable "ai_reply_model" {
+  type        = string
+  description = "AI model used for chat reply runs (empty disables provider-backed replies)."
+  default     = ""
+}
+
 variable "lambda_kms_key_arn" {
   type        = string
   description = "Optional KMS key ARN used to encrypt Lambda environment variables."

@@ -1110,6 +1110,11 @@ module "social_api" {
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
   message_api_url         = "https://${var.message_api_domain}"
 
+  ai_provider_api_url          = module.ai_provider.api_endpoint
+  ai_provider_admin_secret_arn = aws_secretsmanager_secret.ai_provider_admin.arn
+  ai_reply_provider            = var.ai_reply_provider
+  ai_reply_model               = var.ai_reply_model
+
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
   api_throttling_burst_limit     = var.api_throttling_burst_limit

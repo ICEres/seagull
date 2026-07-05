@@ -278,7 +278,7 @@ export class SocialApiClient {
   createAgentChatMessage(
     chatId: string,
     body: { owner_user_id: string; content: string },
-  ): Promise<{ message: AgentChatMessage }> {
+  ): Promise<{ message: AgentChatMessage; reply: AgentChatMessage | null }> {
     return this.request(`/agent-chats/${encodeURIComponent(chatId)}/messages`, {
       method: "POST",
       body,

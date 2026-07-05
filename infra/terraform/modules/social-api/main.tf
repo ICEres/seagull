@@ -667,17 +667,18 @@ resource "aws_iam_role_policy" "lambda" {
         Resource = local.table_resources
       }
       ],
-      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" ? [] : [
+      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.ai_provider_admin_secret_arn == "" ? [] : [
         {
           Effect = "Allow"
           Action = ["secretsmanager:GetSecretValue"]
           Resource = compact([
             var.message_hub_legacy_route_secret_arn,
             var.auth_bypass_secret_arn,
+            var.ai_provider_admin_secret_arn,
           ])
         },
       ],
-      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.lambda_kms_key_arn == "" ? [] : [
+      var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.ai_provider_admin_secret_arn == "" && var.lambda_kms_key_arn == "" ? [] : [
         {
           Effect   = "Allow"
           Action   = ["kms:Decrypt"]
@@ -695,9 +696,10 @@ resource "aws_lambda_function" "api" {
   runtime          = "python3.13"
   filename         = var.lambda_package_path
   source_code_hash = var.lambda_source_code_hash
-  timeout          = 10
-  memory_size      = 256
-  kms_key_arn      = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : null
+  # Long enough for one synchronous provider-backed chat reply run.
+  timeout     = 30
+  memory_size = 256
+  kms_key_arn = var.lambda_kms_key_arn != "" ? var.lambda_kms_key_arn : null
 
   environment {
     variables = merge(
@@ -720,12 +722,18 @@ resource "aws_lambda_function" "api" {
         ROOMS_TABLE                 = aws_dynamodb_table.rooms.name
         SOCIAL_AUTH_REQUIRED        = "true"
         MESSAGE_API_URL             = var.message_api_url
+        AI_PROVIDER_API_URL         = var.ai_provider_api_url
+        AI_REPLY_PROVIDER           = var.ai_reply_provider
+        AI_REPLY_MODEL              = var.ai_reply_model
       },
       var.auth_bypass_secret_arn == "" ? {} : {
         SOCIAL_AUTH_BYPASS_SECRET_ARN = var.auth_bypass_secret_arn
       },
       var.message_hub_legacy_route_secret_arn == "" ? {} : {
         MESSAGE_HUB_LEGACY_ROUTE_SECRET_ARN = var.message_hub_legacy_route_secret_arn
+      },
+      var.ai_provider_admin_secret_arn == "" ? {} : {
+        AI_PROVIDER_ADMIN_SECRET_ARN = var.ai_provider_admin_secret_arn
       }
     )
   }

@@ -27,6 +27,7 @@ from social_api.domain import (
     RoomMembership,
     SharedReference,
     SocialApiService,
+    compose_agent_reply_request,
 )
 from social_api.storage import InMemorySocialRepository
 
@@ -58,6 +59,11 @@ class MessageHubSender(Protocol):
         """Send one chat message through the Message Hub."""
 
 
+class AiRunClient(Protocol):
+    def create_run(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Execute one AI run and return the run payload."""
+
+
 class LocalSocialApi:
     """Dependency-free local API adapter for the Phase 3 social loop."""
 
@@ -67,10 +73,12 @@ class LocalSocialApi:
         *,
         auth_required: bool = False,
         message_hub_sender: MessageHubSender | None = None,
+        ai_run_client: AiRunClient | None = None,
     ) -> None:
         self._service = service
         self._auth_required = auth_required
         self._message_hub_sender = message_hub_sender
+        self._ai_run_client = ai_run_client
 
     @classmethod
     def in_memory(
@@ -78,11 +86,13 @@ class LocalSocialApi:
         *,
         auth_required: bool = False,
         message_hub_sender: MessageHubSender | None = None,
+        ai_run_client: AiRunClient | None = None,
     ) -> LocalSocialApi:
         return cls(
             SocialApiService(InMemorySocialRepository()),
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,
+            ai_run_client=ai_run_client,
         )
 
     def health(self) -> dict[str, Any]:
@@ -427,13 +437,17 @@ class LocalSocialApi:
                 content=required_string(body, "content"),
             )
             message = self._deliver_agent_chat_message(owner_user_id, chat, message)
+            message, reply = self._generate_agent_chat_reply(owner_user_id, chat, message)
         except PermissionDeniedError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
         except InvalidSocialRequestError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
-        return {"message": agent_chat_message_to_dict(message)}
+        return {
+            "message": agent_chat_message_to_dict(message),
+            "reply": None if reply is None else agent_chat_message_to_dict(reply),
+        }
 
     def list_agent_chat_messages(
         self,
@@ -620,6 +634,22 @@ class LocalSocialApi:
             hub_thread_id=hub_thread_id,
         )
 
+    def _generate_agent_chat_reply(
+        self,
+        owner_user_id: str,
+        chat: AgentChatSession,
+        message: AgentChatMessage,
+    ) -> tuple[AgentChatMessage, AgentChatMessage | None]:
+        if self._ai_run_client is None:
+            return message, None
+        return generate_agent_chat_reply(
+            self._service,
+            self._ai_run_client,
+            owner_user_id=owner_user_id,
+            chat=chat,
+            message=message,
+        )
+
     def _owner_user_id(self, body: dict[str, Any], principal: AuthPrincipal | None) -> str:
         return self._owner_user_id_from_value(optional_string(body, "owner_user_id"), principal)
 
@@ -648,6 +678,86 @@ class LocalSocialApi:
             )
         except InvalidSocialRequestError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
+
+
+def generate_agent_chat_reply(
+    service: SocialApiService,
+    ai_run_client: AiRunClient,
+    *,
+    owner_user_id: str,
+    chat: AgentChatSession,
+    message: AgentChatMessage,
+) -> tuple[AgentChatMessage, AgentChatMessage | None]:
+    """Run one optional provider-backed response step for a stored chat message.
+
+    Returns the (possibly updated) inbound message and the generated reply, if
+    any. Failures never invalidate the stored message; they are recorded as AI
+    audit state on it so the message stays available for manual or connector
+    handling.
+    """
+    try:
+        request = compose_agent_reply_request(
+            chat=chat,
+            profile=service.get_owned_profile(
+                owner_user_id=owner_user_id,
+                agent_handle=chat.agent_handle,
+            ),
+            messages=service.list_agent_chat_messages(
+                owner_user_id=owner_user_id,
+                chat_id=chat.chat_id,
+            ),
+            prompt_asset=_chat_asset(service, owner_user_id, chat.prompt_asset_id),
+            skill_asset=_chat_asset(service, owner_user_id, chat.skill_asset_id),
+        )
+        run = ai_run_client.create_run(request)
+    except Exception as exc:
+        return (
+            service.record_agent_chat_message_ai_state(
+                owner_user_id=owner_user_id,
+                chat_message_id=message.chat_message_id,
+                ai_error=str(exc),
+            ),
+            None,
+        )
+
+    run_id = optional_payload_string(run, "run_id")
+    run_state = optional_payload_string(run, "state")
+    output_text = optional_payload_string(run, "output_text")
+    if run_state == "completed" and output_text is not None:
+        reply = service.create_agent_chat_reply(
+            owner_user_id=owner_user_id,
+            chat_id=chat.chat_id,
+            content=output_text,
+            ai_run_id=run_id,
+            ai_run_state=run_state,
+        )
+        return message, reply
+
+    reason = (
+        optional_payload_string(run, "denial_reason")
+        or optional_payload_string(run, "safety_reason")
+        or f"AI run did not complete with output (state: {run_state or 'unknown'})"
+    )
+    return (
+        service.record_agent_chat_message_ai_state(
+            owner_user_id=owner_user_id,
+            chat_message_id=message.chat_message_id,
+            ai_run_id=run_id,
+            ai_run_state=run_state,
+            ai_error=reason,
+        ),
+        None,
+    )
+
+
+def _chat_asset(
+    service: SocialApiService,
+    owner_user_id: str,
+    asset_id: str | None,
+) -> PersonalAgentAsset | None:
+    if asset_id is None:
+        return None
+    return service.get_personal_agent_asset(owner_user_id=owner_user_id, asset_id=asset_id)
 
 
 def human_identity_to_dict(identity: HumanIdentity) -> dict[str, Any]:
@@ -740,6 +850,9 @@ def agent_chat_message_to_dict(message: AgentChatMessage) -> dict[str, Any]:
         "hub_thread_id": message.hub_thread_id,
         "delivery_status": message.delivery_status,
         "delivery_error": message.delivery_error,
+        "ai_run_id": message.ai_run_id,
+        "ai_run_state": message.ai_run_state,
+        "ai_error": message.ai_error,
         "created_at": datetime_to_string(message.created_at),
         "updated_at": datetime_to_string(message.updated_at),
     }

@@ -618,6 +618,9 @@ def agent_chat_message_to_item(message: AgentChatMessage) -> dict[str, Any]:
             "hub_thread_id": message.hub_thread_id,
             "delivery_status": message.delivery_status,
             "delivery_error": message.delivery_error,
+            "ai_run_id": message.ai_run_id,
+            "ai_run_state": message.ai_run_state,
+            "ai_error": message.ai_error,
             "created_at": message.created_at.isoformat(),
             "updated_at": message.updated_at.isoformat(),
         }
@@ -635,6 +638,9 @@ def item_to_agent_chat_message(item: dict[str, Any]) -> AgentChatMessage:
         hub_thread_id=item.get("hub_thread_id"),
         delivery_status=item.get("delivery_status", "stored"),
         delivery_error=item.get("delivery_error"),
+        ai_run_id=item.get("ai_run_id"),
+        ai_run_state=item.get("ai_run_state"),
+        ai_error=item.get("ai_error"),
         created_at=datetime.fromisoformat(item["created_at"]),
         updated_at=datetime.fromisoformat(item["updated_at"]),
     )

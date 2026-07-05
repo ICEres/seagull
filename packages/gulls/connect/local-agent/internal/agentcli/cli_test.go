@@ -65,7 +65,7 @@ func (f *fakeClient) GetThread(threadID string, limit int) (map[string]any, erro
 	return map[string]any{"thread_id": threadID, "messages": []any{}}, nil
 }
 
-func (f *fakeClient) GetThreadContext(threadID string) (map[string]any, error) {
+func (f *fakeClient) GetThreadContext(threadID string, requesterHandle string) (map[string]any, error) {
 	f.threadContextRequests = append(f.threadContextRequests, threadID)
 	return map[string]any{"thread": map[string]any{"thread_id": threadID}, "recent_messages": []any{}}, nil
 }

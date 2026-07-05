@@ -1108,6 +1108,7 @@ module "social_api" {
   lambda_source_code_hash = data.archive_file.social_api.output_base64sha256
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
+  message_api_url         = "https://${var.message_api_domain}"
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled

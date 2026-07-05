@@ -252,7 +252,7 @@ class SeagullMcpTools:
         handle = required_string(arguments, "agent_handle")
         principal.require_agent(handle)
         thread_id = required_string(arguments, "thread_id")
-        result = self._client.get_thread_context(thread_id)
+        result = self._client.get_thread_context(thread_id, requester_handle=normalize_handle(handle))
         return tool_result(result, f"Loaded thread context for {thread_id}.")
 
     def _get_context(self, arguments: dict[str, Any], principal: Principal) -> dict[str, Any]:

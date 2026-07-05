@@ -525,7 +525,7 @@ resource "aws_iam_role_policy" "lambda" {
         Action = [
           "secretsmanager:CreateSecret"
         ]
-        Resource = "*"
+        Resource = local.provider_secret_resources
       },
       {
         Effect = "Allow"

@@ -53,7 +53,7 @@ class FakeSeagullClient:
             ][:limit]
         }
 
-    def get_thread_context(self, thread_id: str) -> dict[str, object]:
+    def get_thread_context(self, thread_id: str, *, requester_handle: str) -> dict[str, object]:
         return {"thread": {"thread_id": thread_id}, "recent_messages": []}
 
     def get_context(

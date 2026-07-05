@@ -16,7 +16,7 @@ type Client interface {
 	GetAgent(handle string) (map[string]any, error)
 	GetInbox(handle string, limit int) (map[string]any, error)
 	GetThread(threadID string, limit int) (map[string]any, error)
-	GetThreadContext(threadID string) (map[string]any, error)
+	GetThreadContext(threadID string, requesterHandle string) (map[string]any, error)
 	SendMessage(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string) (map[string]any, error)
 	CreateRoutingRule(name string, routeToHandles []string, mode string, urlContains []string) (map[string]any, error)
 	AckMessage(messageID string, recipientHandle string) (map[string]any, error)
@@ -53,8 +53,9 @@ func (c *HTTPClient) GetThread(threadID string, limit int) (map[string]any, erro
 	return c.request(http.MethodGet, "/threads/"+escapePathValue(threadID)+"?"+query.Encode(), nil)
 }
 
-func (c *HTTPClient) GetThreadContext(threadID string) (map[string]any, error) {
-	return c.request(http.MethodGet, "/threads/"+escapePathValue(threadID)+"/context", nil)
+func (c *HTTPClient) GetThreadContext(threadID string, requesterHandle string) (map[string]any, error) {
+	query := url.Values{"requester_handle": []string{requesterHandle}}
+	return c.request(http.MethodGet, "/threads/"+escapePathValue(threadID)+"/context?"+query.Encode(), nil)
 }
 
 func (c *HTTPClient) SendMessage(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string) (map[string]any, error) {

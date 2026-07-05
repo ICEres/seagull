@@ -148,11 +148,11 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		if fs.NArg() != 1 {
 			return 0, usage("context requires thread_id")
 		}
-		_, client, err := loadRuntime(global, env, client, nil)
+		config, client, err := loadRuntime(global, env, client, nil)
 		if err != nil {
 			return 0, err
 		}
-		result, err := client.GetThreadContext(fs.Arg(0))
+		result, err := client.GetThreadContext(fs.Arg(0), config.AgentHandle)
 		if err != nil {
 			return 0, err
 		}
@@ -181,7 +181,7 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		}
 		var threadContext map[string]any
 		if threadID := itemThreadID(item); threadID != "" {
-			threadContext, err = client.GetThreadContext(threadID)
+			threadContext, err = client.GetThreadContext(threadID, config.AgentHandle)
 			if err != nil {
 				return 0, err
 			}

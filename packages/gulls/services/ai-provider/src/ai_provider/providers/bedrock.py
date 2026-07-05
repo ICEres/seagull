@@ -48,8 +48,15 @@ class BedrockConverseProviderAdapter:
             return self._client
 
         import boto3
+        from botocore.config import Config
 
-        kwargs = {}
+        kwargs: dict[str, Any] = {
+            "config": Config(
+                connect_timeout=10,
+                read_timeout=30,
+                retries={"max_attempts": 2, "mode": "standard"},
+            )
+        }
         if self._region_name is not None:
             kwargs["region_name"] = self._region_name
         self._client = boto3.client("bedrock-runtime", **kwargs)

@@ -12,7 +12,7 @@ class SeagullClient(Protocol):
     def get_inbox(self, handle: str, *, limit: int) -> dict[str, Any]:
         raise NotImplementedError
 
-    def get_thread_context(self, thread_id: str) -> dict[str, Any]:
+    def get_thread_context(self, thread_id: str, *, requester_handle: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def get_context(
@@ -148,9 +148,10 @@ class SeagullHttpClient:
         encoded = parse.quote(handle, safe="")
         return self._request("GET", f"/agents/{encoded}/inbox?limit={limit}")
 
-    def get_thread_context(self, thread_id: str) -> dict[str, Any]:
+    def get_thread_context(self, thread_id: str, *, requester_handle: str) -> dict[str, Any]:
         encoded = parse.quote(thread_id, safe="")
-        return self._request("GET", f"/threads/{encoded}/context")
+        query = parse.urlencode({"requester_handle": requester_handle})
+        return self._request("GET", f"/threads/{encoded}/context?{query}")
 
     def get_context(
         self,

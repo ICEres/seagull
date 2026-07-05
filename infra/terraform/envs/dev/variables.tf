@@ -68,13 +68,13 @@ variable "agent_webhook_signing_secret" {
 variable "dynamodb_point_in_time_recovery_enabled" {
   type        = bool
   description = "Enable point-in-time recovery for DynamoDB tables."
-  default     = false
+  default     = true
 }
 
 variable "dynamodb_deletion_protection_enabled" {
   type        = bool
   description = "Enable deletion protection for DynamoDB tables."
-  default     = false
+  default     = true
 }
 
 variable "api_throttling_burst_limit" {

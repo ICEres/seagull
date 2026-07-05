@@ -1106,6 +1106,12 @@ def read_thread_context(thread_id: str, event: dict[str, Any]) -> dict[str, Any]
     if thread is None:
         raise NotFound(f"thread not found: {thread_id}")
 
+    params = query_params(event)
+    requester_handle = normalize_handle(required(params, "requester_handle"))
+    requester = require_agent_by_handle(requester_handle)
+    if requester["agent_id"] not in set(thread.get("participants", [])):
+        raise Forbidden("agent cannot read context for this thread")
+
     message_result = messages_table.query(
         IndexName="thread-created-at-index",
         KeyConditionExpression=Key("thread_id").eq(thread_id),

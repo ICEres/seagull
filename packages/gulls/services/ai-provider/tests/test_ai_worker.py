@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from unittest import TestCase
 
-from ai_provider.domain import AiRunState
+from ai_provider.domain import AiRun, AiRunState
 from test_lambda_auth import load_lambda_module
 
 
@@ -123,3 +123,45 @@ class AiProviderWorkerTest(TestCase):
         self.assertEqual("completed", body["state"])
         self.assertIn("Fake response", body["content"])
         self.assertEqual([f"seagull://ai-runs/{queued.run_id}"], body["artifact_refs"])
+
+    def _run(self, state: AiRunState, **reasons: object) -> AiRun:
+        return AiRun(
+            run_id="run_1",
+            provider="fake",
+            model="fake-small",
+            actor_agent_id="agent_1",
+            owner_user_id="user_1",
+            state=state,
+            task_id="task_1",
+            **reasons,
+        )
+
+    def test_failed_run_reports_failure_to_message_hub_so_task_does_not_hang(self) -> None:
+        run = self._run(AiRunState.FAILED, finish_reason="provider timeout")
+        body = self.worker_module.task_result_body(run, {"agent_token": "sga_test_secret"})
+        self.assertEqual("failed", body["state"])
+        self.assertIn("failed", body["error"])
+        self.assertIn("provider timeout", body["error"])
+        self.assertEqual(["seagull://ai-runs/run_1"], body["artifact_refs"])
+        self.assertNotIn("content", body)
+
+    def test_denied_and_quarantined_runs_report_a_refusal(self) -> None:
+        denied = self.worker_module.task_result_body(
+            self._run(AiRunState.DENIED, denial_reason="insufficient credits"),
+            {"agent_token": "t"},
+        )
+        self.assertEqual("refused", denied["state"])
+        self.assertIn("insufficient credits", denied["error"])
+
+        quarantined = self.worker_module.task_result_body(
+            self._run(AiRunState.QUARANTINED, safety_reason="unsafe output"),
+            {"agent_token": "t"},
+        )
+        self.assertEqual("refused", quarantined["state"])
+        self.assertIn("unsafe output", quarantined["error"])
+
+    def test_reportable_states_include_terminal_failures(self) -> None:
+        self.assertEqual(
+            {AiRunState.COMPLETED, AiRunState.FAILED, AiRunState.DENIED, AiRunState.QUARANTINED},
+            set(self.worker_module.REPORTABLE_STATES),
+        )

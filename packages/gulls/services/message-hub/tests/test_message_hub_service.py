@@ -12,6 +12,7 @@ from message_hub.domain import (
     ForbiddenDeliveryError,
     ForbiddenPayloadError,
     InvalidMessageError,
+    InvalidTaskTransitionError,
     MAX_ENVELOPE_INLINE_CHARS,
     MessageHubService,
     MessageRef,
@@ -81,6 +82,103 @@ class MessageHubServiceTest(TestCase):
         context = self.service.get_thread_context(result.thread.thread_id)
         self.assertIsNone(context.summary)
         self.assertEqual((result.message,), context.recent_messages)
+
+    def test_send_into_existing_thread_requires_participation(self) -> None:
+        started = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Kicking off the thread.",
+        )
+        thread_id = started.thread.thread_id
+
+        # A participant (the recipient) may reply into the thread.
+        reply = self.service.send_message(
+            sender_handle="@reviewer:gulls.ai",
+            recipient_handles=["@researcher:gulls.ai"],
+            content="Replying.",
+            thread_id=thread_id,
+        )
+        self.assertEqual(thread_id, reply.thread.thread_id)
+
+        # A non-participant may not inject a message by guessing the thread id.
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.send_message(
+                sender_handle="@map-reader:gulls.ai",
+                recipient_handles=["@researcher:gulls.ai"],
+                content="Injecting into a thread I am not part of.",
+                thread_id=thread_id,
+            )
+
+    def test_needs_review_delivery_is_hidden_from_inbox_and_not_actionable(self) -> None:
+        self.service.add_routing_rule(
+            name="Hold for review",
+            route_to_handles=["@map-reader:gulls.ai"],
+            mode="review",
+            url_contains=["maps.google.com"],
+        )
+
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Sensitive: please approve before I act.",
+            refs=(MessageRef(type="url", url="https://maps.google.com/example", find="identify_place"),),
+        )
+        held = next(
+            delivery
+            for delivery in result.deliveries
+            if delivery.recipient_agent_id == self.recipient.agent_id
+        )
+        self.assertEqual(DeliveryStatus.NEEDS_REVIEW, held.status)
+
+        # The recipient must not see held content in their inbox...
+        inbox = self.service.get_inbox("@reviewer:gulls.ai")
+        self.assertEqual((), inbox)
+
+        # ...nor be able to reply/act/ack on it until a human releases it.
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.decide_delivery(
+                held.delivery_id,
+                agent_handle="@reviewer:gulls.ai",
+                decision="reply",
+                content="acting on unreviewed content",
+            )
+
+    def test_task_state_transitions_are_enforced_and_settlement_is_requester_only(self) -> None:
+        task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Do the paid work.",
+        )
+
+        # Illegal jump: cannot go straight from requested to completed.
+        with self.assertRaises(InvalidTaskTransitionError):
+            self.service.update_task_state(
+                task.task_id, actor_handle="@researcher:gulls.ai", state="completed"
+            )
+
+        # Walk to result_ready through valid transitions.
+        self.service.update_task_state(task.task_id, actor_handle="@researcher:gulls.ai", state="accepted")
+        self.service.update_task_state(task.task_id, actor_handle="@reviewer:gulls.ai", state="running")
+        self.service.update_task_state(task.task_id, actor_handle="@reviewer:gulls.ai", state="result_ready")
+
+        # The worker must not self-accept its own result and inflate its reputation.
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.update_task_state(
+                task.task_id, actor_handle="@reviewer:gulls.ai", state="result_accepted"
+            )
+
+        # The requester (counterparty) can accept and complete it.
+        accepted = self.service.update_task_state(
+            task.task_id, actor_handle="@researcher:gulls.ai", state="result_accepted"
+        )
+        self.assertEqual(TaskState.RESULT_ACCEPTED, accepted.state)
+        self.service.update_task_state(task.task_id, actor_handle="@researcher:gulls.ai", state="completed")
+
+        # Terminal states are terminal: a completed task cannot be reactivated.
+        with self.assertRaises(InvalidTaskTransitionError):
+            self.service.update_task_state(
+                task.task_id, actor_handle="@reviewer:gulls.ai", state="running"
+            )
 
     def test_agent_token_issue_stores_hash_and_validates_scope(self) -> None:
         issued = self.service.issue_agent_token(

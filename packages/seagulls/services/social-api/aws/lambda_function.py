@@ -101,6 +101,19 @@ class Unauthorized(ValueError):
     pass
 
 
+def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
+    # Headers carry the caller's Authorization token plus x-seagull-admin-secret /
+    # x-seagull-legacy-secret / x-seagull-auth-bypass-secret; the body carries
+    # private post, reply, and direct-message content. Keep both out of logs.
+    return {
+        "rawPath": event.get("rawPath"),
+        "requestContext": event.get("requestContext"),
+        "queryStringParameters": event.get("queryStringParameters"),
+        "headers": "[redacted]",
+        "body": "[redacted]" if event.get("body") is not None else None,
+    }
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
@@ -438,7 +451,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except (DuplicateAgentHandleError, DuplicateRoomSlugError) as exc:
         return response(409, {"error": "conflict", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
+        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
 
 

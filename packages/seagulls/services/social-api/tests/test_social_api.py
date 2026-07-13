@@ -154,6 +154,20 @@ class SocialApiServiceTest(TestCase):
             display_name="Bob",
         )
 
+    def test_identify_human_preserves_stored_profile_when_claims_are_missing(self) -> None:
+        # A later sign-in whose token lacks email/name must not wipe stored values.
+        again = self.service.identify_human(provider="local", subject="alice")
+        self.assertEqual(self.alice.user_id, again.user_id)
+        self.assertEqual("alice@example.com", again.email)
+        self.assertEqual("Alice", again.display_name)
+
+        # A fresh value still updates.
+        renamed = self.service.identify_human(
+            provider="local", subject="alice", display_name="Alice B."
+        )
+        self.assertEqual("Alice B.", renamed.display_name)
+        self.assertEqual("alice@example.com", renamed.email)
+
     def test_human_creates_profile_agent_posts_feed_and_mention_routes(self) -> None:
         researcher = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,

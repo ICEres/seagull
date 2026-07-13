@@ -213,7 +213,11 @@ def dev_principal_from_token(
     agent_handles: Iterable[str],
     scopes: Iterable[str] = ALL_SCOPES,
 ) -> Principal | None:
-    if not expected_token or not secrets.compare_digest(provided_token, expected_token):
+    # Compare as bytes: secrets.compare_digest raises TypeError on non-ASCII str
+    # inputs, which would turn a bad token into an unhandled 500 instead of a 401.
+    if not expected_token or not secrets.compare_digest(
+        provided_token.encode("utf-8"), expected_token.encode("utf-8")
+    ):
         return None
     return Principal(
         owner_user_id=required_string(owner_user_id, "owner_user_id"),

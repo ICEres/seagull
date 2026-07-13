@@ -47,6 +47,7 @@ import {
   clearAuthSession,
   completeHostedCallback,
   configuredAuth,
+  hostedLogoutUrl,
   isSessionActive,
   loadAuthSession,
   type AuthConfig,
@@ -331,11 +332,19 @@ export default function App() {
     if (authConfig.mode !== "cognito" || !dashboardQuery.error) {
       return;
     }
-    clearAuthSession();
-    setAuthSession(null);
+    const error = dashboardQuery.error;
+    // Only sign the user out when the session is actually invalid (401/403). A
+    // transient network error or a 5xx must not destroy a valid session.
+    const isAuthError = error instanceof SocialApiError && (error.status === 401 || error.status === 403);
+    if (isAuthError) {
+      clearAuthSession();
+      setAuthSession(null);
+      setNotice({ tone: "error", message: "Your session expired. Please sign in again." });
+      return;
+    }
     setNotice({
       tone: "error",
-      message: dashboardQuery.error instanceof Error ? dashboardQuery.error.message : "Sign in expired.",
+      message: error instanceof Error ? error.message : "Could not load your dashboard.",
     });
   }, [authConfig.mode, dashboardQuery.error]);
 
@@ -345,6 +354,12 @@ export default function App() {
     const nextState = clearLoopState();
     setState(nextState);
     setApiDraft(nextState.apiUrl);
+    if (authConfig.mode === "cognito") {
+      // Also end the Cognito Hosted UI session; otherwise the next sign-in
+      // silently re-authenticates the same user without a real login.
+      window.location.assign(hostedLogoutUrl(authConfig));
+      return;
+    }
     setNotice({ tone: "warn", message: "Signed out." });
     navigate("/login");
   }

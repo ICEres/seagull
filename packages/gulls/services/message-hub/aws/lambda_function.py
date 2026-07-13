@@ -152,6 +152,19 @@ class PayloadUnavailable(ValueError):
     pass
 
 
+def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
+    # Headers carry replayable secrets (Authorization bearer tokens,
+    # x-seagull-admin-secret, x-seagull-legacy-secret) and the body carries
+    # private message content; never write either to logs.
+    return {
+        "rawPath": event.get("rawPath"),
+        "requestContext": event.get("requestContext"),
+        "queryStringParameters": event.get("queryStringParameters"),
+        "headers": "[redacted]",
+        "body": "[redacted]" if event.get("body") is not None else None,
+    }
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
@@ -283,7 +296,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except PayloadUnavailable as exc:
         return response(410, {"error": "payload_unavailable", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": event}, default=str))
+        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
 
 
@@ -296,6 +309,15 @@ def register_agent(event: dict[str, Any]) -> dict[str, Any]:
 def create_agent_registration(event: dict[str, Any]) -> dict[str, Any]:
     body = parse_body(event)
     agent, created = get_or_create_agent_from_body(body)
+    if not created and agent_has_active_token(agent["agent_id"]):
+        # This route is unauthenticated and only bootstraps the first token for an
+        # agent. Handles are public, so once an agent already holds an active
+        # token, minting another one here would let anyone impersonate it.
+        # Additional tokens must go through an authenticated owner flow.
+        raise Conflict(
+            f"agent already has a registration token: {agent['handle']}; "
+            "issuing another token requires an authenticated owner flow"
+        )
     issued = issue_agent_token(agent, body)
     return response(
         201,
@@ -306,6 +328,26 @@ def create_agent_registration(event: dict[str, Any]) -> dict[str, Any]:
             "record": public_agent_token_record(issued["record"]),
         },
     )
+
+
+def agent_has_active_token(agent_id: str) -> bool:
+    require_agent_tokens_table()
+    query_kwargs: dict[str, Any] = {
+        "IndexName": "agent-created-at-index",
+        "KeyConditionExpression": Key("agent_id").eq(agent_id),
+    }
+    while True:
+        result = agent_tokens_table.query(**query_kwargs)
+        for record in result.get("Items", []):
+            if record.get("revoked_at"):
+                continue
+            if token_expired(record.get("expires_at")):
+                continue
+            return True
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            return False
+        query_kwargs["ExclusiveStartKey"] = last_key
 
 
 def get_or_create_agent_from_body(body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -544,6 +586,11 @@ def create_message(event: dict[str, Any]) -> dict[str, Any]:
         existing_thread = get_thread_record(thread_id)
         if existing_thread is None:
             raise NotFound(f"thread not found: {thread_id}")
+        # Only current participants may post into an existing thread; otherwise any
+        # agent could inject messages into a conversation by guessing its id.
+        participants = existing_thread.get("participants") or set()
+        if sender["agent_id"] not in participants:
+            raise Forbidden("sender is not a participant of this thread")
     else:
         thread_id = f"thread_{uuid.uuid4().hex}"
         existing_thread = None
@@ -900,6 +947,7 @@ def update_task_status(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
     actor = require_agent_by_handle(required(body, "actor_handle"))
     require_task_actor(task, actor)
     state = normalize_task_state(required(body, "state"))
+    require_valid_task_transition(task, state, actor)
     now = now_iso()
     task["state"] = state
     task["updated_at"] = now
@@ -924,6 +972,9 @@ def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
     require_task_actor(task, responder)
     if responder["agent_id"] == task["requester_agent_id"]:
         raise Forbidden("requester cannot return its own task result")
+    current_state = str(task.get("state") or "").strip().lower()
+    if current_state in TASK_INACTIVE_STATES:
+        raise Conflict(f"cannot return a result for a task in terminal state {current_state}")
     state = normalize_task_state(optional_string(body, "state") or "completed")
     content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
     content_ref = optional_string(body, "content_ref")
@@ -1062,7 +1113,10 @@ def read_inbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
         ScanIndexForward=False,
         Limit=query_limit(event, default=20, maximum=100),
     )
-    return response(200, {"agent": public_agent(agent), "items": delivery_items(result.get("Items", []))})
+    # Hold-for-review deliveries must not expose their content to the recipient
+    # agent until a human releases them; the human review surface reads directly.
+    items = [item for item in result.get("Items", []) if item.get("status") != "needs_review"]
+    return response(200, {"agent": public_agent(agent), "items": delivery_items(items)})
 
 
 def read_outbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
@@ -1389,6 +1443,10 @@ def submit_delivery_decision(delivery_id: str, event: dict[str, Any]) -> dict[st
     agent = require_agent_by_handle(required(body, "agent_handle"))
     if delivery.get("recipient_agent_id") != agent["agent_id"]:
         raise Forbidden("agent cannot decide another recipient's delivery")
+    if delivery.get("status") == "needs_review":
+        # Deliveries held for human review must not be actionable by the
+        # recipient until a human releases them.
+        raise Forbidden("delivery is held for human review and cannot be acted on until released")
 
     decision = normalize_agent_decision(required(body, "decision"))
     now = now_iso()
@@ -2459,6 +2517,33 @@ TASK_STATES = {
     "failed",
 }
 
+# Mirrors TASK_LIFECYCLE_TRANSITIONS in message_hub.domain.models. Kept here as a
+# standalone copy because the Lambda is packaged without the domain source.
+TASK_LIFECYCLE_TRANSITIONS: dict[str, set[str]] = {
+    "requested": {"quoted", "needs_approval", "accepted", "canceled", "refused"},
+    "quoted": {"needs_approval", "approved", "canceled", "refused"},
+    "needs_approval": {"approved", "canceled", "refused"},
+    "approved": {"escrowed", "accepted", "canceled"},
+    "escrowed": {"accepted", "running", "canceled", "disputed"},
+    "accepted": {"running", "result_ready", "completed", "canceled", "refused"},
+    "running": {"result_ready", "completed", "failed", "disputed"},
+    "result_ready": {"result_accepted", "completed", "disputed"},
+    "result_accepted": {"released", "completed", "disputed"},
+    "released": {"completed"},
+    "disputed": {"result_accepted", "released", "completed", "canceled"},
+    "completed": set(),
+    "canceled": set(),
+    "refused": set(),
+    "failed": {"disputed"},
+}
+
+TASK_INACTIVE_STATES = {"released", "completed", "canceled", "refused", "failed"}
+
+# Settlement states credit the worker and release funds, so only the requester
+# (the counterparty) may set them; otherwise a worker could self-attest
+# acceptance/completion and corrupt task truth that escrow/release depends on.
+REQUESTER_ONLY_TASK_STATES = {"result_accepted", "released", "completed"}
+
 PRIVATE_TASK_FIELDS = {
     "credential",
     "credentials",
@@ -2479,6 +2564,23 @@ def normalize_task_state(state: str) -> str:
     if normalized not in TASK_STATES:
         raise BadRequest(f"task state must be one of: {', '.join(sorted(TASK_STATES))}")
     return normalized
+
+
+def require_valid_task_transition(
+    task: dict[str, Any],
+    next_state: str,
+    actor: dict[str, Any],
+    *,
+    requester_only_settlement: bool = True,
+) -> None:
+    current = str(task.get("state") or "").strip().lower()
+    if next_state == current:
+        return
+    if next_state not in TASK_LIFECYCLE_TRANSITIONS.get(current, set()):
+        raise Conflict(f"cannot transition task from {current} to {next_state}")
+    if requester_only_settlement and next_state in REQUESTER_ONLY_TASK_STATES:
+        if actor["agent_id"] != task["requester_agent_id"]:
+            raise Forbidden(f"only the task requester can set task state {next_state}")
 
 
 def task_ref(task_id: str, label: str) -> dict[str, str]:

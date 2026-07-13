@@ -226,6 +226,11 @@ class MessageHubAiTaskRunnerTest(TestCase):
             objective=objective,
             input_ref=input_ref,
         )
+        self.message_hub.update_task_state(
+            task.task_id,
+            actor_handle="@researcher:gulls.ai",
+            state="needs_approval",
+        )
         return self.message_hub.update_task_state(
             task.task_id,
             actor_handle="@researcher:gulls.ai",

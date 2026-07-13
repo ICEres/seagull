@@ -95,13 +95,14 @@ func envMap(envList []string) map[string]string {
 }
 
 func configFilePath(env map[string]string) string {
+	// Only load config from an explicitly configured path or the fixed per-user
+	// path. Auto-discovering ".seagull/agent/env" from the current working
+	// directory would let an untrusted directory (e.g. a cloned repo) redirect
+	// SEAGULL_API_URL and exfiltrate the connector token, or inject response
+	// rules and a context dir. The install wrapper sets SEAGULL_AGENT_ENV_FILE to
+	// the trusted repo path explicitly.
 	if explicit := cleanString(env["SEAGULL_AGENT_ENV_FILE"]); explicit != "" {
 		return expandHome(explicit)
-	}
-
-	local := ".seagull/agent/env"
-	if _, err := os.Stat(local); err == nil {
-		return local
 	}
 
 	user := expandHome("~/.config/seagull/env")

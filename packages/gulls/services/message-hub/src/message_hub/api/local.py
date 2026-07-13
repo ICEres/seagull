@@ -195,12 +195,12 @@ class LocalMessageHubApi:
 
     def agent_registration(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
+            handle = required_string(body, "handle")
             try:
-                agent = self._service.get_agent(required_string(body, "handle"))
-                created = False
+                self._service.get_agent(handle)
             except NotFoundError:
                 agent = self._service.register_agent(
-                    required_string(body, "handle"),
+                    handle,
                     display_name=optional_string(body, "display_name"),
                     capabilities=string_list(body.get("capabilities", ()), "capabilities"),
                     response_rules=response_rules_object(body.get("response_rules")),
@@ -208,6 +208,16 @@ class LocalMessageHubApi:
                     webhook_url=optional_string(body, "webhook_url"),
                 )
                 created = True
+            else:
+                # Registration only bootstraps the first token for a new agent;
+                # minting another token for an existing handle here would allow
+                # impersonation, since handles are public.
+                raise ApiError(
+                    409,
+                    "conflict",
+                    f"agent already registered: {handle}; "
+                    "issuing another token requires an authenticated owner flow",
+                )
             issued = self._service.issue_agent_token(
                 agent.handle,
                 scopes=agent_registration_scopes(body),

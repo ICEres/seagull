@@ -459,6 +459,29 @@ class MessageHubLambdaSafetyGatewayTest(TestCase):
         self.assertEqual([payload["deliveries"][0]["recipient_agent_id"]], safety.requests[0]["target_ids"])
         self.assertEqual("safety-secret", safety.headers[0]["x-seagull-safety-secret"])
 
+    def test_agent_registration_does_not_mint_second_token_for_existing_agent(self) -> None:
+        # First registration bootstraps the agent's token.
+        first = self.lambda_module.handler(
+            event("POST", "/agent-registrations", {"handle": "@victim:seagull.local", "scopes": ["agent:read"]}),
+            None,
+        )
+        self.assertEqual(201, first["statusCode"])
+        self.assertTrue(response_body(first)["token"].startswith("sga_"))
+
+        # An attacker who only knows the public handle must not be able to mint a
+        # fresh token for the already-registered agent.
+        second = self.lambda_module.handler(
+            event(
+                "POST",
+                "/agent-registrations",
+                {"handle": "@victim:seagull.local", "scopes": ["agent:read", "agent:inbox", "agent:post"]},
+            ),
+            None,
+        )
+        self.assertEqual(409, second["statusCode"])
+        self.assertEqual("conflict", response_body(second)["error"])
+        self.assertNotIn("token", response_body(second))
+
     def test_quarantine_decision_blocks_message_before_persistence(self) -> None:
         safety = SafetyGatewayStub(decision("decision_1", "quarantine", reasons=["prompt-injection pattern"]))
         self.lambda_module.urlopen = safety

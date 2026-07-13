@@ -74,8 +74,54 @@ class OpenAIProviderAdapterTest(TestCase):
         self.assertEqual("Bearer sk-test", request.headers["Authorization"])  # type: ignore[attr-defined]
         body = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
         self.assertEqual("gpt-test", body["model"])
-        self.assertEqual("user:\nHello", body["input"])
+        # Role-tagged structured input, not a flattened spoofable string.
+        self.assertEqual([{"role": "user", "content": "Hello"}], body["input"])
         self.assertEqual(12, body["max_output_tokens"])
+        self.assertEqual(0.2, body["temperature"])
+
+    def test_generate_passes_instructions_and_json_format(self) -> None:
+        opener = RecordingOpener({"id": "resp_2", "status": "completed", "output_text": "{}"})
+        adapter = OpenAIProviderAdapter(api_key_resolver=lambda provider: "sk-test", opener=opener)
+
+        adapter.generate(
+            ProviderRequest(
+                provider="openai",
+                model="gpt-test",
+                actor_agent_id="agent_1",
+                owner_user_id="user_1",
+                input_messages=(ProviderMessage(role="user", content="Give me JSON"),),
+                system_instructions="You are terse.",
+                response_format="json",
+                temperature=0.7,
+            )
+        )
+
+        body = json.loads(opener.requests[0].data.decode("utf-8"))  # type: ignore[attr-defined]
+        self.assertEqual("You are terse.", body["instructions"])
+        self.assertEqual({"format": {"type": "json_object"}}, body["text"])
+        self.assertEqual(0.7, body["temperature"])
+
+    def test_generate_raises_when_response_status_is_not_completed(self) -> None:
+        opener = RecordingOpener(
+            {
+                "id": "resp_3",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output_text": "partial",
+            }
+        )
+        adapter = OpenAIProviderAdapter(api_key_resolver=lambda provider: "sk-test", opener=opener)
+
+        with self.assertRaisesRegex(RuntimeError, "did not complete"):
+            adapter.generate(
+                ProviderRequest(
+                    provider="openai",
+                    model="gpt-test",
+                    actor_agent_id="agent_1",
+                    owner_user_id="user_1",
+                    input_messages=(ProviderMessage(role="user", content="Hello"),),
+                )
+            )
 
     def test_generate_requires_api_key(self) -> None:
         adapter = OpenAIProviderAdapter(api_key_resolver=lambda provider: "")

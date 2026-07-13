@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
+	apigwtypes "github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi/types"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -332,6 +333,7 @@ func (h handler) route(ctx context.Context, request events.APIGatewayWebsocketPr
 	client := h.managementClient(request)
 	posted := 0
 	stale := 0
+	failed := 0
 	for _, recipient := range recipients {
 		connectionIDs, err := h.connectionIDsForAgent(ctx, recipient)
 		if err != nil {
@@ -344,8 +346,17 @@ func (h handler) route(ctx context.Context, request events.APIGatewayWebsocketPr
 				Data:         []byte(payload),
 			})
 			if err != nil {
-				stale++
-				_ = h.deleteConnection(ctx, connectionID)
+				// Only a 410 Gone means the connection is actually closed and its
+				// record should be removed. Transient failures (throttling,
+				// timeouts, oversized payloads) must not delete a live connection,
+				// or we would silently de-route and de-authenticate a healthy peer.
+				var gone *apigwtypes.GoneException
+				if errors.As(err, &gone) {
+					stale++
+					_ = h.deleteConnection(ctx, connectionID)
+				} else {
+					failed++
+				}
 				continue
 			}
 			posted++
@@ -357,6 +368,7 @@ func (h handler) route(ctx context.Context, request events.APIGatewayWebsocketPr
 		"recipient_count":  len(recipients),
 		"posted_count":     posted,
 		"stale_count":      stale,
+		"failed_count":     failed,
 		"connection_table": h.connectionsTable,
 	})
 }

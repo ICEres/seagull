@@ -33,11 +33,19 @@ class OpenAIProviderAdapter:
         if not api_key:
             raise RuntimeError("OpenAI API key is not configured")
 
-        body = {
+        body: dict[str, Any] = {
             "model": request.model,
-            "input": openai_input_text(request),
+            # Send role-tagged messages instead of one flattened string so that a
+            # user message cannot spoof a "System:" turn.
+            "input": openai_input_messages(request),
             "max_output_tokens": request.max_output_tokens,
+            "temperature": request.temperature,
         }
+        instructions = openai_instructions(request)
+        if instructions:
+            body["instructions"] = instructions
+        if request.response_format == "json":
+            body["text"] = {"format": {"type": "json_object"}}
         http_request = Request(
             self._endpoint,
             data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
@@ -60,6 +68,14 @@ class OpenAIProviderAdapter:
                 pass
             raise RuntimeError(f"OpenAI request failed: {message}") from exc
 
+        status = string_value(payload.get("status")) or "completed"
+        if status != "completed":
+            # A "failed"/"incomplete"/"cancelled" (or still in-progress) response is
+            # not a usable result; surface it as an error so the run is marked
+            # FAILED rather than silently returned as a successful completion.
+            detail = openai_incomplete_detail(payload) or status
+            raise RuntimeError(f"OpenAI run did not complete ({status}): {detail}")
+
         usage = payload.get("usage")
         if not isinstance(usage, dict):
             usage = {}
@@ -78,19 +94,40 @@ class OpenAIProviderAdapter:
         )
 
 
-def openai_input_text(request: ProviderRequest) -> str:
+def openai_input_messages(request: ProviderRequest) -> list[dict[str, str]]:
+    return [
+        {"role": message.role, "content": message.content}
+        for message in request.input_messages
+    ]
+
+
+def openai_instructions(request: ProviderRequest) -> str | None:
+    # System-controlled context is passed via `instructions` (not mixed into the
+    # user turns) so it is clearly attributed and not spoofable by message content.
     parts: list[str] = []
     if request.system_instructions:
-        parts.append(f"System:\n{request.system_instructions}")
+        parts.append(request.system_instructions)
     if request.system_instructions_ref:
         parts.append(f"System instructions ref:\n{request.system_instructions_ref}")
-    for message in request.input_messages:
-        parts.append(f"{message.role}:\n{message.content}")
     if request.context_refs:
         parts.append("Context refs:\n" + "\n".join(request.context_refs))
     if request.content_ref:
         parts.append(f"Content ref:\n{request.content_ref}")
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) or None
+
+
+def openai_incomplete_detail(payload: dict[str, Any]) -> str | None:
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = string_value(error.get("message"))
+        if message:
+            return message
+    details = payload.get("incomplete_details")
+    if isinstance(details, dict):
+        reason = string_value(details.get("reason"))
+        if reason:
+            return reason
+    return None
 
 
 def openai_output_text(payload: dict[str, Any]) -> str:

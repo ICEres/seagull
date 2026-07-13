@@ -97,10 +97,21 @@ class SocialApiService:
         existing = self._repository.get_human_identity_by_provider_subject(provider, subject)
         now = self._clock()
         if existing is not None:
+            # Only overwrite stored fields when a fresh value is actually supplied;
+            # a request whose JWT lacks email/name must not wipe the stored ones.
+            resolved_email = clean_optional(email)
+            if resolved_email is None:
+                resolved_email = existing.email
+            resolved_display_name = clean_optional(display_name)
+            if resolved_display_name is None:
+                resolved_display_name = existing.display_name
+            if resolved_email == existing.email and resolved_display_name == existing.display_name:
+                # Nothing changed; avoid a DynamoDB write on every authenticated request.
+                return existing
             updated = replace(
                 existing,
-                email=clean_optional(email),
-                display_name=clean_optional(display_name),
+                email=resolved_email,
+                display_name=resolved_display_name,
                 updated_at=now,
             )
             self._repository.put_human_identity(updated)

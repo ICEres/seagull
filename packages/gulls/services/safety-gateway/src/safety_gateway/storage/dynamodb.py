@@ -31,8 +31,21 @@ class DynamoDbSafetyAuditRepository:
             )
             items = result.get("Items", [])
         else:
-            result = self._table.scan(Limit=limit)
-            items = sorted(result.get("Items", []), key=lambda item: item.get("created_at", ""), reverse=True)
+            # scan(Limit=n) returns an arbitrary first page, so sorting only that
+            # page yields an arbitrary subset rather than the newest records. Read
+            # every page, then sort globally and take the newest `limit`. (A GSI on
+            # a constant partition key + created_at would avoid the full scan at
+            # scale; this keeps the admin listing correct in the meantime.)
+            items = []
+            scan_kwargs: dict[str, Any] = {}
+            while True:
+                result = self._table.scan(**scan_kwargs)
+                items.extend(result.get("Items", []))
+                last_key = result.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+                scan_kwargs["ExclusiveStartKey"] = last_key
+            items = sorted(items, key=lambda item: item.get("created_at", ""), reverse=True)
 
         return tuple(item_to_audit_record(item) for item in items[:limit])
 

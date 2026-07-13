@@ -559,7 +559,8 @@ def required_string(value: str, field_name: str) -> str:
 
 
 def require_non_negative_int(value: int, field_name: str) -> None:
-    if not isinstance(value, int) or value < 0:
+    # bool is a subclass of int; reject it so True/False are not accepted as 1/0.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ProtocolError(f"{field_name} must be a non-negative integer")
 
 

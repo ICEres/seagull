@@ -810,15 +810,19 @@ class LocalMessageLoopTest(TestCase):
                 "node_id": "node_reviewer",
             }
         )
-        repeat_registration = self.api.agent_registration(
-            {
-                "handle": "@reviewer:seagull.local",
-                "scopes": ["agent:read"],
-            }
-        )
+        # Re-registering an existing handle must not mint a fresh token: the
+        # route is unauthenticated and would otherwise allow impersonation.
+        with self.assertRaises(ApiError) as repeat_registration:
+            self.api.agent_registration(
+                {
+                    "handle": "@reviewer:seagull.local",
+                    "scopes": ["agent:read"],
+                }
+            )
+        self.assertEqual(409, repeat_registration.exception.status_code)
+        self.assertEqual("conflict", repeat_registration.exception.error)
         self.assertTrue(researcher_registration["created"])
         self.assertTrue(reviewer_registration["created"])
-        self.assertFalse(repeat_registration["created"])
         self.assertTrue(researcher_registration["token"].startswith("sga_"))
         self.assertEqual("@reviewer:seagull.local", reviewer_registration["record"]["agent_handle"])
         self.assertEqual("reviewer runtime", reviewer_registration["record"]["name"])

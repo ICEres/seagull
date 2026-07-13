@@ -55,6 +55,8 @@ from message_hub.domain.models import (
     ThreadRecord,
     ThreadSummary,
     WorkflowTraceEntry,
+    TASK_INACTIVE_STATES,
+    task_lifecycle_allows,
     utc_now,
 )
 from message_hub.domain.safety import (
@@ -85,6 +87,22 @@ class NotFoundError(MessageHubError):
 
 class ForbiddenDeliveryError(MessageHubError):
     """Raised when an agent tries to mutate another agent's delivery."""
+
+
+class InvalidTaskTransitionError(MessageHubError):
+    """Raised when a task state change is not a valid lifecycle transition."""
+
+
+# Settlement states credit the worker's reputation and release funds, so only the
+# requester (the counterparty) may set them; otherwise a worker could self-award
+# acceptance/completion and inflate its own reputation.
+_REQUESTER_ONLY_TASK_STATES = frozenset(
+    {
+        TaskState.RESULT_ACCEPTED,
+        TaskState.RELEASED,
+        TaskState.COMPLETED,
+    }
+)
 
 
 class ForbiddenPayloadError(MessageHubError):
@@ -544,6 +562,10 @@ class MessageHubService:
         existing_thread = self._repository.get_thread(resolved_thread_id)
         if thread_id is not None and existing_thread is None:
             raise NotFoundError(f"thread not found: {thread_id}")
+        if existing_thread is not None and sender.agent_id not in existing_thread.participants:
+            # Only current participants may post into an existing thread; otherwise
+            # any agent could inject messages into a conversation by guessing its id.
+            raise ForbiddenDeliveryError("sender is not a participant of this thread")
 
         participants = {sender.agent_id, *(agent.agent_id for agent in recipients)}
         if existing_thread is None:
@@ -610,7 +632,14 @@ class MessageHubService:
     def get_inbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
         agent = self._require_agent_by_handle(handle)
         deliveries = self._repository.list_deliveries_by_recipient(agent.agent_id, limit=limit)
-        return tuple(self._inbox_item_for_delivery(delivery) for delivery in deliveries)
+        # Deliveries held for human review must not surface their content to the
+        # recipient agent until a human releases them; otherwise the review gate
+        # is advisory only. The human-facing review surface reads them directly.
+        return tuple(
+            self._inbox_item_for_delivery(delivery)
+            for delivery in deliveries
+            if delivery.status != DeliveryStatus.NEEDS_REVIEW
+        )
 
     def get_outbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
         agent = self._require_agent_by_handle(handle)
@@ -1645,6 +1674,7 @@ class MessageHubService:
         task = self._require_task(task_id)
         actor = self._require_task_actor(task, actor_handle)
         task_state = normalize_task_state(state)
+        self._require_valid_task_transition(task, task_state, actor)
         now = self._clock()
         updated = replace(task, state=task_state, updated_at=now)
         self._repository.update_task(updated)
@@ -1703,6 +1733,13 @@ class MessageHubService:
             raise ForbiddenDeliveryError("requester cannot return its own task result")
 
         task_state = normalize_task_state(state)
+        # The worker returns the result, so it may drive the task to its own
+        # completion states directly; but it must not re-open or overwrite a task
+        # that has already reached a terminal state.
+        if task.state in TASK_INACTIVE_STATES:
+            raise InvalidTaskTransitionError(
+                f"cannot return a result for a task in terminal state {task.state.value}"
+            )
         normalized_artifact_refs = tuple(normalize_required(ref, "artifact_ref") for ref in artifact_refs)
         normalized_tool_use_summary_refs = tuple(
             normalize_required(ref, "tool_use_summary_ref")
@@ -2048,6 +2085,12 @@ class MessageHubService:
         note: str | None = None,
     ) -> AgentDecisionResult:
         delivery = self._require_delivery_for_recipient(delivery_id, agent_handle)
+        if delivery.status == DeliveryStatus.NEEDS_REVIEW:
+            # The recipient must not reply to, act on, or ack a delivery that is
+            # being held for human review until a human releases it.
+            raise ForbiddenDeliveryError(
+                "delivery is held for human review and cannot be acted on until released"
+            )
         normalized_decision = normalize_agent_decision(decision)
         normalized_refs = tuple(normalize_message_ref(ref) for ref in refs)
         now = self._clock()
@@ -2461,6 +2504,26 @@ class MessageHubService:
         if actor.agent_id not in allowed_agent_ids:
             raise ForbiddenDeliveryError("agent cannot update this task")
         return actor
+
+    def _require_valid_task_transition(
+        self,
+        task: TaskRecord,
+        next_state: TaskState,
+        actor: Agent,
+        *,
+        requester_only_settlement: bool = True,
+    ) -> None:
+        if next_state == task.state:
+            return
+        if not task_lifecycle_allows(task.state, next_state):
+            raise InvalidTaskTransitionError(
+                f"cannot transition task from {task.state.value} to {next_state.value}"
+            )
+        if requester_only_settlement and next_state in _REQUESTER_ONLY_TASK_STATES:
+            if actor.agent_id != task.requester_agent_id:
+                raise ForbiddenDeliveryError(
+                    f"only the task requester can set task state {next_state.value}"
+                )
 
     def _consume_tool_grant_for_request(
         self,

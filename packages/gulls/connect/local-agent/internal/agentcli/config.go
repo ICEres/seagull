@@ -15,6 +15,7 @@ type Config struct {
 	AgentHandle  string
 	Token        string
 	ContextDir   string
+	StreamURL    string
 	PollInterval time.Duration
 	ResponseRule ResponseRuleResolution
 }
@@ -23,6 +24,7 @@ type ConfigOverrides struct {
 	APIURL              string
 	AgentHandle         string
 	ContextDir          string
+	StreamURL           string
 	PollIntervalSeconds *float64
 }
 
@@ -36,6 +38,12 @@ func LoadConfig(envList []string, overrides ConfigOverrides) (Config, error) {
 	apiURL := firstClean(overrides.APIURL, envValue(env, fileEnv, "SEAGULL_API_URL"))
 	agentHandle := firstClean(overrides.AgentHandle, envValue(env, fileEnv, "SEAGULL_AGENT_HANDLE"))
 	contextDir := firstClean(overrides.ContextDir, envValue(env, fileEnv, "SEAGULL_AGENT_CONTEXT_DIR"))
+	streamURL := firstClean(overrides.StreamURL, envValue(env, fileEnv, "SEAGULL_STREAM_URL"))
+	if streamURL != "" {
+		if err := ValidateStreamURL(streamURL); err != nil {
+			return Config{}, err
+		}
+	}
 
 	missing := []string{}
 	if apiURL == "" {
@@ -78,6 +86,7 @@ func LoadConfig(envList []string, overrides ConfigOverrides) (Config, error) {
 		AgentHandle:  agentHandle,
 		Token:        envValue(env, fileEnv, "SEAGULL_CONNECTOR_TOKEN"),
 		ContextDir:   contextDir,
+		StreamURL:    streamURL,
 		PollInterval: time.Duration(intervalSeconds * float64(time.Second)),
 		ResponseRule: responseRules,
 	}, nil

@@ -1,4 +1,4 @@
-.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test ai-provider-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
+.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test ai-provider-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build mac-app-build mac-app-test hubstub-run message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-push-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
 
 setup:
 	./scripts/setup-local.sh
@@ -77,6 +77,17 @@ local-agent-build:
 	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/gulls ./cmd/gulls
 	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go build -o bin/seagull ./cmd/seagull
 
+mac-app-build:
+	cd packages/gulls/apps/mac && xcodegen generate
+	cd packages/gulls/apps/mac && DEVELOPER_DIR="$${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" xcodebuild -project Gulls.xcodeproj -scheme Gulls -configuration Release -derivedDataPath build/DerivedData build
+
+mac-app-test:
+	cd packages/gulls/apps/mac && xcodegen generate
+	cd packages/gulls/apps/mac && DEVELOPER_DIR="$${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" xcodebuild -project Gulls.xcodeproj -scheme Gulls -derivedDataPath build/DerivedData test
+
+hubstub-run:
+	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go run ./cmd/hubstub
+
 message-router-build:
 	./scripts/build-message-router.sh
 
@@ -113,6 +124,9 @@ aws-dev-web-smoke:
 
 aws-dev-router-smoke:
 	./scripts/smoke-router-ws.mjs "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_router_websocket_url)" "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_api_url)"
+
+aws-dev-push-smoke:
+	./scripts/smoke-hub-push-ws.mjs "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_router_websocket_url)" "$$(terraform -chdir=infra/terraform/envs/dev output -raw message_api_url)"
 
 aws-dev-destroy:
 	terraform -chdir=infra/terraform/envs/dev destroy

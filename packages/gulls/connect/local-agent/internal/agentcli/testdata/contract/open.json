@@ -1,0 +1,9 @@
+{
+  "context_path": "<CONTEXT_DIR>/delivery_1.md",
+  "delivery": {
+    "delivery_id": "delivery_1",
+    "message_id": "message_1",
+    "status": "delivered",
+    "thread_id": "thread_1"
+  }
+}

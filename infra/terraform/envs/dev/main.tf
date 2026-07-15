@@ -397,6 +397,22 @@ resource "aws_iam_role_policy" "agent_worker" {
           "sqs:GetQueueAttributes"
         ]
         Resource = aws_sqs_queue.agent_jobs.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Query",
+          "dynamodb:DeleteItem"
+        ]
+        Resource = [
+          module.message_router.connections_table_arn,
+          "${module.message_router.connections_table_arn}/index/*"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["execute-api:ManageConnections"]
+        Resource = "${module.message_router.websocket_api_execution_arn}/*/POST/@connections/*"
       }
       ],
       [
@@ -424,9 +440,11 @@ resource "aws_lambda_function" "agent_worker" {
     variables = {
       AGENTS_TABLE                       = module.message_hub_storage.table_names.agents
       APP_NAME                           = "${local.message_hub_prefix}-agent-worker"
+      CONNECTIONS_TABLE                  = module.message_router.connections_table_name
       DELIVERIES_TABLE                   = module.message_hub_storage.table_names.deliveries
       MESSAGES_TABLE                     = module.message_hub_storage.table_names.messages
       SEAGULL_WEBHOOK_SIGNING_SECRET_ARN = aws_secretsmanager_secret.agent_webhook_signing.arn
+      WEBSOCKET_CALLBACK_URL             = module.message_router.websocket_callback_url
     }
   }
 

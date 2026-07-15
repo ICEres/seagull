@@ -2430,8 +2430,9 @@ def enqueue_delivery_events(
     for delivery, recipient in zip(deliveries, recipients):
         if delivery.get("status") != "delivered":
             continue
-        if recipient.get("trigger_mode", "manual") != "webhook":
-            continue
+        # All delivered recipients get an event (not just webhook mode): the
+        # agent worker decides per recipient — webhook POST for webhook mode,
+        # WebSocket push to any live router connections for everyone.
 
         event = delivery_created_event(delivery=delivery, message=message, sender=sender, recipient=recipient)
         sqs.send_message(

@@ -14,6 +14,39 @@ new Seagull message
 
 It does not auto-run commands, auto-edit files, or auto-reply to messages.
 
+## GUI
+
+The Gulls macOS app at [`packages/gulls/apps/mac`](../../apps/mac/README.md)
+bundles this CLI and drives it via `--json`; the CLI is for coders, the app
+covers the same core inbox flow for everyone else. The `--json` output shapes
+are a compatibility contract pinned by golden fixtures in
+`internal/agentcli/testdata/contract/` (see `cli_contract_test.go`; regenerate
+with `-update` and update the app's models together).
+
+For manual testing without a hosted hub, `go run ./cmd/hubstub` serves a fake
+Message Hub on `:8200` (or `make hubstub-run` from the repo root), including a
+WebSocket push endpoint at `ws://localhost:8200/stream`.
+
+## Streaming (WebSocket push)
+
+Set `SEAGULL_STREAM_URL` (or `--stream-url`) to a `ws://`/`wss://` URL — for
+the deployed hub, the message router's WebSocket URL — and:
+
+- `gulls watch` connects to the stream and polls immediately on every pushed
+  event and on every reconnect; the timed poll stretches to a 2-minute
+  fallback while the stream is healthy. Unset, `watch` polls exactly as
+  before. The model is push = wake-up, poll = truth: events carry no state,
+  the inbox fetch stays authoritative.
+- `gulls stream` is the low-level, state-free subscription (no seen-set, no
+  context files): one NDJSON line per lifecycle change or event with
+  `--json` (`stream.connected` / `stream.event` / `stream.disconnected` —
+  shapes pinned in `testdata/contract/stream_*.json`). The Gulls macOS app
+  consumes this.
+
+The connector token is sent as an `Authorization: Bearer` header on the
+WebSocket handshake and needs the `agent:inbox` scope (registration-issued
+tokens have it by default).
+
 ## Configuration
 
 Set connector configuration outside prompt text:

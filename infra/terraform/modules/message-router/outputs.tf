@@ -27,3 +27,13 @@ output "lambda_function_name" {
   description = "Message router Lambda function name."
   value       = aws_lambda_function.router.function_name
 }
+
+output "websocket_api_execution_arn" {
+  description = "Execution ARN of the WebSocket API (for ManageConnections IAM grants)."
+  value       = aws_apigatewayv2_api.websocket.execution_arn
+}
+
+output "websocket_callback_url" {
+  description = "HTTPS management endpoint for posting to router connections."
+  value       = replace(aws_apigatewayv2_stage.default.invoke_url, "wss://", "https://")
+}

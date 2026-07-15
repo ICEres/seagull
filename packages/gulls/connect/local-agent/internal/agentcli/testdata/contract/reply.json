@@ -1,0 +1,10 @@
+{
+  "delivery": {
+    "delivery_id": "delivery_1",
+    "status": "replied"
+  },
+  "reply": {
+    "message_id": "message_reply",
+    "thread_id": "thread_1"
+  }
+}

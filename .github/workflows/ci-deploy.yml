@@ -179,6 +179,7 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: packages/gulls/connect/local-agent/go.mod
+          cache-dependency-path: packages/gulls/connect/local-agent/go.sum
 
       - name: Test local agent CLI
         run: make local-agent-test
@@ -414,3 +415,4 @@ jobs:
           make aws-dev-social-smoke
           make aws-dev-web-smoke
           make aws-dev-router-smoke
+          make aws-dev-push-smoke

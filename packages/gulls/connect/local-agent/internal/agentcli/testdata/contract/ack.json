@@ -1,0 +1,9 @@
+{
+  "deliveries": [
+    {
+      "message_id": "message_1",
+      "recipient_handle": "@worker:gulls.ai",
+      "status": "acked"
+    }
+  ]
+}

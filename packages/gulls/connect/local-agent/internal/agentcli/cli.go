@@ -1,23 +1,32 @@
 package agentcli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 type globalOptions struct {
 	APIURL      string
 	AgentHandle string
 	ContextDir  string
+	StreamURL   string
 	JSON        bool
 	ProgramName string
 }
 
 const generatedApprovedReplyNote = "generated local agent connector reply approved by explicit draft-reply --approve"
+
+// Version is the connector build version, overridable at build time via
+// -ldflags "-X seagull/packages/gulls/connect/local-agent/internal/agentcli.Version=...".
+var Version = "dev"
 
 func Main(args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) int {
 	return MainWithProgram("gulls", args, stdout, stderr, env, client)
@@ -61,6 +70,10 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 	command := remaining[0]
 	commandArgs := remaining[1:]
 	switch command {
+	case "version":
+		payload := map[string]any{"program": global.ProgramName, "version": Version}
+		printJSONOrText(stdout, global.JSON, payload, global.ProgramName+" version "+Version)
+		return 0, nil
 	case "whoami":
 		config, client, err := loadRuntime(global, env, client, nil)
 		if err != nil {
@@ -383,8 +396,27 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 			}
 			return 0, nil
 		}
+		if config.StreamURL != "" {
+			fmt.Fprintf(stdout, "Watching %s via stream %s (fallback poll every %gs).\n", config.AgentHandle, config.StreamURL, config.PollInterval.Seconds())
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return 0, WatchLoopStreaming(ctx, client, config, *limit, *notify, nil, stdout)
+		}
 		fmt.Fprintf(stdout, "Watching %s every %gs.\n", config.AgentHandle, config.PollInterval.Seconds())
 		return 0, WatchLoop(client, config, *limit, *notify, nil)
+	case "stream":
+		fs := commandFlagSet("stream", stderr)
+		if err := parseCommand(fs, commandArgs); err != nil {
+			return 0, err
+		}
+		config, _, err := loadRuntime(global, env, client, nil)
+		if err != nil {
+			return 0, err
+		}
+		if config.StreamURL == "" {
+			return 0, fmt.Errorf("config error: missing required config: SEAGULL_STREAM_URL")
+		}
+		return 0, runStreamCommand(config, global.JSON, stdout)
 	default:
 		return 0, fmt.Errorf("unknown command: %s", command)
 	}
@@ -400,6 +432,7 @@ func parseGlobal(programName string, args []string, stderr io.Writer) (globalOpt
 	fs.StringVar(&opts.APIURL, "api-url", "", "Seagull Message Hub URL. Defaults to SEAGULL_API_URL.")
 	fs.StringVar(&opts.AgentHandle, "agent-handle", "", "Local agent handle. Defaults to SEAGULL_AGENT_HANDLE.")
 	fs.StringVar(&opts.ContextDir, "context-dir", "", "Context handoff directory. Defaults to SEAGULL_AGENT_CONTEXT_DIR or .seagull/agent.")
+	fs.StringVar(&opts.StreamURL, "stream-url", "", "WebSocket stream URL (ws:// or wss://). Defaults to SEAGULL_STREAM_URL.")
 	fs.BoolVar(&opts.JSON, "json", false, "Print raw JSON where supported.")
 	if err := fs.Parse(args); err != nil {
 		return opts, nil, err
@@ -412,6 +445,7 @@ func loadRuntime(global globalOptions, env []string, client Client, interval *fl
 		APIURL:              global.APIURL,
 		AgentHandle:         global.AgentHandle,
 		ContextDir:          global.ContextDir,
+		StreamURL:           global.StreamURL,
 		PollIntervalSeconds: interval,
 	})
 	if err != nil {
@@ -557,6 +591,80 @@ func formatApprovedDraftResult(result DraftResult, decision map[string]any) stri
 	}
 	lines = append(lines, "", formatDecision(decision, "Replied"))
 	return strings.Join(lines, "\n")
+}
+
+// runStreamCommand runs the long-lived, state-free stream subscription:
+// one NDJSON line per lifecycle change or received event (with --json), or
+// human one-liners otherwise. It never writes the seen-delivery store or
+// context files — consumers (like the Gulls macOS app) treat each event as a
+// wake-up and fetch the inbox through their own pull path. Exits cleanly on
+// SIGINT/SIGTERM; exits with a runtime error if the very first connect is
+// rejected (bad URL or token missing the agent:inbox scope).
+func runStreamCommand(config Config, asJSON bool, stdout io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err := RunStream(ctx, config.StreamURL, config.Token, StreamCallbacks{
+		OnConnect: func() {
+			printStreamLine(stdout, asJSON, streamConnectedLine(config.StreamURL), "Stream connected: "+config.StreamURL)
+		},
+		OnEvent: func(raw []byte) {
+			line := streamEventLine(raw)
+			printStreamLine(stdout, asJSON, line, "Event: "+fmt.Sprintf("%v delivery=%v", line["event_type"], line["delivery_id"]))
+		},
+		OnDrop: func(dropErr error) {
+			printStreamLine(stdout, asJSON, streamDisconnectedLine(dropErr), fmt.Sprintf("Stream disconnected: %v", dropErr))
+		},
+	})
+	if err != nil && isStreamAuthError(err) {
+		return fmt.Errorf("stream connect rejected (check that the connector token has the agent:inbox scope): %w", err)
+	}
+	return err
+}
+
+func streamConnectedLine(streamURL string) map[string]any {
+	return map[string]any{"type": "stream.connected", "url": streamURL}
+}
+
+// streamEventLine builds the NDJSON line for a received event. The payload is
+// only a wake-up signal, so parse failures degrade to event_type "unknown"
+// rather than erroring.
+func streamEventLine(raw []byte) map[string]any {
+	line := map[string]any{"type": "stream.event", "event_type": "unknown"}
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return line
+	}
+	if eventType, ok := event["type"].(string); ok && eventType != "" {
+		line["event_type"] = eventType
+	}
+	if data, ok := event["data"].(map[string]any); ok {
+		for _, key := range []string{"delivery_id", "message_id", "thread_id"} {
+			if value, ok := data[key].(string); ok && value != "" {
+				line[key] = value
+			}
+		}
+	}
+	return line
+}
+
+func streamDisconnectedLine(err error) map[string]any {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	return map[string]any{"type": "stream.disconnected", "error": message}
+}
+
+// printStreamLine emits one compact NDJSON line (not indented like the other
+// commands: consumers read line-by-line).
+func printStreamLine(stdout io.Writer, asJSON bool, line map[string]any, text string) {
+	if asJSON {
+		payload, _ := json.Marshal(line)
+		fmt.Fprintln(stdout, string(payload))
+		return
+	}
+	fmt.Fprintln(stdout, text)
 }
 
 func printJSONOrText(stdout io.Writer, asJSON bool, result map[string]any, text string) {

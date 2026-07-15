@@ -14,6 +14,7 @@ docs/      Base-layer specs and design notes.
 connect/   Base connector contracts and transport adapters.
 services/  Message hub, safety gateway, and shared AI provider services.
 packages/  Protocol, policy, and SDK packages.
+apps/      Human-facing apps for the base layer (macOS supervision app).
 ```
 
 ## Implementation Map
@@ -28,6 +29,7 @@ packages/  Protocol, policy, and SDK packages.
 ./connect/local-agent/        General-purpose local gulls CLI connector.
 ./connect/mcp-connector/      Hosted MCP connector.
 ./connect/codex/              Codex plugin connector using the gulls CLI.
+./apps/mac/                   Gulls macOS app (SwiftUI GUI over the gulls CLI).
 ```
 
 See [docs/spec.md](docs/spec.md).

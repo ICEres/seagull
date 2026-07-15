@@ -45,10 +45,16 @@ APP_NAME = os.environ.get("APP_NAME", "seagull-message-hub-agent-worker")
 DELIVERIES_TABLE = os.environ.get("DELIVERIES_TABLE", "")
 MESSAGES_TABLE = os.environ.get("MESSAGES_TABLE", "")
 AGENTS_TABLE = os.environ.get("AGENTS_TABLE", "")
+# WebSocket push (optional): the message-router's connections table and the
+# API Gateway management endpoint (https form of the wss stage URL). When
+# unset, socket push is a no-op and the worker behaves exactly as before.
+CONNECTIONS_TABLE = os.environ.get("CONNECTIONS_TABLE", "")
+WEBSOCKET_CALLBACK_URL = os.environ.get("WEBSOCKET_CALLBACK_URL", "")
 WEBHOOK_SIGNING_SECRET = secret_env("SEAGULL_WEBHOOK_SIGNING_SECRET")
 INSECURE_WEBHOOK_SIGNING_SECRET = "dev-only-change-me"
 
 _DYNAMODB = None
+_MANAGEMENT_CLIENT = None
 
 
 class RetryableDispatchError(Exception):
@@ -86,6 +92,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 tables=tables,
                 http_post=post_json,
                 signing_secret=WEBHOOK_SIGNING_SECRET,
+                connections_table=connections_table(),
+                management_client=management_client(),
             )
         except RetryableDispatchError as exc:
             print(json.dumps({"level": "warning", "message": str(exc), "record": record.get("messageId")}))
@@ -104,6 +112,8 @@ def handle_delivery_event(
     http_post: Any,
     signing_secret: str,
     resolve_host: Callable[[str, int | None], list[str]] | None = None,
+    connections_table: Any = None,
+    management_client: Any = None,
 ) -> None:
     data = event.get("data") or {}
     delivery_id = data.get("delivery_id")
@@ -128,6 +138,28 @@ def handle_delivery_event(
     recipient = get_item(tables.agents, {"agent_id": recipient_agent_id})
     if message is None or recipient is None:
         mark_delivery_failure(tables.deliveries, delivery_id, "message or recipient no longer exists")
+        return
+
+    # WebSocket push first (best-effort wake-up to any live router
+    # connections): a failing webhook below must not delay it, and a retried
+    # record just re-pushes, which only costs the client an extra poll.
+    # Socket pushes never touch trigger_status — that field means "webhook
+    # sent" — and never fail the batch item; the client's fallback poll
+    # covers misses.
+    push_delivery_to_connections(
+        event,
+        delivery_id=delivery_id,
+        recipient_agent_id=recipient_agent_id,
+        connections_table=connections_table,
+        management_client=management_client,
+    )
+
+    # Webhook dispatch only applies to webhook recipients — trigger_mode
+    # "webhook", or a webhook_url on legacy records predating the field.
+    # Manual-mode recipients are done after the socket push; marking them
+    # failed below would corrupt trigger_status/retry_count for every
+    # socket-only delivery.
+    if recipient.get("trigger_mode", "manual") != "webhook" and not recipient.get("webhook_url"):
         return
 
     webhook_url = recipient.get("webhook_url")
@@ -165,6 +197,86 @@ def handle_delivery_event(
         raise RetryableDispatchError(f"webhook dispatch failed for {delivery_id}: {message}")
 
     mark_delivery_sent(tables.deliveries, delivery_id)
+
+
+def push_delivery_to_connections(
+    event: dict[str, Any],
+    *,
+    delivery_id: str,
+    recipient_agent_id: str,
+    connections_table: Any,
+    management_client: Any,
+) -> None:
+    if connections_table is None or management_client is None:
+        return
+
+    try:
+        result = connections_table.query(
+            IndexName="agent-index",
+            KeyConditionExpression="agent_id = :agent_id",
+            ExpressionAttributeValues={":agent_id": recipient_agent_id},
+        )
+        items = result.get("Items") or []
+    except Exception as exc:
+        print(json.dumps({"level": "warning", "message": f"connections query failed: {exc}", "delivery_id": delivery_id}))
+        return
+
+    body = json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    found = 0
+    posted = 0
+    stale = 0
+    for item in items:
+        connection_id = item.get("connection_id")
+        if not isinstance(connection_id, str) or not connection_id:
+            continue
+        found += 1
+        try:
+            management_client.post_to_connection(ConnectionId=connection_id, Data=body)
+            posted += 1
+        except Exception as exc:
+            if exception_code(exc) == "GoneException":
+                stale += 1
+                try:
+                    connections_table.delete_item(Key={"connection_id": connection_id})
+                except Exception as delete_exc:
+                    print(json.dumps({"level": "warning", "message": f"stale connection cleanup failed: {delete_exc}"}))
+            else:
+                print(json.dumps({"level": "warning", "message": f"socket push failed: {exc}", "delivery_id": delivery_id}))
+
+    print(json.dumps({
+        "level": "info",
+        "message": "socket push",
+        "delivery_id": delivery_id,
+        "connections_found": found,
+        "posted": posted,
+        "stale": stale,
+    }))
+
+
+def exception_code(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict):
+            return str(error.get("Code") or "")
+    return ""
+
+
+def connections_table() -> Any:
+    if not CONNECTIONS_TABLE:
+        return None
+    return dynamodb().Table(CONNECTIONS_TABLE)
+
+
+def management_client() -> Any:
+    global _MANAGEMENT_CLIENT
+    if not WEBSOCKET_CALLBACK_URL:
+        return None
+    if _MANAGEMENT_CLIENT is None:
+        import boto3
+
+        _MANAGEMENT_CLIENT = boto3.client("apigatewaymanagementapi", endpoint_url=WEBSOCKET_CALLBACK_URL)
+    return _MANAGEMENT_CLIENT
 
 
 def post_json(endpoint: VettedWebhookEndpoint | str, body: bytes, headers: dict[str, str]) -> int:

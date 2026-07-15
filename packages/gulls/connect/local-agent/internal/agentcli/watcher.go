@@ -1,13 +1,17 @@
 package agentcli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,6 +71,66 @@ func WatchLoop(client Client, config Config, limit int, notify bool, notifier No
 			return err
 		}
 		time.Sleep(config.PollInterval)
+	}
+}
+
+// streamHealthyPollInterval is the stretched fallback cadence while the
+// stream is connected: push provides the latency, poll provides the truth.
+const streamHealthyPollInterval = 2 * time.Minute
+
+// WatchLoopStreaming is WatchLoop with a WebSocket wake-up source. Every
+// stream event (and every reconnect) triggers an immediate PollOnce through
+// the exact same path as timed polls; the timer keeps running as a fallback,
+// stretched while the stream is healthy. Stream failures never stop the
+// watch — it degrades to plain polling.
+func WatchLoopStreaming(ctx context.Context, client Client, config Config, limit int, notify bool, notifier Notifier, status io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if status == nil {
+		status = io.Discard
+	}
+
+	wake := NewWakeChannel()
+	var healthy atomic.Bool
+	go func() {
+		err := RunStream(ctx, config.StreamURL, config.Token, StreamCallbacks{
+			OnConnect: func() {
+				healthy.Store(true)
+				fmt.Fprintln(status, "Stream connected.")
+				Wake(wake)
+			},
+			OnEvent: func(raw []byte) {
+				Wake(wake)
+			},
+			OnDrop: func(dropErr error) {
+				healthy.Store(false)
+				fmt.Fprintf(status, "Stream disconnected: %v\n", dropErr)
+			},
+		})
+		healthy.Store(false)
+		if err != nil {
+			fmt.Fprintf(status, "Stream stopped: %v (continuing with polling)\n", err)
+		}
+	}()
+
+	for {
+		if _, err := PollOnce(client, config, limit, notify, notifier); err != nil {
+			return err
+		}
+		interval := config.PollInterval
+		if healthy.Load() && interval < streamHealthyPollInterval {
+			interval = streamHealthyPollInterval
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-wake:
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }
 

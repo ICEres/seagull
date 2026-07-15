@@ -1,0 +1,59 @@
+name: Gulls
+options:
+  bundleIdPrefix: ai.gulls
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_APP_SANDBOX: NO
+    ENABLE_HARDENED_RUNTIME: NO
+
+targets:
+  Gulls:
+    type: application
+    platform: macOS
+    sources:
+      - Gulls
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.gulls.mac
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    postBuildScripts:
+      - name: Bundle gulls CLI
+        script: |
+          "$SRCROOT/scripts/build-gulls-binary.sh"
+        basedOnDependencyAnalysis: false
+
+  GullsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - GullsTests
+    dependencies:
+      - target: Gulls
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.gulls.mac.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Gulls:
+    build:
+      targets:
+        Gulls: all
+        GullsTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - GullsTests

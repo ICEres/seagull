@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "current_message": {
+        "content_inline": "Please review the deploy notes."
+      },
+      "delivery": {
+        "delivery_id": "delivery_1",
+        "message_id": "message_1",
+        "status": "delivered",
+        "thread_id": "thread_1"
+      },
+      "message": {
+        "content_inline": "Please review the deploy notes.",
+        "message_id": "message_1",
+        "sender_agent_id": "agent_alice",
+        "thread_id": "thread_1"
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "agent": {
+    "handle": "@worker:gulls.ai",
+    "status": "active",
+    "trigger_mode": "manual"
+  }
+}

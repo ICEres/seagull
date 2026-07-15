@@ -1,0 +1,15 @@
+{
+  "applied_rules": {
+    "max_reply_chars": 1200,
+    "reply_posture": "draft_reply",
+    "schema_version": "seagull.response_rules.v1",
+    "source": "connector_config"
+  },
+  "delivery_decision_submitted": false,
+  "delivery_id": "delivery_1",
+  "draft": "I can help with this. I received: Please review the deploy notes.",
+  "draft_sent": false,
+  "outcome": "draft_reply",
+  "reason": "draft generated from connector response rules",
+  "trigger_labels": null
+}

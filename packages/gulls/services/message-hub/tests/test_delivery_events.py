@@ -407,6 +407,184 @@ class AgentWorkerTest(TestCase):
         self.assertIn("insecure development placeholder", delivery["last_error"])
 
 
+class AgentWorkerSocketPushTest(TestCase):
+    def make_tables(self, *, trigger_mode: str = "manual", webhook_url: str | None = None) -> "FakeTables":
+        agent: dict[str, object] = {"agent_id": "agent_2", "trigger_mode": trigger_mode}
+        if webhook_url is not None:
+            agent["webhook_url"] = webhook_url
+        return FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "retry_count": 0,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": agent},
+        )
+
+    def test_manual_recipient_gets_socket_push_without_trigger_status(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="manual")
+        connections = FakeConnectionsTable(
+            [
+                {"connection_id": "conn_1", "agent_id": "agent_2"},
+                {"connection_id": "conn_2", "agent_id": "agent_2"},
+                {"connection_id": "conn_other", "agent_id": "agent_9"},
+            ]
+        )
+        management = FakeManagementClient()
+        webhook_calls: list[object] = []
+
+        worker.handle_delivery_event(
+            {"type": "seagull.delivery.created.v1", "data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: webhook_calls.append(url) or 204,
+            signing_secret="test-secret",
+            connections_table=connections,
+            management_client=management,
+        )
+
+        self.assertEqual(["conn_1", "conn_2"], [connection_id for connection_id, _ in management.posted])
+        self.assertEqual([], webhook_calls)
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertNotIn("trigger_status", delivery)
+        self.assertNotIn("last_error", delivery)
+        self.assertEqual(0, delivery["retry_count"])
+
+    def test_manual_recipient_without_push_config_is_a_no_op(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="manual")
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: 204,
+            signing_secret="test-secret",
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertNotIn("trigger_status", delivery)
+        self.assertNotIn("last_error", delivery)
+
+    def test_gone_connection_is_deleted(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="manual")
+        connections = FakeConnectionsTable(
+            [
+                {"connection_id": "conn_gone", "agent_id": "agent_2"},
+                {"connection_id": "conn_live", "agent_id": "agent_2"},
+            ]
+        )
+        management = FakeManagementClient(gone={"conn_gone"})
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: 204,
+            signing_secret="test-secret",
+            connections_table=connections,
+            management_client=management,
+        )
+
+        self.assertEqual(["conn_gone"], connections.deleted)
+        self.assertEqual(["conn_live"], [connection_id for connection_id, _ in management.posted])
+
+    def test_socket_push_failure_never_raises(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="manual")
+        connections = FakeConnectionsTable([{"connection_id": "conn_1", "agent_id": "agent_2"}])
+        management = FakeManagementClient(fail=True)
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: 204,
+            signing_secret="test-secret",
+            connections_table=connections,
+            management_client=management,
+        )
+
+        delivery = tables.deliveries.items["delivery_1"]
+        self.assertNotIn("trigger_status", delivery)
+
+    def test_webhook_recipient_gets_socket_push_and_webhook(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="webhook", webhook_url="https://runner.example.com/seagull")
+        connections = FakeConnectionsTable([{"connection_id": "conn_1", "agent_id": "agent_2"}])
+        management = FakeManagementClient()
+        webhook_calls: list[object] = []
+
+        worker.handle_delivery_event(
+            {"type": "seagull.delivery.created.v1", "data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda endpoint, body, headers: webhook_calls.append(endpoint) or 204,
+            signing_secret="test-secret",
+            resolve_host=public_resolver,
+            connections_table=connections,
+            management_client=management,
+        )
+
+        self.assertEqual(1, len(management.posted))
+        self.assertEqual(1, len(webhook_calls))
+        self.assertEqual("sent", tables.deliveries.items["delivery_1"]["trigger_status"])
+
+    def test_already_sent_delivery_skips_socket_push(self) -> None:
+        worker = load_agent_worker()
+        tables = self.make_tables(trigger_mode="manual")
+        tables.deliveries.items["delivery_1"]["trigger_status"] = "sent"
+        connections = FakeConnectionsTable([{"connection_id": "conn_1", "agent_id": "agent_2"}])
+        management = FakeManagementClient()
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: 204,
+            signing_secret="test-secret",
+            connections_table=connections,
+            management_client=management,
+        )
+
+        self.assertEqual([], management.posted)
+
+
+class FakeConnectionsTable:
+    def __init__(self, items: list[dict[str, str]]) -> None:
+        self.items = items
+        self.deleted: list[str] = []
+
+    def query(self, *, IndexName: str, KeyConditionExpression: str, ExpressionAttributeValues: dict[str, str]) -> dict[str, object]:
+        assert IndexName == "agent-index"
+        agent_id = ExpressionAttributeValues[":agent_id"]
+        return {"Items": [item for item in self.items if item["agent_id"] == agent_id]}
+
+    def delete_item(self, *, Key: dict[str, str]) -> None:
+        self.deleted.append(Key["connection_id"])
+
+
+class FakeGoneError(Exception):
+    def __init__(self) -> None:
+        super().__init__("gone")
+        self.response = {"Error": {"Code": "GoneException"}}
+
+
+class FakeManagementClient:
+    def __init__(self, *, gone: set[str] | None = None, fail: bool = False) -> None:
+        self.posted: list[tuple[str, bytes]] = []
+        self.gone = gone or set()
+        self.fail = fail
+
+    def post_to_connection(self, *, ConnectionId: str, Data: bytes) -> None:
+        if ConnectionId in self.gone:
+            raise FakeGoneError()
+        if self.fail:
+            raise RuntimeError("post_to_connection failed")
+        self.posted.append((ConnectionId, Data))
+
+
 def load_agent_worker():
     path = Path(__file__).resolve().parents[1] / "aws" / "agent_worker.py"
     spec = importlib.util.spec_from_file_location("agent_worker_under_test", path)

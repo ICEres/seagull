@@ -5,23 +5,32 @@ struct InboxListView: View {
 
     var body: some View {
         List(selection: $store.selectedDeliveryID) {
-            ForEach(store.items) { item in
+            ForEach(store.filteredItems) { item in
                 InboxRow(item: item)
                     .tag(item.id)
             }
         }
         .overlay {
-            if store.items.isEmpty {
-                ContentUnavailableView(
-                    "Inbox is empty",
-                    systemImage: "tray",
-                    description: Text(emptyDescription)
-                )
+            if store.filteredItems.isEmpty {
+                ContentUnavailableView(emptyTitle, systemImage: "tray", description: Text(emptyDescription))
             }
         }
     }
 
+    private var emptyTitle: String {
+        if store.items.isEmpty {
+            return "Inbox is empty"
+        }
+        if !store.searchText.isEmpty {
+            return "No matches"
+        }
+        return store.filter == .awaiting ? "Nothing awaiting you" : "Nothing here"
+    }
+
     private var emptyDescription: String {
+        if !store.items.isEmpty {
+            return "\(store.items.count) deliveries in other views — change the filter or search."
+        }
         if let lastRefresh = store.lastRefresh {
             return "Last checked \(lastRefresh.formatted(date: .omitted, time: .shortened))."
         }

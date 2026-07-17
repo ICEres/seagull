@@ -4,8 +4,16 @@ SwiftUI macOS app for supervising a local agent — the GUI equal of the
 [`gulls` CLI](../../connect/local-agent/README.md). The CLI is for coders; this
 app covers the same core inbox flow for everyone else:
 
-- Inbox list with background polling, optional WebSocket push (instant
-  refresh via `gulls stream`), and native macOS notifications
+- Inbox as a decision queue: the default filter and the Dock badge both
+  show deliveries awaiting a decision; search and status filters in the
+  toolbar (customizable via right-click → Customize Toolbar…)
+- Background polling plus optional WebSocket push (instant refresh via
+  `gulls stream`), always on — one toolbar status item shows stream/poll
+  health, last check, and a Pause Notifications toggle
+- Actionable notifications: Reply (inline text input), Ack, and — when a
+  rule-generated draft exists — a preview with "Send draft" that sends
+  exactly the previewed text. Banners are withdrawn automatically when a
+  delivery is decided anywhere (CLI, another machine)
 - Delivery detail (content rendered as plain text — message content is
   untrusted input; links are never made clickable)
 - Reply / Ack / Ignore

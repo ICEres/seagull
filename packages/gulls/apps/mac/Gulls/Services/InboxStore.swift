@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -20,9 +21,32 @@ final class InboxStore {
     var lastError: String?
     var lastRefresh: Date?
     var isRefreshing = false
-    private(set) var isPolling = false
+    var notificationsPaused = false
+    var filter: InboxFilter = .awaiting
+    var searchText = ""
 
-    // Stream health, shown in the toolbar. .off = no stream URL configured.
+    // The list is a decision queue first: default to what's waiting on you.
+    enum InboxFilter: String, CaseIterable, Identifiable {
+        case awaiting = "Awaiting decision"
+        case replied = "Replied"
+        case acked = "Acked"
+        case ignored = "Ignored"
+        case all = "All"
+
+        var id: String { rawValue }
+
+        func matches(_ status: String?) -> Bool {
+            switch self {
+            case .awaiting: return status == "delivered"
+            case .replied: return status == "replied"
+            case .acked: return status == "acked"
+            case .ignored: return status == "ignored"
+            case .all: return true
+            }
+        }
+    }
+
+    // Stream health, shown in the status menu. .off = no stream URL configured.
     enum StreamState: Equatable {
         case off, connecting, connected, down
     }
@@ -35,6 +59,21 @@ final class InboxStore {
     private var pendingRefresh = false
     private var notifiedIDs: Set<String>
     private let notifiedStoreURL: URL
+
+    var filteredItems: [InboxItem] {
+        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        return items.filter { item in
+            guard filter.matches(item.delivery.status) else { return false }
+            guard !query.isEmpty else { return true }
+            return item.senderDisplay.lowercased().contains(query)
+                || (item.bodyText?.lowercased().contains(query) ?? false)
+        }
+    }
+
+    // The number that matters: deliveries still waiting on a human decision.
+    var awaitingCount: Int {
+        items.filter { $0.delivery.status == "delivered" }.count
+    }
 
     var selectedItem: InboxItem? {
         guard let selectedDeliveryID else { return nil }
@@ -51,6 +90,18 @@ final class InboxStore {
         notifiedIDs = Self.loadNotifiedIDs(from: notifiedStoreURL)
         notifier.onSelectDelivery = { [weak self] deliveryID in
             self?.selectedDeliveryID = deliveryID
+            NSApp.activate()
+        }
+        notifier.onReply = { [weak self] deliveryID, text in
+            Task { await self?.reply(to: deliveryID, content: text) }
+        }
+        notifier.onAck = { [weak self] deliveryID in
+            Task { await self?.ack(deliveryID) }
+        }
+        notifier.onSendDraft = { [weak self] deliveryID, draft in
+            // Sends exactly the previewed draft text as a human-approved
+            // reply — never a regenerated draft the user hasn't seen.
+            Task { await self?.reply(to: deliveryID, content: draft) }
         }
     }
 
@@ -73,6 +124,8 @@ final class InboxStore {
                 items = fetched
                 lastRefresh = Date()
                 lastError = nil
+                updateBadge()
+                withdrawDecidedNotifications(fetched)
                 notifyAboutNewItems(fetched)
             } catch {
                 lastError = error.localizedDescription
@@ -87,7 +140,6 @@ final class InboxStore {
 
     func startPolling() {
         guard pollTask == nil, cli != nil else { return }
-        isPolling = true
         // Authorization must not gate the poll loop: the system prompt stays
         // open until the user answers, and polling should run regardless.
         Task { [notifier] in
@@ -105,7 +157,6 @@ final class InboxStore {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
-        isPolling = false
     }
 
     // While the stream is healthy, polling is only the safety net — stretch it.
@@ -174,15 +225,53 @@ final class InboxStore {
         }
     }
 
+    // MARK: - Badge & notifications
+
+    private func updateBadge() {
+        let count = awaitingCount
+        NSApplication.shared.dockTile.badgeLabel = count > 0 ? String(count) : nil
+    }
+
+    // Deliveries decided anywhere (CLI, another machine) get their banners
+    // withdrawn so notifications stay a trustworthy view of the queue.
+    private func withdrawDecidedNotifications(_ fetched: [InboxItem]) {
+        for item in fetched where item.delivery.status != "delivered" {
+            notifier.withdraw(deliveryID: item.id)
+        }
+    }
+
     private func notifyAboutNewItems(_ fetched: [InboxItem]) {
         var changed = false
-        for item in fetched where !notifiedIDs.contains(item.id) {
+        // Only deliveries awaiting a decision are notification-worthy.
+        for item in fetched where !notifiedIDs.contains(item.id) && item.delivery.status == "delivered" {
             notifiedIDs.insert(item.id)
             changed = true
-            notifier.notifyNewDelivery(id: item.id, sender: item.senderDisplay, snippet: item.bodyText)
+            if !notificationsPaused {
+                notifyWithDraftPreview(item)
+            }
         }
         if changed {
             persistNotifiedIDs()
+        }
+    }
+
+    // Best-effort: try to generate the rule-based draft so the banner can
+    // preview it and offer "Send draft". Any failure degrades to a plain
+    // notification — generation has no server-side side effects.
+    private func notifyWithDraftPreview(_ item: InboxItem) {
+        Task { [weak self] in
+            guard let self else { return }
+            var draft: String?
+            if let result = try? await self.draftReply(for: item.id, approve: false),
+               result.outcome == "draft_reply" {
+                draft = result.draft
+            }
+            self.notifier.notifyNewDelivery(
+                id: item.id,
+                sender: item.senderDisplay,
+                snippet: item.bodyText,
+                draft: draft
+            )
         }
     }
 

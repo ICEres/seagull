@@ -1,8 +1,14 @@
+import AppKit
 import SwiftUI
 
 struct MainWindow: View {
     @Bindable var store: InboxStore
     @Environment(\.openSettings) private var openSettings
+
+    @State private var showReplyComposer = false
+    @State private var replyText = ""
+    @State private var showDraftSheet = false
+    @State private var isBusy = false
 
     var body: some View {
         NavigationSplitView {
@@ -10,7 +16,7 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320)
         } detail: {
             if let item = store.selectedItem {
-                DeliveryDetailView(store: store, item: item)
+                DeliveryDetailView(item: item)
             } else {
                 ContentUnavailableView(
                     "No delivery selected",
@@ -21,31 +27,17 @@ struct MainWindow: View {
         }
         .navigationTitle("Gulls")
         .navigationSubtitle(subtitle)
-        .toolbar {
-            ToolbarItemGroup {
-                if store.streamState != .off {
-                    streamIndicator
-                }
-                if store.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
-                    Task { await store.refresh() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(!store.config.isConfigured)
-                Toggle(isOn: pollingBinding) {
-                    Label("Watch", systemImage: "eye")
-                }
-                .toggleStyle(.button)
-                .disabled(!store.config.isConfigured)
-                .help("Poll the inbox and show a notification for new deliveries")
-            }
-        }
+        .searchable(text: $store.searchText, prompt: "Search sender or content")
+        .toolbar(id: "gulls-main") { mainToolbar }
         .safeAreaInset(edge: .bottom) {
             if let error = store.lastError {
                 errorBar(error)
+            }
+        }
+        .sheet(isPresented: $showReplyComposer) { replyComposer }
+        .sheet(isPresented: $showDraftSheet) {
+            if let item = store.selectedItem {
+                DraftReplyView(store: store, deliveryID: item.id)
             }
         }
         .task {
@@ -60,20 +52,134 @@ struct MainWindow: View {
         }
     }
 
-    private var streamIndicator: some View {
-        Image(systemName: "bolt.fill")
-            .foregroundStyle(store.streamState == .connected ? Color.green : Color.secondary)
-            .help(streamHelp)
-    }
+    // MARK: - Toolbar
 
-    private var streamHelp: String {
-        switch store.streamState {
-        case .connected: return "Stream connected — new deliveries arrive instantly"
-        case .connecting: return "Stream connecting…"
-        case .down: return "Stream down — falling back to polling"
-        case .off: return ""
+    // Message actions live in the toolbar, Mail-style; the id-based form
+    // enables the native "Customize Toolbar…" sheet.
+    @ToolbarContentBuilder
+    private var mainToolbar: some CustomizableToolbarContent {
+        ToolbarItem(id: "reply", placement: .primaryAction) {
+            Button {
+                replyText = ""
+                showReplyComposer = true
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            .disabled(store.selectedItem == nil || isBusy)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Reply to the selected delivery (⌘R)")
+        }
+
+        ToolbarItem(id: "draft-reply", placement: .primaryAction) {
+            Button {
+                showDraftSheet = true
+            } label: {
+                Label("Draft reply", systemImage: "wand.and.stars")
+            }
+            .disabled(store.selectedItem == nil || isBusy)
+            .help("Generate a rule-based draft for the selected delivery")
+        }
+
+        ToolbarItem(id: "ack", placement: .primaryAction) {
+            Button {
+                runOnSelection { await store.ack($0) }
+            } label: {
+                Label("Ack", systemImage: "checkmark")
+            }
+            .disabled(store.selectedItem == nil || isBusy)
+            .help("Acknowledge the selected delivery")
+        }
+
+        ToolbarItem(id: "ignore", placement: .primaryAction) {
+            Button {
+                runOnSelection { _ = await store.ignore($0) }
+            } label: {
+                Label("Ignore", systemImage: "nosign")
+            }
+            .disabled(store.selectedItem == nil || isBusy)
+            .help("Ignore the selected delivery")
+        }
+
+        ToolbarItem(id: "context-file", placement: .secondaryAction) {
+            Button {
+                runOnSelection {
+                    if let result = await store.writeContextFile(for: $0) {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: result.contextPath)]
+                        )
+                    }
+                }
+            } label: {
+                Label("Write context file", systemImage: "doc.text")
+            }
+            .disabled(store.selectedItem == nil || isBusy)
+            .help("Write this delivery as markdown for your coding assistant")
+        }
+
+        ToolbarItem(id: "filter", placement: .secondaryAction) {
+            Menu {
+                Picker("Filter", selection: $store.filter) {
+                    ForEach(InboxStore.InboxFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .help("Filter the inbox by delivery status")
+        }
+
+        ToolbarItem(id: "status", placement: .secondaryAction) {
+            statusMenu
         }
     }
+
+    // One glanceable status item instead of separate refresh/watch/stream
+    // controls: polling and streaming always run; this shows their health.
+    private var statusMenu: some View {
+        Menu {
+            Text(streamStatusText)
+            if let lastRefresh = store.lastRefresh {
+                Text("Last checked \(lastRefresh.formatted(date: .omitted, time: .standard))")
+            }
+            Text("\(store.awaitingCount) awaiting decision")
+            Divider()
+            Button("Refresh Now") {
+                Task { await store.refresh() }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            Toggle("Pause Notifications", isOn: $store.notificationsPaused)
+        } label: {
+            Label("Status", systemImage: statusSymbol)
+                .foregroundStyle(statusColor)
+        }
+        .help(streamStatusText)
+    }
+
+    private var statusSymbol: String {
+        if store.isRefreshing { return "arrow.triangle.2.circlepath" }
+        return store.streamState == .off ? "circle.fill" : "bolt.fill"
+    }
+
+    private var statusColor: Color {
+        switch store.streamState {
+        case .connected: return .green
+        case .connecting, .down: return .orange
+        case .off: return store.lastError == nil ? .secondary : .red
+        }
+    }
+
+    private var streamStatusText: String {
+        switch store.streamState {
+        case .connected: return "Connected via stream — new deliveries arrive instantly"
+        case .connecting: return "Stream connecting — polling in the meantime"
+        case .down: return "Stream down — falling back to polling"
+        case .off: return "Polling every \(Int(max(store.config.pollInterval, 5)))s (no stream URL configured)"
+        }
+    }
+
+    // MARK: - Helpers
 
     private var subtitle: String {
         if let handle = store.agent?.handle {
@@ -82,17 +188,37 @@ struct MainWindow: View {
         return store.config.isConfigured ? store.config.agentHandle : "Not configured — open Settings (⌘,)"
     }
 
-    private var pollingBinding: Binding<Bool> {
-        Binding(
-            get: { store.isPolling },
-            set: { enabled in
-                if enabled {
-                    store.startPolling()
-                } else {
-                    store.stopPolling()
+    private func runOnSelection(_ action: @escaping (String) async -> Void) {
+        guard let id = store.selectedItem?.id else { return }
+        isBusy = true
+        Task {
+            await action(id)
+            isBusy = false
+        }
+    }
+
+    private var replyComposer: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Reply to \(store.selectedItem?.senderDisplay ?? "delivery")")
+                .font(.headline)
+            TextEditor(text: $replyText)
+                .font(.body)
+                .frame(minWidth: 420, minHeight: 160)
+                .border(.separator)
+            HStack {
+                Spacer()
+                Button("Cancel") { showReplyComposer = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Send reply") {
+                    let content = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    showReplyComposer = false
+                    runOnSelection { _ = await store.reply(to: $0, content: content) }
                 }
+                .keyboardShortcut(.defaultAction)
+                .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        )
+        }
+        .padding()
     }
 
     private func errorBar(_ message: String) -> some View {

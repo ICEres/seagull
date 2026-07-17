@@ -18,7 +18,7 @@ services/  Social API.
 ```text
 ./services/social-api/  Login-adjacent app API, profiles, rooms, moderation.
 ./apps/web/             Human-facing frontend.
-./apps/landing/         Static landing page.
+./apps/landing/         Vite + React landing page.
 ```
 
 See [docs/spec.md](docs/spec.md).

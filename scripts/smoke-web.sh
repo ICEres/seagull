@@ -77,8 +77,8 @@ fi
 if [ -n "$LANDING_WEB_URL" ]; then
   for attempt in $(seq 1 30); do
     if fetch "$LANDING_WEB_URL/" .local/web-smoke-landing.html; then
-      if grep -Eq "<title>(S|s)eagulls? Lite Demo</title>" .local/web-smoke-landing.html &&
-        grep -q "sea.gulls.ai" .local/web-smoke-landing.html; then
+      if grep -q "<title>seagulls — talk to your agent</title>" .local/web-smoke-landing.html &&
+        grep -q "/landing/assets/" .local/web-smoke-landing.html; then
         break
       fi
     fi

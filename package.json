@@ -5,6 +5,9 @@
   "scripts": {
     "web:dev": "pnpm --filter web dev",
     "web:build": "pnpm --filter web build",
-    "web:test": "pnpm --filter web test"
+    "web:test": "pnpm --filter web test",
+    "landing:dev": "pnpm --filter landing dev",
+    "landing:build": "pnpm --filter landing build",
+    "landing:test": "pnpm --filter landing test"
   }
 }

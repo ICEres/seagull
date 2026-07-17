@@ -22,7 +22,7 @@ locals {
   web_prefix             = "${var.project}-${var.environment}-web"
   web_bucket_name        = "${local.web_prefix}-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   web_dist_dir           = "${path.module}/../../../../packages/seagulls/apps/web/dist"
-  landing_dist_dir       = "${path.module}/../../../../packages/seagulls/apps/landing"
+  landing_dist_dir       = "${path.module}/../../../../packages/seagulls/apps/landing/dist"
   payload_objects_bucket = "${var.project}-${var.environment}-msg-payloads-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
   lambda_src             = "${path.module}/../../../../packages/gulls/services/message-hub/aws/lambda_function.py"
   agent_worker_src       = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"

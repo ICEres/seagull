@@ -1,4 +1,4 @@
-.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test ai-provider-test web-test web-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build mac-app-build mac-app-test hubstub-run message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-push-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
+.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test ai-provider-test web-test web-build landing-test landing-build phase4-test message-hub-test mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build mac-app-build mac-app-test hubstub-run message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-push-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
 
 setup:
 	./scripts/setup-local.sh
@@ -43,6 +43,12 @@ web-test:
 
 web-build:
 	CI=true pnpm --filter web build
+
+landing-test:
+	CI=true pnpm --filter landing test
+
+landing-build:
+	CI=true pnpm --filter landing build
 
 phase4-test: web-test web-build
 
@@ -98,10 +104,10 @@ aws-dev-init:
 		terraform -chdir=infra/terraform/envs/dev init -backend=false; \
 	fi
 
-aws-dev-plan: safety-gateway-build social-api-build ai-provider-build mcp-connector-build message-router-build web-build
+aws-dev-plan: safety-gateway-build social-api-build ai-provider-build mcp-connector-build message-router-build web-build landing-build
 	terraform -chdir=infra/terraform/envs/dev plan
 
-aws-dev-apply: safety-gateway-build social-api-build ai-provider-build mcp-connector-build message-router-build web-build
+aws-dev-apply: safety-gateway-build social-api-build ai-provider-build mcp-connector-build message-router-build web-build landing-build
 	terraform -chdir=infra/terraform/envs/dev apply
 
 aws-dev-output:

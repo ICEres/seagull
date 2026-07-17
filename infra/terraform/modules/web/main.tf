@@ -20,7 +20,7 @@ locals {
     if name != var.domain_name
   ]
   domain_aliases = distinct(compact([var.domain_name, var.admin_domain_name]))
-  landing_files  = var.landing_dist_dir == "" ? toset([]) : fileset(var.landing_dist_dir, "**")
+  landing_files  = var.landing_dist_dir == "" ? toset([]) : setsubtract(fileset(var.landing_dist_dir, "**"), ["config.js"])
   origin_id      = "${var.name_prefix}-s3-origin"
   dist_files     = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
   runtime_config = "window.SEAGULL_CONFIG = ${jsonencode({
@@ -446,6 +446,19 @@ resource "aws_s3_object" "landing_assets" {
 resource "aws_s3_object" "runtime_config" {
   bucket        = aws_s3_bucket.web.id
   key           = "config.js"
+  content       = local.runtime_config
+  content_type  = "application/javascript"
+  cache_control = "no-cache"
+  etag          = md5(local.runtime_config)
+}
+
+# The landing build rewrites its /config.js reference to /landing/config.js
+# (Vite base), so the runtime config is also written under the landing prefix.
+resource "aws_s3_object" "landing_runtime_config" {
+  count = var.landing_dist_dir == "" ? 0 : 1
+
+  bucket        = aws_s3_bucket.web.id
+  key           = "landing/config.js"
   content       = local.runtime_config
   content_type  = "application/javascript"
   cache_control = "no-cache"

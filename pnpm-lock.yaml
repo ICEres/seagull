@@ -8,6 +8,37 @@ importers:
 
   .: {}
 
+  packages/seagulls/apps/landing:
+    dependencies:
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.2
+        version: 6.0.2(vite@8.0.16(jiti@2.7.0))
+      jsdom:
+        specifier: ^29.1.1
+        version: 29.1.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(jiti@2.7.0)
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(jsdom@29.1.1)(vite@8.0.16(jiti@2.7.0))
+
   packages/seagulls/apps/web:
     dependencies:
       '@tanstack/react-query':

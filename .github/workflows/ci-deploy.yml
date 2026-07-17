@@ -33,12 +33,12 @@ env:
   TF_VAR_ai_provider_admin_secret: ${{ secrets.AI_PROVIDER_ADMIN_SECRET }}
   TF_VAR_mcp_connector_admin_secret: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
   TF_VAR_mcp_dev_token: ${{ secrets.MCP_DEV_TOKEN }}
-  TF_VAR_safety_gateway_admin_secret: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET }}
+  TF_VAR_safety_gateway_admin_secret: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   AGENT_WEBHOOK_SIGNING_SECRET: ${{ secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   AI_PROVIDER_ADMIN_SECRET: ${{ secrets.AI_PROVIDER_ADMIN_SECRET }}
   MCP_CONNECTOR_ADMIN_SECRET: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
   MCP_DEV_TOKEN: ${{ secrets.MCP_DEV_TOKEN }}
-  SAFETY_GATEWAY_ADMIN_SECRET: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET }}
+  SAFETY_GATEWAY_ADMIN_SECRET: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
 
 jobs:
   layer-folder-check:

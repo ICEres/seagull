@@ -1,6 +1,6 @@
-const GULL_STYLE = "classic";
+const GULL_STYLE = "classic"; // your wings — each agent has its own fixed silhouette
 
-const GULL_PATHS: Record<string, string> = {
+export const GULL_PATHS: Record<string, string> = {
   classic: "M1 12 Q8 2 16 11 Q24 2 31 12",
   glide: "M1 11 Q9 1 16 9 Q23 4 31 8",
   loop: "M1 11 Q9 3 14.5 9 A2.4 2.4 0 1 0 17.5 9 Q23 3 31 11",
@@ -9,20 +9,26 @@ const GULL_PATHS: Record<string, string> = {
 
 export const gullPath = GULL_PATHS[GULL_STYLE] ?? GULL_PATHS.classic;
 
+const PATH_KEYS = Object.keys(GULL_PATHS);
+
+export type AgentStatus = "online" | "busy" | "away";
+
 export type AgentSpec = {
   handle: string;
   name: string;
   id: string;
+  path: string;
+  status: AgentStatus;
   size: number;
   dur: string;
   delay: string;
 };
 
 export const AGENTS: AgentSpec[] = [
-  { handle: "@seagull:gulls.ai", name: "@seagull", id: "gull-seagull", size: 42, dur: "3.4s", delay: "0s" },
-  { handle: "@researcher:gulls.ai", name: "@researcher", id: "gull-researcher", size: 30, dur: "4.1s", delay: "0.6s" },
-  { handle: "@planner:gulls.ai", name: "@planner", id: "gull-planner", size: 26, dur: "4.6s", delay: "1.1s" },
-  { handle: "@reviewer:gulls.ai", name: "@reviewer", id: "gull-reviewer", size: 34, dur: "3.8s", delay: "0.3s" },
+  { handle: "@seagull:gulls.ai", name: "@seagull", id: "gull-seagull", path: "classic", status: "online", size: 42, dur: "3.4s", delay: "0s" },
+  { handle: "@researcher:gulls.ai", name: "@researcher", id: "gull-researcher", path: "glide", status: "busy", size: 30, dur: "4.1s", delay: "0.6s" },
+  { handle: "@planner:gulls.ai", name: "@planner", id: "gull-planner", path: "dip", status: "away", size: 26, dur: "4.6s", delay: "1.1s" },
+  { handle: "@reviewer:gulls.ai", name: "@reviewer", id: "gull-reviewer", path: "loop", status: "online", size: 34, dur: "3.8s", delay: "0.3s" },
 ];
 
 export function seededRandom(seed: number): number {
@@ -33,6 +39,7 @@ export function seededRandom(seed: number): number {
 export type AmbientGullSpec = {
   key: number;
   edge: boolean;
+  path: string;
   size: number;
   left: string;
   top: string;
@@ -57,6 +64,7 @@ export const AMBIENT_GULLS: AmbientGullSpec[] = Array.from({ length: 18 }, (_, i
   return {
     key: i,
     edge: !isSkyBand,
+    path: PATH_KEYS[Math.floor(seededRandom(i * 17 + 9) * PATH_KEYS.length)],
     size: Math.round(12 + seededRandom(i * 3 + 3) * 14),
     left: x.toFixed(1) + "%",
     top: y.toFixed(1) + "%",

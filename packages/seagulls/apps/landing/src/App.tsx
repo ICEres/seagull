@@ -8,13 +8,16 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { landingDemoProviderResponse } from "./lib/demo";
-import { AGENTS, AMBIENT_GULLS, gullPath } from "./lib/gulls";
+import { DemoProviderError, landingDemoProviderResponse } from "./lib/demo";
+import { AGENTS, AMBIENT_GULLS, GULL_PATHS, gullPath, type AgentSpec } from "./lib/gulls";
 
 const THEME_KEY = "seagulls-theme";
 
 const PAUSED_RESPONSE =
   "Provider delivery is paused for this run, so the message stays available for manual or connector handling with its asset snapshot attached.";
+
+const UNAVAILABLE_RESPONSE =
+  "Provider delivery is unavailable for this demo run, so the message stays stored with its asset snapshot for connector handling.";
 
 type Role = "user" | "agent" | "system";
 
@@ -25,13 +28,23 @@ type ChatMessage = {
   time: string;
   delivered: boolean;
   pending: boolean;
+  agentHandle?: string;
 };
 
-function GullIcon({ size, strokeWidth }: { size: number; strokeWidth: number }) {
+function agentByHandle(handle?: string): AgentSpec | undefined {
+  return AGENTS.find((agent) => agent.handle === handle);
+}
+
+function agentGullPath(handle?: string): string {
+  const agent = agentByHandle(handle);
+  return (agent && GULL_PATHS[agent.path]) || gullPath;
+}
+
+function GullIcon({ size, strokeWidth, path = gullPath }: { size: number; strokeWidth: number; path?: string }) {
   return (
     <svg width={size} viewBox="0 0 32 14" fill="none">
       <path
-        d={gullPath}
+        d={path}
         stroke="currentColor"
         strokeWidth={strokeWidth}
         strokeLinecap="round"
@@ -39,6 +52,23 @@ function GullIcon({ size, strokeWidth }: { size: number; strokeWidth: number }) 
       />
     </svg>
   );
+}
+
+// The flight bird lives outside the React tree (appended to the sky and
+// removed by timers), so it is built imperatively.
+function gullSvgElement(size: number, strokeWidth: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("viewBox", "0 0 32 14");
+  svg.setAttribute("fill", "none");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", gullPath);
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", strokeWidth);
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(path);
+  return svg;
 }
 
 function initialDark(): boolean {
@@ -147,17 +177,27 @@ export default function App() {
     }
     const from = composer.getBoundingClientRect();
     const to = target.getBoundingClientRect();
-    const dot = document.createElement("span");
-    dot.className = "flight";
-    dot.style.transform = "translate(" + (from.right - 44) + "px, " + (from.top - 8) + "px)";
-    dot.style.opacity = "1";
-    sky.appendChild(dot);
+    const x0 = from.right - 56;
+    const y0 = from.top - 16;
+    const x1 = to.left + to.width / 2;
+    const y1 = to.top + to.height / 2;
+    const face = x1 < x0 ? " scale(-1,1)" : "";
+    const bird = document.createElement("span");
+    bird.className = "flight";
+    bird.appendChild(gullSvgElement(26, "2.8"));
+    bird.style.transform = "translate(" + x0 + "px, " + y0 + "px)" + face;
+    bird.style.opacity = "1";
+    sky.appendChild(bird);
+    document.body.classList.add("flying");
     window.setTimeout(() => {
-      dot.style.transition = "transform 0.95s cubic-bezier(0.35, 0, 0.25, 1), opacity 0.25s ease 0.75s";
-      dot.style.transform = "translate(" + (to.left + to.width / 2) + "px, " + (to.top + to.height / 2) + "px)";
-      dot.style.opacity = "0";
+      bird.style.transition = "transform 0.95s cubic-bezier(0.35, 0, 0.25, 1), opacity 0.25s ease 0.75s";
+      bird.style.transform = "translate(" + x1 + "px, " + y1 + "px)" + face;
+      bird.style.opacity = "0";
     }, 40);
-    window.setTimeout(() => dot.remove(), 1200);
+    window.setTimeout(() => {
+      bird.remove();
+      document.body.classList.remove("flying");
+    }, 1200);
   }
 
   async function runDemo() {
@@ -175,6 +215,7 @@ export default function App() {
       sysBits.push("skill snapshot");
     }
 
+    const target = recipient;
     const userId = nextId();
     const systemId = nextId();
     const pendingId = nextId();
@@ -189,12 +230,12 @@ export default function App() {
         delivered: false,
         pending: false,
       },
-      { id: pendingId, role: "agent", text: "…", time: "", delivered: false, pending: true },
+      { id: pendingId, role: "agent", text: "…", time: "", delivered: false, pending: true, agentHandle: target },
     ]);
     setDraft("");
     sendingRef.current = true;
     setSending(true);
-    setCarryingHandle(recipient);
+    setCarryingHandle(target);
 
     let response = PAUSED_RESPONSE;
     let delivered = false;
@@ -203,7 +244,8 @@ export default function App() {
         response = await landingDemoProviderResponse(text);
         delivered = true;
       } catch (error) {
-        response = error instanceof Error ? error.message : "Provider delivery is unavailable for this demo run.";
+        response =
+          error instanceof DemoProviderError && error.serverMessage ? error.serverMessage : UNAVAILABLE_RESPONSE;
       }
     }
 
@@ -216,7 +258,15 @@ export default function App() {
       prev
         .filter((message) => message.id !== pendingId)
         .map((message) => (delivered && message.id === userId ? { ...message, delivered: true } : message))
-        .concat({ id: replyId, role: "agent", text: response, time: replyTime, delivered: false, pending: false }),
+        .concat({
+          id: replyId,
+          role: "agent",
+          text: response,
+          time: replyTime,
+          delivered: false,
+          pending: false,
+          agentHandle: target,
+        }),
     );
     setContinueVisible(true);
   }
@@ -249,6 +299,7 @@ export default function App() {
               className={"gull" + (active ? " active" : "") + (carrying ? " carrying" : "")}
               id={agent.id}
               data-handle={agent.handle}
+              data-status={agent.status}
               title={"Target " + agent.handle}
               aria-label={"Target " + agent.handle}
               aria-pressed={active}
@@ -256,9 +307,12 @@ export default function App() {
               onClick={() => pickRecipient(agent.handle)}
             >
               <span className="bob">
-                <GullIcon size={agent.size} strokeWidth={2.6} />
+                <GullIcon size={agent.size} strokeWidth={2.6} path={GULL_PATHS[agent.path]} />
               </span>
-              <span className="tag">{carrying ? "delivering…" : agent.name}</span>
+              <span className="idrow">
+                <span className="dot" />
+                <span className="tag">{carrying ? "delivering…" : agent.name + " · " + agent.status}</span>
+              </span>
             </button>
           );
         })}
@@ -279,7 +333,7 @@ export default function App() {
             }
           >
             <span className="bob">
-              <GullIcon size={gull.size} strokeWidth={2.6} />
+              <GullIcon size={gull.size} strokeWidth={2.6} path={GULL_PATHS[gull.path]} />
             </span>
           </span>
         ))}
@@ -315,11 +369,24 @@ export default function App() {
             {messages.map((message) => (
               <div key={message.id} className={"row " + message.role + (message.pending ? " pending" : "")}>
                 <span className="avatar" aria-hidden="true">
-                  {message.role === "system" ? "g" : <GullIcon size={15} strokeWidth={3.4} />}
+                  {message.role === "system" ? (
+                    "g"
+                  ) : (
+                    <GullIcon
+                      size={15}
+                      strokeWidth={3.4}
+                      path={message.role === "agent" ? agentGullPath(message.agentHandle) : gullPath}
+                    />
+                  )}
                 </span>
                 <article className="bubble">
                   <span className="txt">{message.text}</span>
                   <span className="meta">
+                    {message.role === "agent" && message.agentHandle && (
+                      <span>
+                        {(agentByHandle(message.agentHandle)?.name ?? "@agent") + (message.time ? " ·" : "")}
+                      </span>
+                    )}
                     {message.time}
                     {message.delivered && <span className="tick">✓✓</span>}
                   </span>
@@ -404,7 +471,7 @@ export default function App() {
               >
                 {AGENTS.map((agent) => (
                   <option key={agent.handle} value={agent.handle}>
-                    {"→ " + agent.handle}
+                    {"→ " + agent.handle + " · " + agent.status}
                   </option>
                 ))}
                 <option value="" disabled>more targets at sea.gulls.ai</option>

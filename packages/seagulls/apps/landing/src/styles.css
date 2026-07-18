@@ -212,7 +212,8 @@ h1 .dot { color: var(--accent); }
   gap: 6px;
   pointer-events: none;
 }
-.perch svg { display: block; overflow: visible; color: var(--ink); transform-origin: center; }
+.perch svg { display: block; overflow: visible; color: var(--ink); transform-origin: center; transition: opacity 0.2s; }
+body.flying .perch svg { opacity: 0; }
 .perch .you { font-size: 0.68rem; font-weight: 850; color: var(--faint); }
 body.sending .perch svg { animation: gull-flap 0.45s ease-in-out infinite; }
 
@@ -317,36 +318,34 @@ footer a { color: var(--faint); font-size: 0.78rem; font-weight: 800; text-decor
   font-weight: 850;
   color: var(--accent-strong);
   white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.25s;
+  display: none;
 }
 .gull.active {
   color: var(--accent);
   opacity: 1;
   transform: translate(-50%, -50%) scale(1.25);
 }
-.gull.active .tag { opacity: 1; }
+.gull.active .tag { display: inline; }
 .gull.active .bob { animation: gull-bob var(--dur, 3.4s) ease-in-out var(--delay, 0s) infinite; }
 .gull.carrying .bob { animation: gull-carry 1.8s ease-in-out infinite; }
 .gull.carrying svg { animation: gull-flap 0.45s ease-in-out infinite; }
 .gull.ambient { pointer-events: none; }
 .gull.ambient .bob { animation: gull-bob var(--dur, 4s) ease-in-out var(--delay, 0s) infinite; }
 
+.gull .idrow { display: flex; align-items: center; gap: 5px; }
+.gull .dot { width: 5px; height: 5px; border-radius: 999px; }
+.gull[data-status="online"] .dot { background: var(--indigo); }
+.gull[data-status="busy"] .dot { background: var(--amber); }
+.gull[data-status="away"] .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
+.gull.carrying .dot { background: var(--amber); animation: pulse-dot 1.1s ease-in-out infinite; }
+
 #gull-seagull { left: 13%; top: 22%; }
 #gull-researcher { left: 84%; top: 17%; }
 #gull-planner { left: 9%; top: 64%; }
 #gull-reviewer { left: 88%; top: 60%; }
 
-.flight {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
-}
+.flight { position: absolute; left: 0; top: 0; color: var(--ink); }
+.flight svg { display: block; overflow: visible; animation: gull-flap 0.3s ease-in-out infinite; transform-origin: center; }
 
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @keyframes gull-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }

@@ -81,6 +81,14 @@ arn:aws:s3:::seagull-dev-msg-payloads-<account-id>-<region>/*
 When adding another Terraform-managed S3 bucket, update both the bucket-level
 and object-level statements before running `Deploy dev`.
 
+The DynamoDB statement scoped to `seagull-dev-*` tables must include the
+point-in-time recovery lifecycle actions used by Terraform:
+
+```text
+dynamodb:DescribeContinuousBackups
+dynamodb:UpdateContinuousBackups
+```
+
 The bucket-level statement needs the Terraform S3 configuration actions used by
 the web and message payload bucket resources, including:
 

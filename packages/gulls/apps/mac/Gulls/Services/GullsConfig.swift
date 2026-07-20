@@ -31,8 +31,14 @@ final class GullsConfig {
         didSet { defaults.set(streamURL, forKey: Keys.streamURL) }
     }
 
+    // Written on commit (Return / closing Settings), not per keystroke — see
+    // SettingsView, which edits a local draft and assigns here once.
     var token: String {
-        didSet { Keychain.setToken(token) }
+        didSet {
+            if !Keychain.setToken(token) {
+                NSLog("Gulls: failed to store the connector token in the Keychain")
+            }
+        }
     }
 
     private let defaults: UserDefaults
@@ -171,23 +177,27 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func setToken(_ token: String) {
+    // Returns false when the Keychain refused the write, so callers can
+    // surface it instead of silently keeping a stale token.
+    @discardableResult
+    static func setToken(_ token: String) -> Bool {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         if token.isEmpty {
-            SecItemDelete(base as CFDictionary)
-            return
+            let status = SecItemDelete(base as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
         }
         let data = Data(token.utf8)
         let update: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(base as CFDictionary, update as CFDictionary)
+        var status = SecItemUpdate(base as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var add = base
             add[kSecValueData as String] = data
-            SecItemAdd(add as CFDictionary, nil)
+            status = SecItemAdd(add as CFDictionary, nil)
         }
+        return status == errSecSuccess
     }
 }

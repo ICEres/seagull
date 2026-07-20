@@ -109,6 +109,32 @@ final class GullsCLITests: XCTestCase {
         XCTAssertNotNil(try? JSONDecoder().decode([String: String].self, from: data))
     }
 
+    func testConcurrentCommandsRunStrictlySerialized() async throws {
+        // Two overlapping calls: without FIFO chaining (actors are reentrant)
+        // the start/end markers would interleave.
+        let log = tmp.appendingPathComponent("serial.log")
+        let cli = try makeFakeBinary(script: """
+        echo "start $3" >> "\(log.path)"
+        sleep 0.2
+        echo "end $3" >> "\(log.path)"
+        printf '{}'
+        """)
+        let environment = makeEnvironment()
+
+        async let first = cli.run(["ack", "delivery_a"], environment: environment)
+        async let second = cli.run(["ack", "delivery_b"], environment: environment)
+        _ = try await (first, second)
+
+        let lines = try String(contentsOf: log, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(lines.count, 4)
+        XCTAssertTrue(lines[0].hasPrefix("start "))
+        XCTAssertEqual(lines[1], lines[0].replacingOccurrences(of: "start", with: "end"))
+        XCTAssertTrue(lines[2].hasPrefix("start "))
+        XCTAssertEqual(lines[3], lines[2].replacingOccurrences(of: "start", with: "end"))
+    }
+
     func testTypedInboxWrapperDecodesFixtureOutput() async throws {
         let fixture = ModelDecodingTests.contractDir.appendingPathComponent("inbox.json").path
         let cli = try makeFakeBinary(script: """

@@ -5,8 +5,11 @@ import UserNotifications
 // osascript path for GUI users). Notifications are actionable: Reply with
 // text input, Ack, and — when a rule-generated draft was previewed in the
 // banner — Send draft. Clicking the notification body selects the delivery.
+//
+// Not final: tests subclass it to record notify/withdraw calls without
+// touching the real notification center.
 @MainActor
-final class Notifier: NSObject, UNUserNotificationCenterDelegate {
+class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     var onSelectDelivery: ((String) -> Void)?
     var onReply: ((String, String) -> Void)?
@@ -59,9 +62,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
-    // draft, when present, is previewed in the banner and offered as a
-    // "Send draft" action. The action sends exactly this previewed text —
-    // informed approval means what you saw is what goes out.
+    // draft, when present, is offered as a "Send draft" action. The action
+    // sends exactly the full generated draft carried in userInfo; note the
+    // banner subtitle only shows a truncated preview — the in-app sheet is
+    // where long drafts can be read in full before approving.
     func notifyNewDelivery(id: String, sender: String, snippet: String?, draft: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = "New delivery from \(sender)"
@@ -81,10 +85,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.add(request)
     }
 
-    // Removes the banner for a delivery decided elsewhere (CLI, another
+    // Removes the banners for deliveries decided elsewhere (CLI, another
     // machine) so notifications stay a trustworthy view of the queue.
-    func withdraw(deliveryID: String) {
-        center.removeDeliveredNotifications(withIdentifiers: [Self.identifier(for: deliveryID)])
+    func withdraw(deliveryIDs: [String]) {
+        guard !deliveryIDs.isEmpty else { return }
+        center.removeDeliveredNotifications(
+            withIdentifiers: deliveryIDs.map(Self.identifier(for:))
+        )
     }
 
     private static func identifier(for deliveryID: String) -> String {

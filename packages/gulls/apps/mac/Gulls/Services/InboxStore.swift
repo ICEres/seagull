@@ -2,11 +2,15 @@ import AppKit
 import Foundation
 import Observation
 
-// Observable inbox state + the polling loop. Polls `inbox --json` and diffs
-// by delivery_id against an app-private notified-set. Deliberately does NOT
-// use `watch --once`: that returns no item data and mutates the CLI's
-// seen-deliveries.json/context files, which would silently suppress a
-// concurrently running `gulls watch`.
+// Observable inbox state, delivery actions, and the polling loop. Polls
+// `inbox --json` and diffs by delivery_id against the app-private
+// NotifiedSetStore. Deliberately does NOT use `watch --once`: that returns no
+// item data and mutates the CLI's seen-deliveries.json/context files, which
+// would silently suppress a concurrently running `gulls watch`.
+//
+// Stream lifecycle lives in StreamController; notified-set persistence lives
+// in NotifiedSetStore. This class owns state, the poll loop, and the
+// notification diffing between them.
 @MainActor
 @Observable
 final class InboxStore {
@@ -35,35 +39,32 @@ final class InboxStore {
 
         var id: String { rawValue }
 
-        func matches(_ status: String?) -> Bool {
+        func matches(_ status: DeliveryStatus?) -> Bool {
             switch self {
-            case .awaiting: return status == "delivered"
-            case .replied: return status == "replied"
-            case .acked: return status == "acked"
-            case .ignored: return status == "ignored"
+            case .awaiting: return status == .delivered
+            case .replied: return status == .replied
+            case .acked: return status == .acked
+            case .ignored: return status == .ignored
             case .all: return true
             }
         }
     }
 
-    // Stream health, shown in the status menu. .off = no stream URL configured.
-    enum StreamState: Equatable {
-        case off, connecting, connected, down
-    }
+    // Stream health, shown in the status menu (mirrored from StreamController).
+    private(set) var streamState: StreamController.State = .off
 
-    private(set) var streamState: StreamState = .off
-
+    private let streamController = StreamController()
     private var pollTask: Task<Void, Never>?
-    private var streamTask: Task<Void, Never>?
-    private var streamTerminate: (@Sendable () -> Void)?
     private var pendingRefresh = false
-    private var notifiedIDs: Set<String>
-    private let notifiedStoreURL: URL
+    private let notifiedStore: NotifiedSetStore
+    private var hasSeededFirstRun: Bool
+    // Sequential banner/draft pipeline; exposed so tests can await it.
+    private(set) var pendingNotificationTask: Task<Void, Never>?
 
     var filteredItems: [InboxItem] {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         return items.filter { item in
-            guard filter.matches(item.delivery.status) else { return false }
+            guard filter.matches(item.delivery.statusValue) else { return false }
             guard !query.isEmpty else { return true }
             return item.senderDisplay.lowercased().contains(query)
                 || (item.bodyText?.lowercased().contains(query) ?? false)
@@ -72,7 +73,7 @@ final class InboxStore {
 
     // The number that matters: deliveries still waiting on a human decision.
     var awaitingCount: Int {
-        items.filter { $0.delivery.status == "delivered" }.count
+        items.filter { $0.delivery.statusValue == .delivered }.count
     }
 
     var selectedItem: InboxItem? {
@@ -80,14 +81,18 @@ final class InboxStore {
         return items.first { $0.id == selectedDeliveryID }
     }
 
-    init(cli: GullsCLI?, config: GullsConfig, notifier: Notifier) {
+    init(
+        cli: GullsCLI?,
+        config: GullsConfig,
+        notifier: Notifier,
+        notifiedStore: NotifiedSetStore = NotifiedSetStore()
+    ) {
         self.cli = cli
         self.config = config
         self.notifier = notifier
-        notifiedStoreURL = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Gulls/notified-deliveries.json")
-        notifiedIDs = Self.loadNotifiedIDs(from: notifiedStoreURL)
+        self.notifiedStore = notifiedStore
+        hasSeededFirstRun = notifiedStore.existedOnDisk
+
         notifier.onSelectDelivery = { [weak self] deliveryID in
             self?.selectedDeliveryID = deliveryID
             NSApp.activate()
@@ -99,9 +104,19 @@ final class InboxStore {
             Task { await self?.ack(deliveryID) }
         }
         notifier.onSendDraft = { [weak self] deliveryID, draft in
-            // Sends exactly the previewed draft text as a human-approved
-            // reply — never a regenerated draft the user hasn't seen.
+            // Sends exactly the draft text carried by the notification — the
+            // full generated draft, never a regenerated one.
             Task { await self?.reply(to: deliveryID, content: draft) }
+        }
+
+        streamController.onStateChange = { [weak self] state in
+            self?.streamState = state
+        }
+        streamController.onWake = { [weak self] in
+            await self?.refresh()
+        }
+        streamController.onError = { [weak self] message in
+            self?.lastError = message
         }
     }
 
@@ -126,7 +141,17 @@ final class InboxStore {
                 lastError = nil
                 updateBadge()
                 withdrawDecidedNotifications(fetched)
-                notifyAboutNewItems(fetched)
+                if hasSeededFirstRun {
+                    notifyAboutNewItems(fetched)
+                } else {
+                    // First run: mark the pre-existing queue as known instead
+                    // of bannering every old delivery at once. Banners are for
+                    // deliveries that arrive from here on.
+                    notifiedStore.seed(
+                        fetched.filter { $0.delivery.statusValue == .delivered }.map(\.id)
+                    )
+                    hasSeededFirstRun = true
+                }
             } catch {
                 lastError = error.localizedDescription
             }
@@ -168,61 +193,16 @@ final class InboxStore {
     // MARK: - Streaming (push = wake-up, poll = truth)
 
     func startStreaming() {
-        guard streamTask == nil, let cli else { return }
+        guard let cli else { return }
         let streamURL = config.streamURL.trimmingCharacters(in: .whitespaces)
         guard !streamURL.isEmpty, config.isConfigured else { return }
-
-        streamState = .connecting
-        streamTask = Task { [weak self] in
-            var backoff: Double = 5
-            while !Task.isCancelled {
-                guard let self else { return }
-                do {
-                    let handle = try await cli.openStream(environment: self.config.cliEnvironment())
-                    self.streamTerminate = handle.terminate
-                    for try await line in handle.lines {
-                        if Task.isCancelled { break }
-                        await self.handleStreamLine(line)
-                        backoff = 5
-                    }
-                } catch {
-                    self.lastError = error.localizedDescription
-                }
-                self.streamTerminate = nil
-                if Task.isCancelled { return }
-                // Subprocess exit is unexpected (it reconnects internally);
-                // restart it with backoff.
-                self.streamState = .down
-                try? await Task.sleep(for: .seconds(backoff))
-                backoff = min(backoff * 2, 60)
-                if Task.isCancelled { return }
-                self.streamState = .connecting
-            }
+        streamController.start(cli: cli) { [config] in
+            config.cliEnvironment()
         }
     }
 
     func stopStreaming() {
-        streamTask?.cancel()
-        streamTask = nil
-        streamTerminate?()
-        streamTerminate = nil
-        streamState = .off
-    }
-
-    private func handleStreamLine(_ line: Data) async {
-        guard let parsed = try? JSONDecoder().decode(StreamLine.self, from: line) else { return }
-        switch parsed.type {
-        case "stream.connected":
-            streamState = .connected
-            // Reconnect catch-up: one poll covers anything missed while down.
-            await refresh()
-        case "stream.event":
-            await refresh()
-        case "stream.disconnected":
-            streamState = .connecting
-        default:
-            break
-        }
+        streamController.stop()
     }
 
     // MARK: - Badge & notifications
@@ -235,44 +215,50 @@ final class InboxStore {
     // Deliveries decided anywhere (CLI, another machine) get their banners
     // withdrawn so notifications stay a trustworthy view of the queue.
     private func withdrawDecidedNotifications(_ fetched: [InboxItem]) {
-        for item in fetched where item.delivery.status != "delivered" {
-            notifier.withdraw(deliveryID: item.id)
-        }
+        let decided = fetched
+            .filter { $0.delivery.statusValue != .delivered }
+            .map(\.id)
+        notifier.withdraw(deliveryIDs: decided)
     }
 
     private func notifyAboutNewItems(_ fetched: [InboxItem]) {
-        var changed = false
         // Only deliveries awaiting a decision are notification-worthy.
-        for item in fetched where !notifiedIDs.contains(item.id) && item.delivery.status == "delivered" {
-            notifiedIDs.insert(item.id)
-            changed = true
-            if !notificationsPaused {
-                notifyWithDraftPreview(item)
-            }
+        let newItems = fetched.filter {
+            $0.delivery.statusValue == .delivered && !notifiedStore.contains($0.id)
         }
-        if changed {
-            persistNotifiedIDs()
+        guard !newItems.isEmpty else { return }
+        notifiedStore.insert(newItems.map(\.id))
+        guard !notificationsPaused else { return }
+
+        // One sequential pipeline instead of a task per item: draft-preview
+        // generation shells out to the CLI, and a burst of new deliveries
+        // must not fan out into a burst of subprocesses. Chained on any
+        // still-running pipeline so banners keep arrival order.
+        let previous = pendingNotificationTask
+        pendingNotificationTask = Task { [weak self] in
+            await previous?.value
+            for item in newItems {
+                guard let self else { return }
+                await self.postNotification(for: item)
+            }
         }
     }
 
     // Best-effort: try to generate the rule-based draft so the banner can
     // preview it and offer "Send draft". Any failure degrades to a plain
     // notification — generation has no server-side side effects.
-    private func notifyWithDraftPreview(_ item: InboxItem) {
-        Task { [weak self] in
-            guard let self else { return }
-            var draft: String?
-            if let result = try? await self.draftReply(for: item.id, approve: false),
-               result.outcome == "draft_reply" {
-                draft = result.draft
-            }
-            self.notifier.notifyNewDelivery(
-                id: item.id,
-                sender: item.senderDisplay,
-                snippet: item.bodyText,
-                draft: draft
-            )
+    private func postNotification(for item: InboxItem) async {
+        var draft: String?
+        if let result = try? await draftReply(for: item.id, approve: false),
+           result.outcome == "draft_reply" {
+            draft = result.draft
         }
+        notifier.notifyNewDelivery(
+            id: item.id,
+            sender: item.senderDisplay,
+            snippet: item.bodyText,
+            draft: draft
+        )
     }
 
     // MARK: - Delivery actions
@@ -328,27 +314,6 @@ final class InboxStore {
         } catch {
             lastError = error.localizedDescription
             return nil
-        }
-    }
-
-    // MARK: - Notified-set persistence
-
-    private static func loadNotifiedIDs(from url: URL) -> Set<String> {
-        guard let data = try? Data(contentsOf: url),
-              let ids = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return Set(ids)
-    }
-
-    private func persistNotifiedIDs() {
-        let url = notifiedStoreURL
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if let data = try? JSONEncoder().encode(notifiedIDs.sorted()) {
-            try? data.write(to: url, options: .atomic)
         }
     }
 }

@@ -132,6 +132,68 @@ const chatReply: AgentChatMessage = {
   updated_at: "2026-06-13T00:00:22Z",
 };
 
+const inboxResponse = {
+  agent: {
+    agent_id: "agent_1",
+    handle: "@researcher:seagull.local",
+    display_name: "Researcher",
+    capabilities: [],
+    status: "active",
+    trigger_mode: "manual",
+    webhook_enabled: false,
+    created_at: "2026-06-13T00:00:00Z",
+    updated_at: "2026-06-13T00:00:00Z",
+  },
+  items: [
+    {
+      delivery: {
+        delivery_id: "delivery_1",
+        message_id: "message_1",
+        thread_id: "thread_1",
+        sender_agent_id: "agent_sender",
+        sender_handle: "@sender:seagull.local",
+        recipient_agent_id: "agent_1",
+        recipient_handle: "@researcher:seagull.local",
+        status: "delivered",
+        retry_count: 0,
+        current_content_inline: "Prepared map question",
+        refs: [{ type: "url", url: "https://maps.google.com/example", find: "identify_place" }],
+        workflow_trace: [
+          {
+            hook: "receive.before",
+            runtime: "cloud_node",
+            action: "continue",
+            changed: ["current_content_inline"],
+            created_at: "2026-06-13T00:00:01Z",
+          },
+        ],
+        current_stage: "agent.wait",
+        created_at: "2026-06-13T00:00:00Z",
+        updated_at: "2026-06-13T00:00:01Z",
+      },
+      message: {
+        message_id: "message_1",
+        thread_id: "thread_1",
+        sender_agent_id: "agent_sender",
+        sender_handle: "@sender:seagull.local",
+        recipient_agent_ids: ["agent_1"],
+        recipient_handles: ["@researcher:seagull.local"],
+        intent: "message",
+        visibility: "direct",
+        content_inline: "Original map question",
+        refs: [],
+        schema_version: "seagull.message.v1",
+        safety_status: "approved",
+        created_at: "2026-06-13T00:00:00Z",
+      },
+      current_message: {
+        content_inline: "Prepared map question",
+        refs: [{ type: "url", url: "https://maps.google.com/example", find: "identify_place" }],
+      },
+    },
+  ],
+};
+
 const roots: Root[] = [];
 
 afterEach(async () => {
@@ -141,28 +203,29 @@ afterEach(async () => {
     });
   }
   document.body.innerHTML = "";
+  document.documentElement.classList.remove("dark");
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.SEAGULL_CONFIG = undefined;
   vi.restoreAllMocks();
 });
 
-describe("App dashboard", () => {
-  it("keeps unauthenticated users on a clean auth screen", async () => {
+describe("App", () => {
+  it("keeps unauthenticated users on the login sky", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     mockApi({
       "/health": { ok: true, app: "social-api", storage: "memory" },
     });
 
     const container = renderApp("/");
-    await waitForText(container, "Login");
+    await waitForText(container, "Your sky is waiting");
 
-    expect(container.textContent).toContain("Register");
-    expect(container.textContent).not.toContain("Social workspace");
-    expect(container.textContent).not.toContain("Social API");
+    expect(container.textContent).toContain("Enter the sky");
+    expect(container.textContent).not.toContain("The stream");
+    expect(container.textContent).not.toContain("Sign out");
   });
 
-  it("shows first-agent creation as the dashboard empty state", async () => {
+  it("shows the first-gull call to action on an empty sky", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     saveLoopState({ activeUser: identity });
     mockApi({
@@ -172,14 +235,14 @@ describe("App dashboard", () => {
       "/moderation?limit=50": { items: [] },
     });
 
-    const container = renderApp("/dashboard");
-    await waitForText(container, "Create first agent");
+    const container = renderApp("/sky");
+    await waitForText(container, "Register your first gull");
 
-    expect(container.textContent).toContain("Create the first social identity for your AI.");
-    expect(container.textContent).toContain("0 unread mentions");
+    expect(container.textContent).toContain("The stream");
+    expect(container.textContent).toContain("all clear");
   });
 
-  it("shows loaded agent activity and attention counts", async () => {
+  it("shows stream posts, mention state, and the flock summary", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
     mockApi({
@@ -192,19 +255,36 @@ describe("App dashboard", () => {
       "/moderation?limit=50": { items: [moderation] },
     });
 
-    const container = renderApp("/dashboard");
-    await waitForText(container, "Recent social activity");
+    const container = renderApp("/sky");
+    await waitForText(container, "Planning the first social loop.");
 
     expect(container.textContent).toContain("Researcher");
-    expect(container.textContent).toContain("Planning the first social loop.");
-    expect(container.textContent).toContain("1 unread mentions");
-    expect(container.textContent).toContain("1 moderation items");
-    expect(container.textContent).toContain("Profile");
-    expect(container.textContent).toContain("Post");
-    expect(container.textContent).toContain("Inbox");
+    expect(container.textContent).toContain("1 gull in your flock");
+    expect(container.textContent).toContain("waiting on you");
+    expect(container.querySelector('[aria-label="unread"]')).not.toBeNull();
+    expect(container.textContent).toContain("Mentions");
   });
 
-  it("renders message routing rules", async () => {
+  it("redirects legacy routes into the new screens", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [post] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+    });
+
+    const container = renderApp("/dashboard");
+    await waitForText(container, "The sky");
+
+    expect(container.textContent).toContain("The stream");
+  });
+
+  it("renders message routing rules on the server screen", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       messageApiUrl: "https://message.example.test",
@@ -238,9 +318,9 @@ describe("App dashboard", () => {
     const container = renderApp("/routing");
     await waitForText(container, "Map links");
 
-    expect(container.textContent).toContain("Message rules");
+    expect(container.textContent).toContain("Routing rules");
     expect(container.textContent).toContain("maps.google.com");
-    expect(container.textContent).toContain("URL routing");
+    expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("renders the agent chat route with stored messages", async () => {
@@ -267,11 +347,10 @@ describe("App dashboard", () => {
     expect(container.textContent).toContain("stored");
     expect(container.textContent).toContain("New chat");
     expect(container.textContent).toContain("The plan looks solid; tighten the hero copy.");
-    expect(container.textContent).toContain("agent");
     expect(container.textContent).toContain("AI run airun_1 (completed)");
   });
 
-  it("renders lifecycle inbox original and current messages", async () => {
+  it("shows hub traffic in the stream and expands the delivery lifecycle", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       messageApiUrl: "https://message.example.test",
@@ -286,76 +365,143 @@ describe("App dashboard", () => {
         items: [],
       },
       "/moderation?limit=50": { items: [] },
-      "/agents/%40researcher%3Aseagull.local/inbox?limit=20": {
-        agent: {
-          agent_id: "agent_1",
-          handle: "@researcher:seagull.local",
-          display_name: "Researcher",
-          capabilities: [],
-          status: "active",
-          trigger_mode: "manual",
-          webhook_enabled: false,
-          created_at: "2026-06-13T00:00:00Z",
-          updated_at: "2026-06-13T00:00:00Z",
-        },
-        items: [
-          {
-            delivery: {
-              delivery_id: "delivery_1",
-              message_id: "message_1",
-              thread_id: "thread_1",
-              sender_agent_id: "agent_sender",
-              sender_handle: "@sender:seagull.local",
-              recipient_agent_id: "agent_1",
-              recipient_handle: "@researcher:seagull.local",
-              status: "delivered",
-              retry_count: 0,
-              current_content_inline: "Prepared map question",
-              refs: [{ type: "url", url: "https://maps.google.com/example", find: "identify_place" }],
-              workflow_trace: [
-                {
-                  hook: "receive.before",
-                  runtime: "cloud_node",
-                  action: "continue",
-                  changed: ["current_content_inline"],
-                  created_at: "2026-06-13T00:00:01Z",
-                },
-              ],
-              current_stage: "agent.wait",
-              created_at: "2026-06-13T00:00:00Z",
-              updated_at: "2026-06-13T00:00:01Z",
-            },
-            message: {
-              message_id: "message_1",
-              thread_id: "thread_1",
-              sender_agent_id: "agent_sender",
-              sender_handle: "@sender:seagull.local",
-              recipient_agent_ids: ["agent_1"],
-              recipient_handles: ["@researcher:seagull.local"],
-              intent: "message",
-              visibility: "direct",
-              content_inline: "Original map question",
-              refs: [],
-              schema_version: "seagull.message.v1",
-              safety_status: "approved",
-              created_at: "2026-06-13T00:00:00Z",
-            },
-            current_message: {
-              content_inline: "Prepared map question",
-              refs: [{ type: "url", url: "https://maps.google.com/example", find: "identify_place" }],
-            },
-          },
-        ],
-      },
+      "/agents/%40researcher%3Aseagull.local/inbox?limit=20": inboxResponse,
     });
 
-    const container = renderApp("/agent-inbox");
+    const container = renderApp("/sky");
     await waitForText(container, "Prepared map question");
 
-    expect(container.textContent).toContain("Lifecycle deliveries");
-    expect(container.textContent).toContain("Original map question");
+    expect(container.textContent).toContain("waiting on you");
+    expect(container.textContent).toContain("@sender");
+
+    await clickTestId(container, "traffic-toggle-delivery_1");
+    await waitForText(container, "Original map question");
+
     expect(container.textContent).toContain("receive.before");
     expect(container.textContent).toContain("Apply hook");
+    expect(container.textContent).toContain("Ask human");
+  });
+
+  it("routes @gull composer drafts to a direct chat with the mention prefix stripped", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "/agent-chats?owner_user_id=user_1": { items: [] },
+      "/agent-chats": { created: true, chat },
+      "/agent-chats/chat_1/messages": { message: chatMessage, reply: null },
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "The stream");
+
+    const composer = container.querySelector('textarea[aria-label="Composer"]');
+    if (!(composer instanceof HTMLTextAreaElement)) {
+      throw new Error("Composer textarea not found.");
+    }
+    await act(async () => {
+      setNativeValue(composer, "@researcher:seagull.local please check");
+    });
+    await waitForText(container, "direct to @researcher — flies now");
+    await act(async () => {
+      composer.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await waitForText(container, "Flew direct to @researcher");
+
+    const fetchMock = vi.mocked(fetch);
+    const chatCreate = fetchMock.mock.calls.find(
+      ([input, init]) => String(input).endsWith("/agent-chats") && init?.method === "POST",
+    );
+    expect(String(chatCreate?.[1]?.body)).toContain('"agent_handle":"@researcher:seagull.local"');
+    const messageCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input).includes("/agent-chats/chat_1/messages") && init?.method === "POST",
+    );
+    expect(String(messageCall?.[1]?.body)).toContain('"content":"please check"');
+    expect(
+      fetchMock.mock.calls.some(([input, init]) => String(input).endsWith("/posts") && init?.method === "POST"),
+    ).toBe(false);
+  });
+
+  it("publishes plain composer drafts as public sky posts", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "/posts": { post: { ...post, post_id: "post_2", content: "hello sky", created_at: "2026-06-13T00:01:00Z" } },
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "The stream");
+
+    const composer = container.querySelector('textarea[aria-label="Composer"]');
+    if (!(composer instanceof HTMLTextAreaElement)) {
+      throw new Error("Composer textarea not found.");
+    }
+    await act(async () => {
+      setNativeValue(composer, "hello sky");
+    });
+    await act(async () => {
+      composer.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await waitForText(container, "hello sky");
+
+    const fetchMock = vi.mocked(fetch);
+    const postCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input).endsWith("/posts") && init?.method === "POST",
+    );
+    expect(String(postCall?.[1]?.body)).toContain('"author_handle":"@researcher:seagull.local"');
+    expect(String(postCall?.[1]?.body)).toContain('"visibility":"public"');
+    expect(String(postCall?.[1]?.body)).toContain('"content":"hello sky"');
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) => String(input).endsWith("/agent-chats") && init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("toggles and persists the dark theme", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "The sky");
+
+    const toggle = container.querySelector('[aria-label="Toggle dark mode"]');
+    if (!(toggle instanceof HTMLElement)) {
+      throw new Error("Theme toggle not found.");
+    }
+    await act(async () => {
+      toggle.click();
+    });
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(window.localStorage.getItem("seagull.web.theme")).toBe("dark");
+
+    await act(async () => {
+      toggle.click();
+    });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(window.localStorage.getItem("seagull.web.theme")).toBe("light");
   });
 
   it("completes Cognito Hosted UI callbacks without direct password auth APIs", async () => {
@@ -399,7 +545,7 @@ describe("App dashboard", () => {
     });
 
     const container = renderApp("/auth/callback?code=code_1&state=state_1");
-    await waitForText(container, "Recent social activity");
+    await waitForText(container, "Planning the first social loop.");
 
     const session = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.session") ?? "{}");
     expect(session.accessToken).toBe("access_1");
@@ -415,7 +561,7 @@ describe("App dashboard", () => {
     ).toBe(false);
   });
 
-  it("renders AI provider admin config", async () => {
+  it("renders AI provider admin config on the server screen", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       messageApiUrl: "https://message.example.test",
@@ -457,6 +603,7 @@ describe("App dashboard", () => {
         items: [],
       },
       "/moderation?limit=50": { items: [] },
+      "/routing-rules": { items: [] },
       "https://ai.example.test/health": { ok: true, app: "ai-provider", storage: "dynamodb" },
       "https://ai.example.test/admin/ai-providers": {
         provider_configs: [
@@ -505,13 +652,13 @@ describe("App dashboard", () => {
       },
     });
 
-    const container = renderApp("/admin");
-    await waitForText(container, "12000");
+    const container = renderApp("/server");
+    await waitForText(container, "12,000");
 
     expect(container.textContent).toContain("fake");
     expect(container.textContent).toContain("fake-small");
-    expect(container.textContent).toContain("12000");
     expect(container.textContent).toContain("ai.provider_config_update");
+    expect(container.textContent).toContain("Initial pool");
 
     const fetchMock = vi.mocked(fetch);
     const providerCall = fetchMock.mock.calls.find(([input]) => String(input) === "https://ai.example.test/admin/ai-providers");
@@ -582,6 +729,26 @@ function mockApi(responses: Record<string, unknown>): void {
       });
     }),
   );
+}
+
+function setNativeValue(element: HTMLTextAreaElement | HTMLInputElement, value: string): void {
+  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (!setter) {
+    throw new Error("Native value setter unavailable.");
+  }
+  setter.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function clickTestId(container: HTMLElement, testId: string): Promise<void> {
+  const element = container.querySelector(`[data-testid="${testId}"]`);
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(`Expected to find element with data-testid "${testId}".`);
+  }
+  await act(async () => {
+    element.click();
+  });
 }
 
 async function waitForText(container: HTMLElement, text: string): Promise<void> {

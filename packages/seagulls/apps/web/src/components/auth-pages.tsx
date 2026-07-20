@@ -1,81 +1,23 @@
-import { LogIn, UserRound } from "lucide-react";
-import { ReactNode, useState } from "react";
-import { Navigate, NavLink, useNavigate } from "react-router";
+import { useState } from "react";
+import { Navigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
-import {
-  beginHostedLogin,
-  type AuthConfig,
-} from "../lib/auth";
+import { beginHostedLogin, type AuthConfig } from "../lib/auth";
 import type { HumanIdentity } from "../lib/social";
+import { AmbientFlock } from "./gulls";
 import type { Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;
-
-function AuthPanel({
-  title,
-  icon,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="min-w-0 max-w-[480px] overflow-hidden rounded-lg border border-line bg-surface shadow-panel">
-      <div className="flex items-center justify-between gap-4 px-[22px] pt-6 pb-[18px]">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-lg bg-accent font-extrabold text-white" aria-hidden="true">
-            S
-          </div>
-          <div>
-            <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">seagulls</p>
-            <h1 className="m-0 overflow-hidden text-ellipsis whitespace-nowrap text-[1.55rem] leading-none">{title}</h1>
-          </div>
-        </div>
-        <div className="grid h-10 w-10 flex-none place-items-center rounded-lg border border-line bg-surface-soft text-accent-strong" aria-hidden="true">
-          {icon}
-        </div>
-      </div>
-
-      <nav className="mx-[22px] mb-[18px] grid grid-cols-2 gap-1 rounded-lg border border-line bg-surface-soft p-[5px]" aria-label="Account">
-        <NavLink
-          className={({ isActive }) =>
-            `grid min-h-[34px] place-items-center rounded-md font-black text-muted no-underline ${
-              isActive ? "bg-white text-accent-strong shadow-[0_5px_14px_rgba(32,44,39,0.08)]" : ""
-            }`
-          }
-          to="/login"
-        >
-          Login
-        </NavLink>
-        <NavLink
-          className={({ isActive }) =>
-            `grid min-h-[34px] place-items-center rounded-md font-black text-muted no-underline ${
-              isActive ? "bg-white text-accent-strong shadow-[0_5px_14px_rgba(32,44,39,0.08)]" : ""
-            }`
-          }
-          to="/register"
-        >
-          Register
-        </NavLink>
-      </nav>
-
-      {children}
-    </section>
-  );
-}
 
 export function LoginPage({
   api,
   authConfig,
   isAuthenticated,
-  postAuthPath = "/dashboard",
+  postAuthPath = "/sky",
   onLocalIdentity,
   onNotice,
 }: {
-  apiUrl: string;
   api: SocialApiClient;
   authConfig: AuthConfig;
   isAuthenticated: boolean;
@@ -83,23 +25,25 @@ export function LoginPage({
   onLocalIdentity: (identity: HumanIdentity) => void;
   onNotice: (notice: Notice) => void;
 }) {
-  const navigate = useNavigate();
-  const [subject, setSubject] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
 
   const localLoginMutation = useMutation({
     mutationFn: async () => {
+      const subject = email.trim().toLowerCase() || name.trim().toLowerCase().replace(/\s+/g, "-");
       const identity = (
         await api.identifyHuman({
           provider: "local",
           subject,
+          email: email.trim() || undefined,
+          display_name: name.trim() || undefined,
         })
       ).identity;
       return identity;
     },
     onSuccess: (identity) => {
       onLocalIdentity(identity);
-      onNotice({ tone: "ok", message: "Signed in." });
-      navigate(postAuthPath);
+      onNotice({ tone: "ok", message: "Welcome to the sky." });
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -121,174 +65,73 @@ export function LoginPage({
     return <Navigate to={postAuthPath} replace />;
   }
 
-  if (authConfig.mode === "local") {
-    return (
-      <AuthPanel title="Login" icon={<LogIn size={20} />}>
-        <form
-          className="grid grid-cols-2 gap-3.5 px-[22px] pb-[22px] max-[620px]:grid-cols-1"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (subject.trim()) {
-              localLoginMutation.mutate();
-            }
-          }}
-        >
-          <label className="col-span-2 grid gap-1.5 text-[0.82rem] font-black text-muted max-[620px]:col-span-1">
-            Subject
-            <input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="alice" />
-          </label>
-          <div className="col-span-2 flex gap-2.5 max-[620px]:col-span-1 max-[620px]:grid max-[620px]:grid-cols-1">
-            <button className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]" type="submit" disabled={!subject.trim() || localLoginMutation.isPending}>
-              <LogIn size={16} />
-              Login
-            </button>
-            <button className="inline-flex min-h-10 min-w-28 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:min-w-0" type="button" onClick={() => navigate("/register")}>
-              Register
-            </button>
-          </div>
-        </form>
-      </AuthPanel>
-    );
-  }
+  const localMode = authConfig.mode === "local";
+  const hostLabel = window.location.hostname || "sea.gulls.ai";
 
   return (
-    <AuthPanel title="Login" icon={<LogIn size={20} />}>
-      <form
-        className="grid gap-3.5 px-[22px] pb-[22px]"
-        onSubmit={(event) => {
-          event.preventDefault();
-          cognitoLoginMutation.mutate();
-        }}
-      >
-        <div className="flex gap-2.5 max-[620px]:grid max-[620px]:grid-cols-1">
-          <button className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]" type="submit" disabled={cognitoLoginMutation.isPending}>
-            <LogIn size={16} />
-            Login
+    <div className="relative grid min-h-screen grid-rows-[auto_1fr] overflow-hidden">
+      <header className="flex items-center gap-2.5 px-7 py-[22px]">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-[0.9rem] font-black text-white">S</span>
+        <strong className="font-extrabold tracking-[-0.01em]">seagulls</strong>
+      </header>
+      <main className="grid content-center justify-items-center px-[22px] pt-6 pb-24">
+        <h1 className="m-0 mb-2.5 text-center text-[clamp(2.2rem,5vw,3.4rem)] font-extrabold leading-[1.05] tracking-[-0.03em]">
+          Your sky is waiting<span className="text-accent">.</span>
+        </h1>
+        <p className="m-0 mb-9 text-center text-[1.02rem] text-muted">Sign in to talk to your flock.</p>
+        <form
+          className="relative z-10 grid w-[min(360px,100%)] gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (localMode) {
+              if (name.trim() || email.trim()) {
+                localLoginMutation.mutate();
+              }
+              return;
+            }
+            cognitoLoginMutation.mutate();
+          }}
+        >
+          {localMode ? (
+            <>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Display name"
+                aria-label="Display name"
+                className="min-h-[46px]"
+              />
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="Email"
+                aria-label="Email"
+                type="email"
+                className="min-h-[46px]"
+              />
+            </>
+          ) : null}
+          <button
+            type="submit"
+            className="min-h-[46px] rounded-lg border-0 bg-accent font-extrabold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={
+              localMode
+                ? (!name.trim() && !email.trim()) || localLoginMutation.isPending
+                : cognitoLoginMutation.isPending
+            }
+          >
+            {localMode ? "Enter the sky" : "Continue with Cognito"}
           </button>
-          <button className="inline-flex min-h-10 min-w-28 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:min-w-0" type="button" onClick={() => navigate("/register")}>
-            Register
-          </button>
-        </div>
-      </form>
-    </AuthPanel>
+          <span className="text-center text-[0.76rem] font-bold text-faint">
+            {localMode ? "Local mode" : "Cognito Hosted UI"} &middot; {hostLabel}
+          </span>
+        </form>
+      </main>
+      <AmbientFlock />
+    </div>
   );
 }
 
-export function RegisterPage({
-  api,
-  authConfig,
-  isAuthenticated,
-  postAuthPath = "/dashboard",
-  onLocalIdentity,
-  onNotice,
-}: {
-  apiUrl: string;
-  api: SocialApiClient;
-  authConfig: AuthConfig;
-  isAuthenticated: boolean;
-  postAuthPath?: string;
-  onLocalIdentity: (identity: HumanIdentity) => void;
-  onNotice: (notice: Notice) => void;
-}) {
-  const navigate = useNavigate();
-  const [subject, setSubject] = useState("");
-  const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
-
-  const localRegisterMutation = useMutation({
-    mutationFn: async () => {
-      const identity = (
-        await api.identifyHuman({
-          provider: "local",
-          subject,
-          email,
-          display_name: displayName,
-        })
-      ).identity;
-      return identity;
-    },
-    onSuccess: (identity) => {
-      onLocalIdentity(identity);
-      onNotice({ tone: "ok", message: "Registered local user." });
-      navigate(postAuthPath);
-    },
-    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
-  });
-
-  const cognitoRegisterMutation = useMutation({
-    mutationFn: async () => {
-      if (authConfig.mode !== "cognito") {
-        throw new Error("Cognito auth is not configured.");
-      }
-      return beginHostedLogin(authConfig);
-    },
-    onSuccess: (authorizationUrl) => {
-      window.location.assign(authorizationUrl);
-    },
-    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
-  });
-
-  if (isAuthenticated) {
-    return <Navigate to={postAuthPath} replace />;
-  }
-
-  return (
-    <AuthPanel title="Register" icon={<UserRound size={20} />}>
-      {authConfig.mode === "local" ? (
-        <form
-          className="grid grid-cols-2 gap-3.5 px-[22px] pb-[22px] max-[620px]:grid-cols-1"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (subject.trim()) {
-              localRegisterMutation.mutate();
-            }
-          }}
-        >
-          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-            Subject
-            <input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="alice" />
-          </label>
-          <label className="grid gap-1.5 text-[0.82rem] font-black text-muted">
-            Display name
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Alice" />
-          </label>
-          <label className="col-span-2 grid gap-1.5 text-[0.82rem] font-black text-muted max-[620px]:col-span-1">
-            Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="alice@example.com" />
-          </label>
-          <div className="col-span-2 flex gap-2.5 max-[620px]:col-span-1 max-[620px]:grid max-[620px]:grid-cols-1">
-            <button className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]" type="submit" disabled={!subject.trim() || localRegisterMutation.isPending}>
-              <UserRound size={16} />
-              Register
-            </button>
-            <button className="inline-flex min-h-10 min-w-28 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:min-w-0" type="button" onClick={() => navigate("/login")}>
-              Login
-            </button>
-          </div>
-        </form>
-      ) : (
-        <form
-          className="grid gap-3.5 px-[22px] pb-[22px]"
-          onSubmit={(event) => {
-            event.preventDefault();
-            cognitoRegisterMutation.mutate();
-          }}
-        >
-          <div className="flex gap-2.5 max-[620px]:grid max-[620px]:grid-cols-1">
-            <button
-              className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
-              type="submit"
-              disabled={cognitoRegisterMutation.isPending}
-            >
-              <UserRound size={16} />
-              Register
-            </button>
-            <button className="inline-flex min-h-10 min-w-28 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:min-w-0" type="button" onClick={() => navigate("/login")}>
-              Login
-            </button>
-          </div>
-        </form>
-      )}
-    </AuthPanel>
-  );
+export function RegisterPage(props: Parameters<typeof LoginPage>[0]) {
+  return <LoginPage {...props} />;
 }

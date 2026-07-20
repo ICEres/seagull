@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>seagulls</title>
+    <script>
+      // Apply the stored/system theme before first paint to avoid a light flash.
+      try {
+        var storedTheme = localStorage.getItem("seagull.web.theme");
+        if (
+          storedTheme === "dark" ||
+          (storedTheme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (error) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

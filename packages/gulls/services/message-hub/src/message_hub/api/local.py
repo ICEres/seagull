@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from message_hub._compat import dataclass
 from message_hub.domain import (
@@ -23,6 +23,7 @@ from message_hub.domain import (
     InvalidMessageError,
     Message,
     MessageRef,
+    MessageHubError,
     MessageHubService,
     NotFoundError,
     PayloadCompaction,
@@ -46,34 +47,14 @@ from message_hub.domain import (
     ThreadRecord,
     WorkflowTraceEntry,
 )
+from message_hub.domain.cards import (
+    agent_card,
+    message_status_path,
+    sender_visible_status,
+    thread_path,
+)
 from message_hub.domain.service import normalize_handle
 from message_hub.storage import InMemoryMessageHubRepository
-
-
-PRIVATE_PROFILE_MARKERS = (
-    "mcp://",
-    "file://",
-    "localhost",
-    "127.0.0.1",
-    "::1",
-    ".sock",
-    "tool://",
-    "raw_tool",
-    "raw-tool",
-    "tool_handle",
-    "tool-handle",
-    "mcp_server",
-    "mcp-server",
-    "credential",
-    "credentials",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "password",
-    "authorization",
-    "bearer ",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +62,29 @@ class ApiError(Exception):
     status_code: int
     error: str
     message: str
+
+
+# Single domain-error -> (HTTP status, error code) table. The public agent
+# URL methods raise through ``raise_api_error`` instead of per-method
+# try/except chains; the older methods keep their hand-written chains for now
+# and migrate in a later slice.
+DOMAIN_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
+    DuplicateAgentHandleError: (409, "conflict"),
+    ForbiddenDeliveryError: (403, "forbidden"),
+    ForbiddenPayloadError: (403, "forbidden"),
+    InvalidMessageError: (400, "bad_request"),
+    NotFoundError: (404, "not_found"),
+    PayloadUnavailableError: (410, "payload_unavailable"),
+    SafetyBlockedError: (403, "blocked"),
+}
+
+
+def raise_api_error(exc: Exception) -> NoReturn:
+    """Translate a mapped domain error into ``ApiError``; re-raise the rest."""
+    for error_type, (status_code, error) in DOMAIN_ERROR_HTTP.items():
+        if isinstance(exc, error_type):
+            raise ApiError(status_code, error, str(exc)) from exc
+    raise exc
 
 
 class LocalMessageHubApi:
@@ -448,6 +452,121 @@ class LocalMessageHubApi:
         if principal.agent_handle != normalized_handle:
             raise ApiError(403, "forbidden", "agent token cannot access another agent's legacy route")
         return agent_token_principal_to_dict(principal)
+
+    def public_agent_send(
+        self,
+        authorization: str | None,
+        name: str,
+        body: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """``POST /agents/{name}/messages``: message the path agent's public URL.
+
+        The sender is always the bearer token's agent (scope ``agent:post``);
+        a ``sender_handle`` in the body is ignored. The recipient is the path
+        agent resolved by ``public_agent_handle`` and visibility is fixed to
+        ``direct``. ``idempotency_key`` (the Idempotency-Key header, with the
+        body field as fallback) feeds ``send_message``'s repository-backed
+        replay handling.
+
+        Returns the public envelope plus a ``replayed`` flag that HTTP
+        adapters pop to choose 202 (created) vs 200 (idempotent replay); the
+        flag is not part of the wire envelope.
+        """
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        key = (idempotency_key or "").strip() or optional_string(body, "idempotency_key")
+        try:
+            recipient = self._service.get_agent(public_agent_handle(name))
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        replayed = False
+        if key:
+            # send_message resolves replays itself; peek at the repository
+            # (as read_routing_rules does for its missing read model) so the
+            # transport can tell 202-created from 200-replayed without a
+            # second send path.
+            replayed = (
+                self._service._repository.get_idempotent_message_id(  # noqa: SLF001
+                    principal.agent_id,
+                    key,
+                )
+                is not None
+            )
+
+        try:
+            result = self._service.send_message(
+                sender_handle=principal.agent_handle,
+                recipient_handles=[recipient.handle],
+                content=optional_string(body, "content"),
+                content_ref=optional_string(body, "content_ref"),
+                refs=refs_list(body.get("refs", ()), "refs"),
+                intent=optional_string(body, "intent") or "message",
+                visibility="direct",
+                thread_id=optional_string(body, "thread_id"),
+                idempotency_key=key,
+            )
+        except (MessageHubError, SafetyBlockedError) as exc:
+            raise_api_error(exc)
+
+        deliveries = [
+            delivery
+            for delivery in result.deliveries
+            if delivery.recipient_agent_id == recipient.agent_id
+        ]
+        if len(deliveries) != 1:
+            raise ApiError(
+                500,
+                "internal_error",
+                "public agent send expected exactly one delivery for the path agent",
+            )
+        delivery = deliveries[0]
+
+        return {
+            "delivery_id": delivery.delivery_id,
+            "message_id": result.message.message_id,
+            "thread_id": result.thread.thread_id,
+            "status_url": message_status_path(recipient.handle, delivery.delivery_id),
+            "thread_url": thread_path(result.thread.thread_id),
+            "replayed": replayed,
+        }
+
+    def public_agent_message_status(
+        self,
+        authorization: str | None,
+        name: str,
+        delivery_id: str,
+    ) -> dict[str, Any]:
+        """``GET /agents/{name}/messages/{delivery_id}``: sender-visible status.
+
+        Requires scope ``agent:read`` and only the delivery's sender may read
+        it. A delivery not addressed to the path agent reads the same as an
+        unknown id (404) so the route cannot confirm other agents' traffic,
+        and recipient decisions are collapsed by ``sender_visible_status`` so
+        e.g. ``ignored`` is indistinguishable from ``delivered``.
+        """
+        principal = self._require_agent_token(authorization, required_scope="agent:read")
+        try:
+            recipient = self._service.get_agent(public_agent_handle(name))
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        # The domain service has no delivery read model yet; read through its
+        # repository as read_routing_rules does.
+        delivery = self._service._repository.get_delivery((delivery_id or "").strip())  # noqa: SLF001
+        if delivery is None or delivery.recipient_agent_id != recipient.agent_id:
+            raise ApiError(404, "not_found", f"delivery not found: {delivery_id}")
+        if delivery.sender_agent_id != principal.agent_id:
+            raise ApiError(403, "forbidden", "only the sender may read this delivery status")
+
+        return {
+            "delivery_id": delivery.delivery_id,
+            "status": sender_visible_status(delivery.status),
+            "created_at": datetime_to_string(delivery.created_at),
+            "updated_at": datetime_to_string(delivery.updated_at),
+            "thread_url": thread_path(delivery.thread_id),
+        }
 
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
@@ -1134,18 +1253,9 @@ def payload_compaction_to_dict(compaction: PayloadCompaction) -> dict[str, Any]:
 
 
 def agent_to_dict(agent: Agent) -> dict[str, Any]:
-    return {
-        "agent_id": agent.agent_id,
-        "handle": agent.handle,
-        "display_name": agent.display_name,
-        "capabilities": public_capabilities(agent.capabilities),
-        "response_rules": public_response_rules(agent.response_rules),
-        "status": agent.status,
-        "trigger_mode": agent.trigger_mode,
-        "webhook_enabled": agent.trigger_mode == "webhook" and agent.webhook_url is not None,
-        "created_at": datetime_to_string(agent.created_at),
-        "updated_at": datetime_to_string(agent.updated_at),
-    }
+    # The public profile shape lives in domain.cards so the local api and the
+    # deployed adapters share exactly one sanitizer.
+    return agent_card(agent)
 
 
 def agent_token_principal_to_dict(principal: Any) -> dict[str, Any]:
@@ -1190,42 +1300,21 @@ def bearer_token_from_authorization(authorization: str | None) -> str:
     return parts[1].strip()
 
 
-def public_capabilities(capabilities: tuple[str, ...]) -> list[str]:
-    return [capability for capability in capabilities if not has_private_profile_marker(capability)]
+def public_agent_handle(name: str) -> str:
+    """Resolve a public-URL path segment to the handle form the hub stores.
 
-
-def public_response_rules(response_rules: dict[str, Any] | None) -> dict[str, Any] | None:
-    sanitized = sanitize_public_profile_value(response_rules)
-    return sanitized if isinstance(sanitized, dict) else None
-
-
-def sanitize_public_profile_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return None if has_private_profile_marker(value) else value
-    if isinstance(value, (list, tuple)):
-        sanitized_items = []
-        for item in value:
-            sanitized = sanitize_public_profile_value(item)
-            if sanitized is not None:
-                sanitized_items.append(sanitized)
-        return sanitized_items
-    if isinstance(value, dict):
-        sanitized_dict: dict[str, Any] = {}
-        for key, item in value.items():
-            if has_private_profile_marker(str(key)):
-                continue
-            sanitized = sanitize_public_profile_value(item)
-            if sanitized is not None:
-                sanitized_dict[str(key)] = sanitized
-        return sanitized_dict
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return None
-
-
-def has_private_profile_marker(value: str) -> bool:
-    normalized = value.lower()
-    return any(marker in normalized for marker in PRIVATE_PROFILE_MARKERS)
+    Handles in this hub include their host (``@worker:gulls.ai``) and the
+    canonical stored form always starts with ``@``. The path segment accepts
+    exactly that canonical form (URL-decoded) with the leading ``@`` optional:
+    ``worker:gulls.ai`` becomes ``@worker:gulls.ai`` and bare ``worker``
+    becomes ``@worker``. No other resolution (host defaulting, fuzzy
+    matching) is attempted, so a bare name only works when the hub stores the
+    hostless handle; anything else 404s at the agent lookup.
+    """
+    candidate = (name or "").strip()
+    if candidate and not candidate.startswith("@"):
+        candidate = f"@{candidate}"
+    return normalize_handle(candidate)
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:

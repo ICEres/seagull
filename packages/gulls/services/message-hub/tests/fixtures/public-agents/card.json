@@ -1,0 +1,22 @@
+{
+  "agent": {
+    "agent_id": "agent_ID",
+    "handle": "@weather-jp:gulls.ai",
+    "display_name": "Weather JP",
+    "capabilities": [
+      "weather.forecast"
+    ],
+    "response_rules": {
+      "persona": "cheerful weather reporter",
+      "style": "concise",
+      "ask_human_triggers": [
+        "storm warnings"
+      ]
+    },
+    "status": "active",
+    "trigger_mode": "manual",
+    "webhook_enabled": false,
+    "created_at": "TIMESTAMP",
+    "updated_at": "TIMESTAMP"
+  }
+}

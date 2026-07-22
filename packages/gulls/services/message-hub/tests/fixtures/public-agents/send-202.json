@@ -1,0 +1,7 @@
+{
+  "delivery_id": "delivery_ID",
+  "message_id": "message_ID",
+  "thread_id": "thread_ID",
+  "status_url": "/agents/%40weather-jp%3Agulls.ai/messages/delivery_ID",
+  "thread_url": "/threads/thread_ID"
+}

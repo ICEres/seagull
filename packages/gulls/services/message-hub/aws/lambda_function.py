@@ -576,6 +576,9 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
         handle = unquote(path.removeprefix("/agents/").strip("/"))
         return response(200, get_api().read_agent(handle))
 
+    if public_agent_messages_path(path):
+        return route_public_agent_messages(method, path, event)
+
     if method == "POST" and path == "/payloads":
         return response(201, get_api().create_payload(parse_body(event)))
 
@@ -797,6 +800,36 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
     raise ApiError(404, "not_found", f"agent runtime route not found: {method} {path}")
 
 
+def route_public_agent_messages(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    """Public agent URL routes: message an agent's card URL, read send status.
+
+    Both routes authenticate with sga_ bearer tokens through the local api;
+    the sender/reader is always the token's agent. ``PUBLIC_AGENT_URLS_ENABLED``
+    is the deploy-time kill switch: when set to ``false``/``0`` these routes
+    404 exactly like unrouted paths (existing routes are unaffected).
+    """
+    if not public_agent_urls_enabled():
+        return response(404, {"error": "not_found", "method": method, "path": path})
+
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    api = get_api()
+
+    if method == "POST" and len(parts) == 3:
+        result = api.public_agent_send(
+            authorization_header(event),
+            parts[1],
+            parse_body(event),
+            idempotency_key=idempotency_key_header(event),
+        )
+        replayed = bool(result.pop("replayed", False))
+        return response(200 if replayed else 202, result)
+
+    if method == "GET" and len(parts) == 4:
+        return response(200, api.public_agent_message_status(authorization_header(event), parts[1], parts[3]))
+
+    return response(404, {"error": "not_found", "method": method, "path": path})
+
+
 def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
     agent_handle, parts = personal_agent_path_parts(path)
     api = get_api()
@@ -869,6 +902,17 @@ def authorization_header(event: dict[str, Any]) -> str | None:
     return headers.get("authorization") or headers.get("Authorization")
 
 
+def idempotency_key_header(event: dict[str, Any]) -> str | None:
+    headers = event.get("headers") or {}
+    return headers.get("idempotency-key") or headers.get("Idempotency-Key")
+
+
+def public_agent_urls_enabled() -> bool:
+    # Kill switch for the public agent URL routes (Lambda only; the local api
+    # has no flag). Default enabled; only explicit "false"/"0" disables.
+    return os.environ.get("PUBLIC_AGENT_URLS_ENABLED", "").strip().lower() not in {"false", "0"}
+
+
 # ---------------------------------------------------------------------------
 # Request parsing helpers
 
@@ -889,6 +933,12 @@ def message_body(body: dict[str, Any]) -> dict[str, Any]:
 def public_agent_profile_path(path: str) -> bool:
     parts = [part for part in path.strip("/").split("/") if part]
     return len(parts) == 2 and parts[0] == "agents"
+
+
+def public_agent_messages_path(path: str) -> bool:
+    # /agents/{name}/messages and /agents/{name}/messages/{delivery_id}
+    parts = [part for part in path.strip("/").split("/") if part]
+    return len(parts) in {3, 4} and parts[0] == "agents" and parts[2] == "messages"
 
 
 def path_param(path: str, prefix: str, suffix: str) -> str:

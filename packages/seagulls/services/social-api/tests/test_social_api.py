@@ -97,6 +97,17 @@ class FakeAiRunClient:
         return self._run
 
 
+class RecordingAgentRegistry:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.registered: list[tuple[str, str | None]] = []
+        self._error = error
+
+    def register(self, handle: str, display_name: str | None = None) -> None:
+        if self._error is not None:
+            raise self._error
+        self.registered.append((handle, display_name))
+
+
 class NoFanoutReadRepository(InMemorySocialRepository):
     reject_fanout_reads = False
 
@@ -728,6 +739,67 @@ class SocialApiServiceTest(TestCase):
                 allowed_use_terms=("inspect_shared_context",),
             )
 
+    def test_profile_creation_registers_normalized_handle_with_agent_registry(self) -> None:
+        registry = RecordingAgentRegistry()
+        service = SocialApiService(
+            InMemorySocialRepository(),
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            agent_registry=registry,
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+
+        service.create_agent_profile(
+            owner_user_id=alice.user_id,
+            handle="@Researcher:Seagull.Local",
+            display_name="Researcher",
+        )
+
+        self.assertEqual([("@researcher:seagull.local", "Researcher")], registry.registered)
+
+    def test_pair_token_agent_registration_registers_handle_with_agent_registry(self) -> None:
+        registry = RecordingAgentRegistry()
+        service = SocialApiService(
+            InMemorySocialRepository(),
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            agent_registry=registry,
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+        node = service.create_node(owner_user_id=alice.user_id)
+        token = service.create_pair_token(owner_user_id=alice.user_id, node_id=node.node_id)
+
+        service.register_agent_with_pair_token(
+            pair_token=token.pair_token,
+            handle="@Map-Reader:Gulls.AI",
+            display_name="Map Reader",
+        )
+
+        self.assertEqual([("@map-reader:gulls.ai", "Map Reader")], registry.registered)
+
+    def test_agent_registry_failure_does_not_fail_profile_creation(self) -> None:
+        registry = RecordingAgentRegistry(error=RuntimeError("hub unreachable"))
+        service = SocialApiService(
+            InMemorySocialRepository(),
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            agent_registry=registry,
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+
+        with self.assertLogs("social_api.domain.service", level="WARNING") as logs:
+            profile = service.create_agent_profile(
+                owner_user_id=alice.user_id,
+                handle="@researcher:seagull.local",
+            )
+
+        self.assertEqual("@researcher:seagull.local", profile.handle)
+        self.assertEqual(
+            (profile,),
+            service.list_owned_profiles(alice.user_id),
+        )
+        self.assertIn("hub unreachable", logs.output[0])
+
     def test_text_refs_post_preserves_legacy_content(self) -> None:
         profile = self.service.create_agent_profile(
             owner_user_id=self.alice.user_id,
@@ -965,6 +1037,43 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual("thread_1", message["hub_thread_id"])
         self.assertEqual([message["chat_message_id"]], [item["chat_message_id"] for item in messages])
         self.assertEqual("thread_1", updated_chat["hub_thread_id"])
+
+    def test_local_api_registers_profiles_at_creation_and_not_on_chat_send(self) -> None:
+        hub = FakeMessageHubSender()
+        registry = RecordingAgentRegistry()
+        api = LocalSocialApi.in_memory(
+            auth_required=True,
+            message_hub_sender=hub,
+            agent_registry=registry,
+        )
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        sender = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+        assistant = api.create_agent_profile(
+            {"handle": "@assistant:seagull.local", "display_name": "Assistant"},
+            principal,
+        )["profile"]
+
+        self.assertEqual(
+            [("@alice:seagull.local", None), ("@assistant:seagull.local", "Assistant")],
+            registry.registered,
+        )
+
+        registry.registered.clear()
+        chat = api.create_agent_chat(
+            {"agent_handle": assistant["handle"], "sender_handle": sender["handle"]},
+            principal,
+        )["chat"]
+        message = api.create_agent_chat_message(
+            chat["chat_id"],
+            {"content": "Plan the MVP."},
+            principal,
+        )["message"]
+
+        # The chat-send path relies on creation-time registration; it must not
+        # re-register handles with the hub on every send.
+        self.assertEqual([], registry.registered)
+        self.assertEqual(1, len(hub.sent))
+        self.assertEqual("delivered", message["delivery_status"])
 
     def test_local_api_chat_message_generates_provider_backed_reply(self) -> None:
         ai_client = FakeAiRunClient()

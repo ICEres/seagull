@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from seagull_protocol import (
@@ -47,6 +48,22 @@ CHAT_DELIVERY_STATUSES = {"stored", "delivered", "delivery_failed"}
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
 
+LOGGER = logging.getLogger(__name__)
+
+
+class AgentRegistry(Protocol):
+    """Port for registering agent handles with the gulls message hub."""
+
+    def register(self, handle: str, display_name: str | None = None) -> None:
+        """Ensure the handle exists in the hub's agent registry."""
+
+
+class NullAgentRegistry:
+    """No-op registry for deployments and tests without a message hub."""
+
+    def register(self, handle: str, display_name: str | None = None) -> None:
+        return None
+
 
 class SocialApiError(Exception):
     """Base error for social API domain failures."""
@@ -79,10 +96,12 @@ class SocialApiService:
         *,
         id_factory: IdFactory | None = None,
         clock: Clock = utc_now,
+        agent_registry: AgentRegistry | None = None,
     ) -> None:
         self._repository = repository
         self._id_factory = id_factory or self._default_id_factory
         self._clock = clock
+        self._agent_registry = agent_registry or NullAgentRegistry()
 
     def identify_human(
         self,
@@ -181,7 +200,19 @@ class SocialApiService:
             updated_at=now,
         )
         self._repository.put_agent_profile(profile)
+        # M0.2 (public-agent-urls plan): the gulls message hub is the
+        # authoritative agent registry; the local profile table only keeps
+        # product metadata. Registration is best-effort because the hub's
+        # POST /agents is an idempotent get-or-create and local dev runs
+        # without a hub, so profile creation must not fail on hub errors.
+        self._register_agent_handle(profile)
         return profile
+
+    def _register_agent_handle(self, profile: AgentProfileRecord) -> None:
+        try:
+            self._agent_registry.register(profile.handle, display_name=profile.display_name)
+        except Exception as exc:
+            LOGGER.warning("agent registry registration failed for %s: %s", profile.handle, exc)
 
     def update_agent_profile(
         self,
@@ -644,6 +675,8 @@ class SocialApiService:
             raise InvalidSocialRequestError("pair_token is invalid or expired")
 
         node = self._require_node(token.node_id)
+        # create_agent_profile also registers the handle with the hub agent
+        # registry (M0.2), so pair-token registration needs no extra call.
         profile = self.create_agent_profile(
             owner_user_id=token.owner_user_id,
             handle=handle,

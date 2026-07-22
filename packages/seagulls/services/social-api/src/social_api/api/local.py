@@ -9,6 +9,7 @@ from social_api.domain import (
     AgentChatMessage,
     AgentChatSession,
     AgentProfileRecord,
+    AgentRegistry,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     FeedEvent,
@@ -87,9 +88,10 @@ class LocalSocialApi:
         auth_required: bool = False,
         message_hub_sender: MessageHubSender | None = None,
         ai_run_client: AiRunClient | None = None,
+        agent_registry: AgentRegistry | None = None,
     ) -> LocalSocialApi:
         return cls(
-            SocialApiService(InMemorySocialRepository()),
+            SocialApiService(InMemorySocialRepository(), agent_registry=agent_registry),
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,
             ai_run_client=ai_run_client,

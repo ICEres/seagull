@@ -21,6 +21,7 @@ from social_api.domain.models import (
     SharedReference,
 )
 from social_api.domain.service import (
+    AgentRegistry,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     InvalidSocialRequestError,
@@ -34,6 +35,7 @@ __all__ = [
     "AgentChatMessage",
     "AgentChatSession",
     "AgentProfileRecord",
+    "AgentRegistry",
     "DEFAULT_APPROVAL_REQUIRED_FOR",
     "DuplicateAgentHandleError",
     "DuplicateRoomSlugError",

@@ -90,7 +90,23 @@ repository = DynamoDbSocialRepository(
     notifications_table=dynamodb.Table(os.environ["NOTIFICATIONS_TABLE"]),
     moderation_table=dynamodb.Table(os.environ["MODERATION_TABLE"]),
 )
-service = SocialApiService(repository)
+class MessageHubAgentRegistry:
+    """AgentRegistry port backed by the gulls message hub.
+
+    M0.2 (public-agent-urls plan): the hub is the authoritative agent
+    registry, so handles are registered at profile creation instead of on
+    every chat send. POST /agents is an idempotent get-or-create; failures
+    are handled best-effort by the domain service.
+    """
+
+    def register(self, handle: str, display_name: str | None = None) -> None:
+        message_api_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+        if not message_api_url:
+            return
+        register_message_hub_agent(message_api_url, handle, display_name=display_name)
+
+
+service = SocialApiService(repository, agent_registry=MessageHubAgentRegistry())
 
 
 class BadRequest(ValueError):
@@ -500,21 +516,26 @@ def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> A
     if not message_api_url:
         return message
 
+    payload = {
+        "sender_handle": chat.sender_handle,
+        "recipient_handles": [chat.agent_handle],
+        "content": message.content,
+        "thread_id": chat.hub_thread_id,
+        "intent": "chat",
+        "visibility": "direct",
+    }
     try:
-        register_message_hub_agent(message_api_url, chat.sender_handle)
-        register_message_hub_agent(message_api_url, chat.agent_handle)
-        result = post_message_hub_json(
-            message_api_url,
-            "/messages",
-            {
-                "sender_handle": chat.sender_handle,
-                "recipient_handles": [chat.agent_handle],
-                "content": message.content,
-                "thread_id": chat.hub_thread_id,
-                "intent": "chat",
-                "visibility": "direct",
-            },
-        )
+        try:
+            result = post_message_hub_json(message_api_url, "/messages", payload)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            # Legacy backfill: profiles created before M0.2 were never
+            # registered with the hub at creation time. Register both handles
+            # once and retry the send a single time.
+            register_message_hub_agent(message_api_url, chat.sender_handle)
+            register_message_hub_agent(message_api_url, chat.agent_handle)
+            result = post_message_hub_json(message_api_url, "/messages", payload)
     except Exception as exc:
         return service.record_agent_chat_message_delivery(
             owner_user_id=owner_user_id,
@@ -533,9 +554,9 @@ def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> A
     )
 
 
-def register_message_hub_agent(base_url: str, handle: str) -> None:
+def register_message_hub_agent(base_url: str, handle: str, display_name: str | None = None) -> None:
     try:
-        post_message_hub_json(base_url, "/agents", {"handle": handle})
+        post_message_hub_json(base_url, "/agents", {"handle": handle, "display_name": display_name})
     except HTTPError as exc:
         if exc.code == 409:
             return

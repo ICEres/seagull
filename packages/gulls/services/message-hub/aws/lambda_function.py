@@ -502,9 +502,38 @@ def _build_repository(config: dict[str, str] | None) -> DynamoDbMessageHubReposi
 _RUNTIME: dict[str, Any] = {"api": None, "secrets": {}}
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def build_api(*, service: MessageHubService | None = None) -> LocalMessageHubApi:
+    """Construct the api with guest-ingress settings from the environment.
+
+    ``GUEST_STATUS_SIGNING_SECRET`` (direct or ``_ARN`` via the secret_env
+    pattern) signs guest status-poll tokens; when it is unset the api falls
+    back to a per-instance random secret, but token-less sends are refused
+    with 503 before reaching the api (``require_guest_status_signing_secret``)
+    so unverifiable status URLs are never handed out.
+    """
+    if service is None:
+        service = build_service()
+    return LocalMessageHubApi(
+        service,
+        guest_status_signing_secret=_cached_secret("GUEST_STATUS_SIGNING_SECRET") or None,
+        guest_send_ip_hourly_limit=_int_env("GUEST_SEND_IP_HOURLY_LIMIT", 10),
+        guest_send_recipient_hourly_limit=_int_env("GUEST_SEND_RECIPIENT_HOURLY_LIMIT", 30),
+    )
+
+
 def get_api() -> LocalMessageHubApi:
     if _RUNTIME["api"] is None:
-        _RUNTIME["api"] = LocalMessageHubApi(build_service())
+        _RUNTIME["api"] = build_api()
     return _RUNTIME["api"]
 
 
@@ -779,6 +808,9 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
         limit = query_limit(event, default=20, maximum=100)
         return response(200, api.agent_inbox(authorization, limit=limit))
 
+    if method == "POST" and parts == ["agent", "inbox-posture"]:
+        return response(200, api.agent_set_inbox_posture(authorization, parse_body(event)))
+
     if method == "POST" and parts == ["agent", "posts"]:
         return response(201, api.agent_post(authorization, message_body(parse_body(event))))
 
@@ -803,10 +835,13 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
 def route_public_agent_messages(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
     """Public agent URL routes: message an agent's card URL, read send status.
 
-    Both routes authenticate with sga_ bearer tokens through the local api;
-    the sender/reader is always the token's agent. ``PUBLIC_AGENT_URLS_ENABLED``
-    is the deploy-time kill switch: when set to ``false``/``0`` these routes
-    404 exactly like unrouted paths (existing routes are unaffected).
+    Requests carrying an sga_ bearer token act as that token's agent; a
+    token-less POST is GUEST ingress (posture-gated, rate-limited,
+    quarantine-first) and a GET with a ``token`` query parameter is the
+    signed guest status poll — neither needs Authorization.
+    ``PUBLIC_AGENT_URLS_ENABLED`` is the deploy-time kill switch: when set to
+    ``false``/``0`` these routes 404 exactly like unrouted paths (existing
+    routes are unaffected).
     """
     if not public_agent_urls_enabled():
         return response(404, {"error": "not_found", "method": method, "path": path})
@@ -815,19 +850,118 @@ def route_public_agent_messages(method: str, path: str, event: dict[str, Any]) -
     api = get_api()
 
     if method == "POST" and len(parts) == 3:
-        result = api.public_agent_send(
-            authorization_header(event),
-            parts[1],
-            parse_body(event),
-            idempotency_key=idempotency_key_header(event),
-        )
-        replayed = bool(result.pop("replayed", False))
-        return response(200 if replayed else 202, result)
+        return public_agent_send_route(parts[1], event)
 
     if method == "GET" and len(parts) == 4:
+        params = query_params(event)
+        if "token" in params:
+            # A token parameter — even an empty one — selects the guest flow,
+            # where anything invalid reads as 404 (never 401/403).
+            return response(200, api.public_agent_guest_message_status(parts[1], parts[3], params.get("token")))
         return response(200, api.public_agent_message_status(authorization_header(event), parts[1], parts[3]))
 
     return response(404, {"error": "not_found", "method": method, "path": path})
+
+
+def public_agent_send_route(name: str, event: dict[str, Any]) -> dict[str, Any]:
+    """POST /agents/{name}/messages for both sender classes, with the ops log.
+
+    Every public send emits exactly one structured JSON log line (route,
+    recipient handle — it is public — posture, sender_class, outcome,
+    delivery_id) whether it succeeds or maps to an ApiError.
+    """
+    authorization = authorization_header(event)
+    sender_class = "guest" if authorization is None else "registered"
+    api = get_api()
+
+    try:
+        if authorization is None:
+            # Guest ingress requires the status-URL signing secret: without it
+            # the 202 envelope could not carry a verifiable status_url.
+            require_guest_status_signing_secret()
+            result = api.public_agent_send(
+                None,
+                name,
+                parse_body(event),
+                source_ip=guest_source_ip(event),
+            )
+            replayed = False
+        else:
+            result = api.public_agent_send(
+                authorization,
+                name,
+                parse_body(event),
+                idempotency_key=idempotency_key_header(event),
+            )
+            replayed = bool(result.pop("replayed", False))
+    except ApiError as exc:
+        log_public_agent_send(
+            api,
+            name=name,
+            sender_class=sender_class,
+            outcome=exc.error,
+            delivery_id=None,
+        )
+        raise
+
+    log_public_agent_send(
+        api,
+        name=name,
+        sender_class=sender_class,
+        outcome="replayed" if replayed else "accepted",
+        delivery_id=str(result.get("delivery_id") or ""),
+    )
+    return response(200 if replayed else 202, result)
+
+
+def log_public_agent_send(
+    api: LocalMessageHubApi,
+    *,
+    name: str,
+    sender_class: str,
+    outcome: str,
+    delivery_id: str | None,
+) -> None:
+    posture = None
+    recipient = None
+    try:
+        card = api.read_agent(name)["agent"]
+        posture = card.get("inbox_posture")
+        recipient = card.get("handle")
+    except ApiError:
+        pass
+    # Recipient handles are public (they are the URL), so log them raw; guest
+    # sender identities and message content are never logged.
+    print(
+        json.dumps(
+            {
+                "event": "public_agent_send",
+                "route": "POST /agents/{name}/messages",
+                "recipient": recipient or name,
+                "posture": posture,
+                "sender_class": sender_class,
+                "outcome": outcome,
+                "delivery_id": delivery_id,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def require_guest_status_signing_secret() -> None:
+    if not _cached_secret("GUEST_STATUS_SIGNING_SECRET"):
+        raise ApiError(
+            503,
+            "config_error",
+            "guest sends are not configured: set GUEST_STATUS_SIGNING_SECRET "
+            "(or GUEST_STATUS_SIGNING_SECRET_ARN)",
+        )
+
+
+def guest_source_ip(event: dict[str, Any]) -> str:
+    value = event.get("requestContext", {}).get("http", {}).get("sourceIp")
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or "unknown"
 
 
 def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:

@@ -56,6 +56,8 @@ from message_hub.domain.models import (
 )
 from message_hub.domain.service import (
     AGENT_TOKEN_SCOPES,
+    GUEST_HANDLE_PREFIX,
+    INBOX_POSTURES,
     DuplicateAgentHandleError,
     AgentTokenVerificationError,
     ForbiddenDeliveryError,
@@ -67,8 +69,13 @@ from message_hub.domain.service import (
     MessageHubService,
     NotFoundError,
     PayloadUnavailableError,
+    PostureNotOpenError,
 )
-from message_hub.domain.safety import LocalSafetyEvaluator, SafetyBlockedError
+from message_hub.domain.safety import (
+    GuestSafetyEvaluator,
+    LocalSafetyEvaluator,
+    SafetyBlockedError,
+)
 
 __all__ = [
     "Agent",
@@ -87,6 +94,9 @@ __all__ = [
     "DuplicateAgentHandleError",
     "ForbiddenDeliveryError",
     "ForbiddenPayloadError",
+    "GUEST_HANDLE_PREFIX",
+    "GuestSafetyEvaluator",
+    "INBOX_POSTURES",
     "InboxItem",
     "InvalidMessageError",
     "InvalidTaskTransitionError",
@@ -102,6 +112,7 @@ __all__ = [
     "PayloadRecord",
     "PayloadRetentionWorkerResult",
     "PayloadUnavailableError",
+    "PostureNotOpenError",
     "RoutingRule",
     "RoutingRuleMode",
     "SafetyBlockedError",

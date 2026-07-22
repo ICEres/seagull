@@ -60,6 +60,7 @@ from message_hub.domain.models import (
     utc_now,
 )
 from message_hub.domain.safety import (
+    GuestSafetyEvaluator,
     LocalSafetyEvaluator,
     SafetyCheckRequest,
     SafetyEvaluator,
@@ -117,6 +118,10 @@ class AgentTokenVerificationError(MessageHubError):
     """Raised when scoped agent-runtime token validation fails."""
 
 
+class PostureNotOpenError(MessageHubError):
+    """Raised when a guest send targets an agent whose inbox posture is not open."""
+
+
 IdFactory = Callable[[str], str]
 Clock = Callable[[], datetime]
 DeliveryEventPublisher = Callable[[dict[str, Any]], None]
@@ -138,6 +143,19 @@ PAYLOAD_RETENTION_STATES = {
     PAYLOAD_RETENTION_DELETED,
 }
 AGENT_TOKEN_PREFIX = "sga"
+# Inbox postures gate ONLY the token-less guest path in this slice: "open"
+# admits guests, everything else refuses them with posture_not_open.
+# Registered-sender behavior is unchanged by posture. "token_required" is
+# reserved for later semantics (per-sender guest tokens) and currently
+# behaves exactly like "contacts_only".
+INBOX_POSTURES = frozenset({"open", "contacts_only", "token_required"})
+DEFAULT_INBOX_POSTURE = "contacts_only"
+# Reserved handle namespace for server-minted guest senders. Guests are real
+# agent records so guest ingress reuses the single send_message write path;
+# nobody else may register into this namespace.
+GUEST_HANDLE_PREFIX = "@guest_"
+GUEST_DISPLAY_NAME = "Guest sender"
+GUEST_AGENT_STATUS = "guest"
 AGENT_TOKEN_SCOPES = frozenset(
     {
         "agent:read",
@@ -197,13 +215,21 @@ class MessageHubService:
         response_rules: dict[str, Any] | None = None,
         trigger_mode: str = "manual",
         webhook_url: str | None = None,
+        inbox_posture: str | None = None,
+        _allow_reserved_guest_handle: bool = False,
     ) -> Agent:
         normalized_handle = normalize_handle(handle)
+        if normalized_handle.startswith(GUEST_HANDLE_PREFIX) and not _allow_reserved_guest_handle:
+            raise InvalidMessageError(
+                f"agent handles starting with {GUEST_HANDLE_PREFIX} are reserved "
+                "for server-minted guest senders"
+            )
         if self._repository.get_agent_by_handle(normalized_handle) is not None:
             raise DuplicateAgentHandleError(f"agent handle already exists: {normalized_handle}")
 
         normalized_trigger_mode = normalize_trigger_mode(trigger_mode)
         normalized_webhook_url = normalize_webhook_url(webhook_url)
+        normalized_inbox_posture = normalize_inbox_posture(inbox_posture)
         if normalized_trigger_mode == "webhook" and normalized_webhook_url is None:
             raise InvalidMessageError("webhook_url is required when trigger_mode is webhook")
         if normalized_trigger_mode == "manual" and normalized_webhook_url is not None:
@@ -218,11 +244,104 @@ class MessageHubService:
             response_rules=response_rules,
             trigger_mode=normalized_trigger_mode,
             webhook_url=normalized_webhook_url,
+            inbox_posture=normalized_inbox_posture,
             created_at=now,
             updated_at=now,
         )
         self._repository.add_agent(agent)
         return agent
+
+    def register_guest_sender(self) -> Agent:
+        """Mint the ephemeral per-send guest identity in the reserved namespace.
+
+        Guests are real agent records so guest ingress reuses the single
+        ``send_message`` write path. A fresh identity is minted per send and
+        never reused; ``register_agent`` rejects the ``@guest_`` namespace for
+        everyone else.
+        """
+        agent = self.register_agent(
+            f"{GUEST_HANDLE_PREFIX}{secrets.token_hex(8)}",
+            display_name=GUEST_DISPLAY_NAME,
+            _allow_reserved_guest_handle=True,
+        )
+        guest = replace(agent, status=GUEST_AGENT_STATUS)
+        self._repository.update_agent(guest)
+        return guest
+
+    def set_inbox_posture(self, handle: str, inbox_posture: str) -> Agent:
+        agent = self._require_agent_by_handle(handle)
+        normalized_inbox_posture = normalize_inbox_posture(inbox_posture)
+        updated = replace(agent, inbox_posture=normalized_inbox_posture, updated_at=self._clock())
+        self._repository.update_agent(updated)
+        return updated
+
+    def require_guest_ingress_open(self, recipient: Agent) -> None:
+        """Posture gate for the token-less guest path (and only that path).
+
+        Only ``open`` admits guests; ``contacts_only`` and ``token_required``
+        (reserved for later semantics) both refuse them. Registered senders
+        are never gated by posture.
+        """
+        if recipient.inbox_posture != "open":
+            raise PostureNotOpenError(
+                f"agent does not accept guest messages: {recipient.handle}"
+            )
+
+    def send_guest_message(
+        self,
+        *,
+        recipient_handle: str,
+        content: str | None = None,
+        content_ref: str | None = None,
+        refs: Sequence[MessageRef | dict[str, str | None]] = (),
+        intent: str = "message",
+    ) -> tuple[Agent, SendMessageResult]:
+        """Quarantine-first guest ingress through the single send path.
+
+        Mints an ephemeral ``@guest_`` sender, sends through ``send_message``
+        with the ``GuestSafetyEvaluator`` wrapper (every guest message lands
+        held for human review; safety blocks are indistinguishable from
+        review), then stamps the ``guest-policy`` hold — carrying the real
+        safety action — into each delivery's workflow trace. Held deliveries
+        are never auto-deliverable: the inbox hides them, recipients cannot
+        act on them, and no agent-worker event is published for them.
+        """
+        recipient = self._require_agent_by_handle(recipient_handle)
+        self.require_guest_ingress_open(recipient)
+        normalized_refs = tuple(normalize_message_ref(ref) for ref in refs)
+        if content is None and normalized_optional_string(content_ref) is None and not normalized_refs:
+            # Validate before minting the guest identity so an empty send
+            # leaves no orphan agent record behind.
+            raise InvalidMessageError("message content, content_ref, or refs are required")
+
+        guest_evaluator = GuestSafetyEvaluator(self._safety_evaluator)
+        guest = self.register_guest_sender()
+        result = self.send_message(
+            sender_handle=guest.handle,
+            recipient_handles=[recipient.handle],
+            content=content,
+            content_ref=content_ref,
+            refs=normalized_refs,
+            intent=intent,
+            visibility="direct",
+            safety_evaluator=guest_evaluator,
+        )
+
+        decision = guest_evaluator.last_decision
+        safety_action = decision.safety_action if decision is not None else "allow"
+        note = f"guest send quarantined for human review; safety action: {safety_action}"
+        held = tuple(
+            self.apply_hook_result(
+                delivery.delivery_id,
+                hook="delivery.before",
+                runtime="cloud",
+                actor="guest-policy",
+                action="review",
+                note=note,
+            )
+            for delivery in result.deliveries
+        )
+        return guest, SendMessageResult(message=result.message, thread=result.thread, deliveries=held)
 
     def get_agent(self, handle: str) -> Agent:
         return self._require_agent_by_handle(handle)
@@ -499,6 +618,7 @@ class MessageHubService:
         visibility: str = "direct",
         thread_id: str | None = None,
         idempotency_key: str | None = None,
+        safety_evaluator: SafetyEvaluator | None = None,
     ) -> SendMessageResult:
         message_refs = tuple(normalize_message_ref(ref) for ref in refs)
         normalized_content_ref = normalized_optional_string(content_ref)
@@ -525,7 +645,9 @@ class MessageHubService:
             if existing_message_id is not None:
                 return self._result_for_existing_message(existing_message_id)
 
-        safety_decision = self._safety_evaluator.evaluate_send(
+        # ``safety_evaluator`` is a narrow per-call override so guest sends can
+        # wrap the configured evaluator without a second write path.
+        safety_decision = (safety_evaluator or self._safety_evaluator).evaluate_send(
             SafetyCheckRequest(
                 sender=sender,
                 recipients=recipients,
@@ -537,6 +659,11 @@ class MessageHubService:
             )
         )
         require_deliverable(safety_decision)
+        # A deliverable decision can still require a human-review hold (the
+        # safety gateway's ``human_review``, the guest quarantine-first
+        # wrapper): the message persists but every delivery is born held, so
+        # nothing is auto-deliverable and no agent-worker event can leak it.
+        needs_review = needs_review or safety_status_for(safety_decision) == "needs_review"
         stored_content, stored_content_ref = envelope_content_for_storage(
             content,
             normalized_content_ref,
@@ -3244,6 +3371,18 @@ def merge_agents(existing: Sequence[Agent], additions: Sequence[Agent]) -> list[
         merged.append(agent)
         seen.add(agent.agent_id)
     return merged
+
+
+def normalize_inbox_posture(inbox_posture: str | None) -> str:
+    # "token_required" is accepted and persisted but reserved for later
+    # semantics (per-sender guest tokens); until those land it gates guests
+    # exactly like "contacts_only".
+    normalized = (inbox_posture or DEFAULT_INBOX_POSTURE).strip().lower()
+    if normalized not in INBOX_POSTURES:
+        raise InvalidMessageError(
+            "inbox_posture must be one of: " + ", ".join(sorted(INBOX_POSTURES))
+        )
+    return normalized
 
 
 def normalize_trigger_mode(trigger_mode: str | None) -> str:

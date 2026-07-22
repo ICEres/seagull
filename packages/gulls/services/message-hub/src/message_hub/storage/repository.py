@@ -34,6 +34,22 @@ class MessageHubRepository(Protocol):
     def get_agent_by_handle(self, handle: str) -> Agent | None:
         """Return an agent by normalized handle."""
 
+    def update_agent(self, agent: Agent) -> None:
+        """Replace an existing agent record (handle is immutable)."""
+
+    def increment_guest_send_count(
+        self,
+        scope_key: str,
+        window_start_epoch: int,
+        *,
+        ttl_epoch: int,
+    ) -> int:
+        """Atomically bump a fixed-window guest-send counter.
+
+        Returns the post-increment count for ``(scope_key, window_start_epoch)``;
+        the row expires at ``ttl_epoch`` (epoch seconds).
+        """
+
     def put_agent_token(self, token: AgentTokenRecord) -> None:
         """Persist a scoped agent-runtime token record."""
 

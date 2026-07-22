@@ -15,6 +15,7 @@ attributes, ``safety_*`` detail attributes, millisecond ``Z`` timestamps, and
 from __future__ import annotations
 
 import os
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -523,6 +524,36 @@ class DynamoDbRepositoryTest(unittest.TestCase):
             self.repository.get_idempotent_task_id("agent_1", "key"), "task_1"
         )
         self.assertIsNone(self.repository.get_idempotent_message_id("agent_1", "other"))
+
+    def test_guest_send_counter_reuses_the_idempotency_table(self) -> None:
+        # A live (future-TTL) window, so the replay-read assertion below
+        # exercises the missing-message_id path rather than TTL expiry.
+        window = int(time.time()) // 3_600 * 3_600
+        ttl = window + 7_200
+
+        first = self.repository.increment_guest_send_count("guest-ip:203.0.113.7", window, ttl_epoch=ttl)
+        second = self.repository.increment_guest_send_count("guest-ip:203.0.113.7", window, ttl_epoch=ttl)
+        other_window = self.repository.increment_guest_send_count(
+            "guest-ip:203.0.113.7", window + 3_600, ttl_epoch=ttl + 3_600
+        )
+        other_scope = self.repository.increment_guest_send_count(
+            "guest-recipient:@weather-jp:gulls.ai", window, ttl_epoch=ttl
+        )
+        self.assertEqual([1, 2, 1, 1], [first, second, other_window, other_scope])
+
+        # The counter row lives in the reserved partition with the TTL set.
+        item = self.idempotency.get_item(
+            Key={
+                "sender_agent_id": "__guest_rate__",
+                "idempotency_key": f"guest-ip:203.0.113.7:{window}",
+            }
+        )["Item"]
+        self.assertEqual(2, int(item["send_count"]))
+        self.assertEqual(ttl, int(item["expires_at"]))
+        # A counter row never reads back as a message idempotency replay.
+        self.assertIsNone(
+            self.repository.get_idempotent_message_id("__guest_rate__", f"guest-ip:203.0.113.7:{window}")
+        )
 
     def test_expired_idempotency_keys_are_ignored(self) -> None:
         expired = datetime.now(timezone.utc) - timedelta(seconds=5)

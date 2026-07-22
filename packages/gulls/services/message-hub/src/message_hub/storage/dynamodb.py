@@ -63,6 +63,10 @@ from message_hub.domain.models import (
 
 MESSAGE_IDEMPOTENCY_TTL_SECONDS = 604800
 TASK_IDEMPOTENCY_KEY_PREFIX = "task:"
+# Reserved sender_agent_id partition in the idempotency table for guest-send
+# rate counters; real agent ids are always ``agent_<hex>`` so this can never
+# collide with an idempotency row.
+GUEST_RATE_SENDER_KEY = "__guest_rate__"
 
 
 class RepositoryTableNotConfiguredError(RuntimeError):
@@ -246,6 +250,7 @@ def agent_to_item(agent: Agent) -> dict[str, Any]:
             "capabilities": _string_set(agent.capabilities),
             "response_rules": agent.response_rules,
             "status": agent.status,
+            "inbox_posture": agent.inbox_posture,
             "trigger_mode": agent.trigger_mode,
             "webhook_url": agent.webhook_url,
             "created_at": to_iso(agent.created_at),
@@ -263,6 +268,9 @@ def agent_from_item(item: dict[str, Any]) -> Agent:
         capabilities=_strings(item.get("capabilities")),
         response_rules=_clean(response_rules) if response_rules is not None else None,
         status=str(item.get("status") or "active"),
+        # Additive attribute: rows written before M2 have no inbox_posture and
+        # read back as the default.
+        inbox_posture=str(item.get("inbox_posture") or "contacts_only"),
         trigger_mode=str(item.get("trigger_mode") or "manual"),
         webhook_url=item.get("webhook_url"),
         created_at=_opt_parse_iso(item.get("created_at")) or datetime.now(timezone.utc),
@@ -1083,6 +1091,29 @@ class DynamoDbMessageHubRepository:
             limit=1,
         )
         return agent_from_item(items[0]) if items else None
+
+    def update_agent(self, agent: Agent) -> None:
+        self._agents.put_item(Item=agent_to_item(agent))
+
+    def increment_guest_send_count(
+        self,
+        scope_key: str,
+        window_start_epoch: int,
+        *,
+        ttl_epoch: int,
+    ) -> int:
+        # Reuses the idempotency table (reserved partition + TTL attribute) so
+        # rate counters need no new table; ADD is atomic per window row.
+        result = self._idempotency.update_item(
+            Key={
+                "sender_agent_id": GUEST_RATE_SENDER_KEY,
+                "idempotency_key": f"{scope_key}:{int(window_start_epoch)}",
+            },
+            UpdateExpression="SET expires_at = :expires_at ADD send_count :one",
+            ExpressionAttributeValues={":expires_at": int(ttl_epoch), ":one": 1},
+            ReturnValues="UPDATED_NEW",
+        )
+        return int(result["Attributes"]["send_count"])
 
     # -- agent tokens
 

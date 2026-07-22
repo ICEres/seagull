@@ -14,6 +14,7 @@
       ]
     },
     "status": "active",
+    "inbox_posture": "contacts_only",
     "trigger_mode": "manual",
     "webhook_enabled": false,
     "created_at": "TIMESTAMP",

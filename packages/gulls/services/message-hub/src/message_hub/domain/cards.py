@@ -53,10 +53,12 @@ PRIVATE_PROFILE_MARKERS = (
 def agent_card(agent: Agent) -> dict[str, Any]:
     """Build the sanitized public card for an agent.
 
-    This is byte-identical to the historical ``GET /agents/{handle}`` profile:
-    it never includes ``webhook_url``, token data, or raw ``response_rules``
-    internals — capabilities and response rules pass through the private
-    marker filter, and the webhook is reduced to an enabled flag.
+    This extends the historical ``GET /agents/{handle}`` profile with exactly
+    one deliberate public-agent-URL addition — ``inbox_posture`` — and stays
+    otherwise identical: it never includes ``webhook_url``, token data, or raw
+    ``response_rules`` internals — capabilities and response rules pass
+    through the private marker filter, and the webhook is reduced to an
+    enabled flag.
     """
     return {
         "agent_id": agent.agent_id,
@@ -65,6 +67,7 @@ def agent_card(agent: Agent) -> dict[str, Any]:
         "capabilities": public_capabilities(agent.capabilities),
         "response_rules": public_response_rules(agent.response_rules),
         "status": agent.status,
+        "inbox_posture": agent.inbox_posture,
         "trigger_mode": agent.trigger_mode,
         "webhook_enabled": agent.trigger_mode == "webhook" and agent.webhook_url is not None,
         "created_at": _datetime_to_string(agent.created_at),
@@ -155,6 +158,31 @@ def sender_visible_status(status: DeliveryStatus | str) -> str:
         return SENDER_VISIBLE_DELIVERY_STATUS[value]
     except KeyError:
         raise ValueError(f"delivery status has no sender-visible mapping: {value}") from None
+
+
+# Even coarser view for GUEST senders polling a signed status URL. On top of
+# the sender-visible collapses, ``failed`` also reads as ``quarantined``: a
+# hard block must be indistinguishable from a review hold so guests cannot
+# probe content policy through status differences.
+GUEST_VISIBLE_DELIVERY_STATUS: dict[str, str] = {
+    DeliveryStatus.QUEUED.value: "accepted",
+    DeliveryStatus.NEEDS_REVIEW.value: "quarantined",
+    DeliveryStatus.PENDING_ACTION.value: "quarantined",
+    DeliveryStatus.FAILED.value: "quarantined",
+    DeliveryStatus.DELIVERED.value: "delivered",
+    DeliveryStatus.READ.value: "delivered",
+    DeliveryStatus.ACKED.value: "delivered",
+    DeliveryStatus.IGNORED.value: "delivered",
+    DeliveryStatus.REPLIED.value: "replied",
+}
+
+
+def guest_visible_status(status: DeliveryStatus | str) -> str:
+    value = status.value if isinstance(status, DeliveryStatus) else str(status)
+    try:
+        return GUEST_VISIBLE_DELIVERY_STATUS[value]
+    except KeyError:
+        raise ValueError(f"delivery status has no guest-visible mapping: {value}") from None
 
 
 def _datetime_to_string(value: datetime | None) -> str | None:

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
+import time
 from datetime import datetime
 from typing import Any, NoReturn
 
@@ -29,6 +33,7 @@ from message_hub.domain import (
     PayloadCompaction,
     PayloadUnavailableError,
     PayloadRecord,
+    PostureNotOpenError,
     RoutingRule,
     SafetyBlockedError,
     SendMessageResult,
@@ -49,12 +54,20 @@ from message_hub.domain import (
 )
 from message_hub.domain.cards import (
     agent_card,
+    guest_visible_status,
     message_status_path,
     sender_visible_status,
     thread_path,
 )
-from message_hub.domain.service import normalize_handle
+from message_hub.domain.service import GUEST_HANDLE_PREFIX, normalize_handle
 from message_hub.storage import InMemoryMessageHubRepository
+
+# Guest-ingress defaults (fixed one-hour windows, app-level fixed-window
+# counters in the repository). The deployed adapter overrides the limits from
+# GUEST_SEND_IP_HOURLY_LIMIT / GUEST_SEND_RECIPIENT_HOURLY_LIMIT.
+GUEST_SEND_WINDOW_SECONDS = 3600
+DEFAULT_GUEST_SEND_IP_HOURLY_LIMIT = 10
+DEFAULT_GUEST_SEND_RECIPIENT_HOURLY_LIMIT = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +88,7 @@ DOMAIN_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
     InvalidMessageError: (400, "bad_request"),
     NotFoundError: (404, "not_found"),
     PayloadUnavailableError: (410, "payload_unavailable"),
+    PostureNotOpenError: (403, "posture_not_open"),
     SafetyBlockedError: (403, "blocked"),
 }
 
@@ -90,8 +104,21 @@ def raise_api_error(exc: Exception) -> NoReturn:
 class LocalMessageHubApi:
     """Dependency-free local API adapter for the Phase 1 message loop."""
 
-    def __init__(self, service: MessageHubService) -> None:
+    def __init__(
+        self,
+        service: MessageHubService,
+        *,
+        guest_status_signing_secret: str | None = None,
+        guest_send_ip_hourly_limit: int = DEFAULT_GUEST_SEND_IP_HOURLY_LIMIT,
+        guest_send_recipient_hourly_limit: int = DEFAULT_GUEST_SEND_RECIPIENT_HOURLY_LIMIT,
+    ) -> None:
         self._service = service
+        # Per-instance random default: locally minted guest status URLs then
+        # verify against this instance only, which matches the local-dev
+        # lifetime. The deployed adapter must supply a stable secret.
+        self._guest_status_signing_secret = guest_status_signing_secret or secrets.token_hex(32)
+        self._guest_send_ip_hourly_limit = guest_send_ip_hourly_limit
+        self._guest_send_recipient_hourly_limit = guest_send_recipient_hourly_limit
 
     @classmethod
     def in_memory(cls) -> LocalMessageHubApi:
@@ -190,6 +217,7 @@ class LocalMessageHubApi:
                 response_rules=response_rules_object(body.get("response_rules")),
                 trigger_mode=optional_string(body, "trigger_mode") or "manual",
                 webhook_url=optional_string(body, "webhook_url"),
+                inbox_posture=optional_string(body, "inbox_posture"),
             )
         except DuplicateAgentHandleError as exc:
             raise ApiError(409, "conflict", str(exc)) from exc
@@ -211,6 +239,7 @@ class LocalMessageHubApi:
                     response_rules=response_rules_object(body.get("response_rules")),
                     trigger_mode=optional_string(body, "trigger_mode") or "manual",
                     webhook_url=optional_string(body, "webhook_url"),
+                    inbox_posture=optional_string(body, "inbox_posture"),
                 )
                 created = True
             else:
@@ -348,6 +377,23 @@ class LocalMessageHubApi:
         principal = self._require_agent_token(authorization, required_scope="agent:inbox")
         return self.read_inbox(principal.agent_handle, limit=limit)
 
+    def agent_set_inbox_posture(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /agent/inbox-posture``: self-service posture update.
+
+        Same sga_ auth pattern as ``agent_me``; the updated agent is always
+        the token's agent. Returns the updated public card.
+        """
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        try:
+            agent = self._service.set_inbox_posture(
+                principal.agent_handle,
+                required_string(body, "inbox_posture"),
+            )
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        return {"agent": agent_to_dict(agent)}
+
     def agent_post(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:post")
         wrapped = {**body, "sender_handle": principal.agent_handle}
@@ -460,20 +506,29 @@ class LocalMessageHubApi:
         body: dict[str, Any],
         *,
         idempotency_key: str | None = None,
+        source_ip: str | None = None,
     ) -> dict[str, Any]:
         """``POST /agents/{name}/messages``: message the path agent's public URL.
 
-        The sender is always the bearer token's agent (scope ``agent:post``);
-        a ``sender_handle`` in the body is ignored. The recipient is the path
-        agent resolved by ``public_agent_handle`` and visibility is fixed to
-        ``direct``. ``idempotency_key`` (the Idempotency-Key header, with the
-        body field as fallback) feeds ``send_message``'s repository-backed
-        replay handling.
+        With an Authorization header, the sender is always the bearer token's
+        agent (scope ``agent:post``); a ``sender_handle`` in the body is
+        ignored. The recipient is the path agent resolved by
+        ``public_agent_handle`` and visibility is fixed to ``direct``.
+        ``idempotency_key`` (the Idempotency-Key header, with the body field
+        as fallback) feeds ``send_message``'s repository-backed replay
+        handling.
 
-        Returns the public envelope plus a ``replayed`` flag that HTTP
-        adapters pop to choose 202 (created) vs 200 (idempotent replay); the
-        flag is not part of the wire envelope.
+        Without an Authorization header the request is GUEST ingress
+        (``public_agent_guest_send``): posture-gated, rate-limited,
+        quarantine-first, and without idempotency support this slice.
+
+        Returns the public envelope; registered sends additionally carry a
+        ``replayed`` flag that HTTP adapters pop to choose 202 (created) vs
+        200 (idempotent replay); the flag is not part of the wire envelope.
         """
+        if authorization is None:
+            return self.public_agent_guest_send(name, body, source_ip=source_ip)
+
         principal = self._require_agent_token(authorization, required_scope="agent:post")
         key = (idempotency_key or "").strip() or optional_string(body, "idempotency_key")
         try:
@@ -567,6 +622,128 @@ class LocalMessageHubApi:
             "updated_at": datetime_to_string(delivery.updated_at),
             "thread_url": thread_path(delivery.thread_id),
         }
+
+    def public_agent_guest_send(
+        self,
+        name: str,
+        body: dict[str, Any],
+        *,
+        source_ip: str | None = None,
+    ) -> dict[str, Any]:
+        """Token-less ``POST /agents/{name}/messages``: guest ingress.
+
+        Order matters: recipient lookup (404), posture gate (403
+        ``posture_not_open`` unless the recipient's ``inbox_posture`` is
+        ``open``), then rate limits (429 ``rate_limited``) — all BEFORE any
+        guest registration or message persistence. The domain helper then
+        mints the ephemeral ``@guest_`` sender and quarantines the send.
+
+        The guest envelope is ``{"delivery_id", "status_url"}`` ONLY — no
+        message/thread ids, which guests cannot use — where ``status_url``
+        carries the signed polling token. ``source_ip`` of ``None`` skips the
+        per-IP window (local callers without transport-level addressing).
+        """
+        try:
+            recipient = self._service.get_agent(public_agent_handle(name))
+            self._service.require_guest_ingress_open(recipient)
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        self._enforce_guest_rate_limits(recipient.handle, source_ip)
+
+        try:
+            _, result = self._service.send_guest_message(
+                recipient_handle=recipient.handle,
+                content=optional_string(body, "content"),
+                content_ref=optional_string(body, "content_ref"),
+                refs=refs_list(body.get("refs", ()), "refs"),
+                intent=optional_string(body, "intent") or "message",
+            )
+        except (MessageHubError, SafetyBlockedError) as exc:
+            raise_api_error(exc)
+
+        deliveries = [
+            delivery
+            for delivery in result.deliveries
+            if delivery.recipient_agent_id == recipient.agent_id
+        ]
+        if len(deliveries) != 1:
+            raise ApiError(
+                500,
+                "internal_error",
+                "guest send expected exactly one delivery for the path agent",
+            )
+        delivery = deliveries[0]
+
+        token = guest_status_token(self._guest_status_signing_secret, delivery.delivery_id)
+        return {
+            "delivery_id": delivery.delivery_id,
+            "status_url": f"{message_status_path(recipient.handle, delivery.delivery_id)}?token={token}",
+        }
+
+    def public_agent_guest_message_status(
+        self,
+        name: str,
+        delivery_id: str,
+        token: str | None,
+    ) -> dict[str, Any]:
+        """``GET /agents/{name}/messages/{id}?token=...``: guest status poll.
+
+        A VALID signed token replaces Authorization entirely. The response is
+        ``{"delivery_id", "status"}`` ONLY, in the guest-coarse vocabulary
+        (``guest_visible_status``): blocked/failed reads as ``quarantined``,
+        indistinguishable from a review hold. An invalid token is a 404 —
+        never 401/403 — so the route cannot confirm the delivery exists.
+        """
+        try:
+            recipient = self._service.get_agent(public_agent_handle(name))
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        normalized_delivery_id = (delivery_id or "").strip()
+        provided_token = (token or "").strip()
+        expected_token = guest_status_token(self._guest_status_signing_secret, normalized_delivery_id)
+        if not provided_token or not hmac.compare_digest(expected_token, provided_token):
+            raise ApiError(404, "not_found", f"delivery not found: {delivery_id}")
+
+        # Same repository read model as the authenticated status route.
+        delivery = self._service._repository.get_delivery(normalized_delivery_id)  # noqa: SLF001
+        if delivery is None or delivery.recipient_agent_id != recipient.agent_id:
+            raise ApiError(404, "not_found", f"delivery not found: {delivery_id}")
+
+        return {
+            "delivery_id": delivery.delivery_id,
+            "status": guest_visible_status(delivery.status),
+        }
+
+    def _enforce_guest_rate_limits(self, recipient_handle: str, source_ip: str | None) -> None:
+        """Fixed one-hour windows via the repository counter; 429 on excess.
+
+        The per-IP window is checked first (and skipped when ``source_ip`` is
+        None), then the per-recipient window. Runs before any guest
+        registration or message persistence.
+        """
+        now = int(time.time())
+        window_start = now - (now % GUEST_SEND_WINDOW_SECONDS)
+        ttl_epoch = window_start + 2 * GUEST_SEND_WINDOW_SECONDS
+        repository = self._service._repository  # noqa: SLF001
+
+        if source_ip is not None:
+            ip_count = repository.increment_guest_send_count(
+                f"guest-ip:{source_ip}",
+                window_start,
+                ttl_epoch=ttl_epoch,
+            )
+            if ip_count > self._guest_send_ip_hourly_limit:
+                raise ApiError(429, "rate_limited", "guest send rate limit exceeded for this source")
+
+        recipient_count = repository.increment_guest_send_count(
+            f"guest-recipient:{recipient_handle}",
+            window_start,
+            ttl_epoch=ttl_epoch,
+        )
+        if recipient_count > self._guest_send_recipient_hourly_limit:
+            raise ApiError(429, "rate_limited", "guest send rate limit exceeded for this recipient")
 
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
@@ -1310,11 +1487,28 @@ def public_agent_handle(name: str) -> str:
     becomes ``@worker``. No other resolution (host defaulting, fuzzy
     matching) is attempted, so a bare name only works when the hub stores the
     hostless handle; anything else 404s at the agent lookup.
+
+    The reserved ``@guest_`` namespace (server-minted ephemeral guest
+    senders) is rejected outright: guests are never public-URL addressees.
     """
     candidate = (name or "").strip()
     if candidate and not candidate.startswith("@"):
         candidate = f"@{candidate}"
-    return normalize_handle(candidate)
+    normalized = normalize_handle(candidate)
+    if normalized.startswith(GUEST_HANDLE_PREFIX):
+        raise InvalidMessageError(
+            f"the {GUEST_HANDLE_PREFIX} namespace is reserved and has no public agent URL"
+        )
+    return normalized
+
+
+def guest_status_token(secret: str, delivery_id: str) -> str:
+    """Hex HMAC-SHA256 over the delivery id: the guest status-poll capability."""
+    return hmac.new(
+        secret.encode("utf-8"),
+        delivery_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:

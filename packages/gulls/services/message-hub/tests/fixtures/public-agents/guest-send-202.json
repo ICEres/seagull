@@ -1,0 +1,4 @@
+{
+  "delivery_id": "delivery_ID",
+  "status_url": "/agents/%40weather-jp%3Agulls.ai/messages/delivery_ID?token=SIGNED_TOKEN"
+}

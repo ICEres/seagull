@@ -1,32 +1,93 @@
+"""AWS Lambda adapter for the Seagull message hub.
+
+Thin HTTP shim over ``LocalMessageHubApi`` + ``MessageHubService`` backed by
+``DynamoDbMessageHubRepository``. All domain behavior (validation, safety
+gating, task lifecycle, payload retention, token verification) lives in the
+``message_hub`` package; this module only:
+
+* parses API Gateway HTTP events and dispatches to api methods,
+* wires the deployed AWS dependencies (DynamoDB tables, S3, SQS, Secrets
+  Manager, the safety gateway) into the domain service — all lazily, so the
+  module imports without environment variables or boto3,
+* maps ``ApiError`` results back to the historical HTTP envelope.
+"""
+
 from __future__ import annotations
 
 import base64
-import gzip
-import hashlib
 import hmac
 import json
 import os
-import secrets
-import time
-import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
-import boto3
-from boto3.dynamodb.conditions import Key
-from botocore.exceptions import ClientError
+from message_hub.api import ApiError, LocalMessageHubApi
+from message_hub.domain import (
+    DeliveryStatus,
+    MessageHubError,
+    MessageHubService,
+    SafetyBlockedError,
+    SendMessageResult,
+    delivery_created_event,
+)
+from message_hub.domain.safety import SafetyCheckRequest
+from message_hub.storage import (
+    DynamoDbMessageHubRepository,
+    RepositoryTableNotConfiguredError,
+)
+
+DEFAULT_APP_NAME = "seagull-message-hub"
+DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
+DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
+DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+
+# Required by the deployed terraform module; absence is a deploy bug surfaced
+# on first use (never at import).
+REQUIRED_TABLE_ENV_VARS = (
+    "AGENTS_TABLE",
+    "MESSAGES_TABLE",
+    "THREADS_TABLE",
+    "DELIVERIES_TABLE",
+    "IDEMPOTENCY_TABLE",
+    "THREAD_SUMMARIES_TABLE",
+)
+OPTIONAL_TABLE_ENV_VARS = {
+    "routing_rules_table": "ROUTING_RULES_TABLE",
+    "agent_tokens_table": "AGENT_TOKENS_TABLE",
+    "tasks_table": "TASKS_TABLE",
+    "tool_requests_table": "TOOL_REQUESTS_TABLE",
+    "task_results_table": "TASK_RESULTS_TABLE",
+    "payloads_table": "PAYLOADS_TABLE",
+}
 
 
-def secret_env(name: str) -> str:
-    direct = os.environ.get(name, "").strip()
-    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
+class MessageHubConfigurationError(RuntimeError):
+    """Raised when the Lambda environment is missing required settings."""
+
+
+# ---------------------------------------------------------------------------
+# Lazy configuration
+
+
+def _cfg(config: dict[str, str] | None, name: str, default: str = "") -> str:
+    if config is not None and name in config:
+        return str(config[name] or "")
+    return os.environ.get(name, default)
+
+
+def secret_env(name: str, *, config: dict[str, str] | None = None) -> str:
+    """Read a secret from env, or from Secrets Manager via ``<NAME>_ARN``."""
+    direct = _cfg(config, name).strip()
+    secret_arn = _cfg(config, f"{name}_ARN").strip()
     if direct or not secret_arn:
         return direct
     try:
+        import boto3
+
         result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
     except Exception as exc:
         print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
@@ -42,114 +103,429 @@ def secret_env(name: str) -> str:
     return ""
 
 
-APP_NAME = os.environ.get("APP_NAME", "seagull-message-hub")
-SAFETY_BLOCKED_TERMS = tuple(
-    term.strip().lower()
-    for term in os.environ.get("SAFETY_BLOCKED_TERMS", "unsafe:").split(",")
-    if term.strip()
-)
-SAFETY_GATEWAY_URL = os.environ.get("SAFETY_GATEWAY_URL", "").strip().rstrip("/")
-SAFETY_GATEWAY_ADMIN_SECRET = secret_env("SAFETY_GATEWAY_ADMIN_SECRET")
-SAFETY_GATEWAY_TIMEOUT_SECONDS = float(os.environ.get("SAFETY_GATEWAY_TIMEOUT_SECONDS", "5"))
-DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
-DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
-DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
-MAX_ENVELOPE_INLINE_CHARS = 4000
-DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
-CONTACT_EXPLANATION_SUMMARY_CHARS = 280
-AGENT_TOKEN_PREFIX = "sga"
-AGENT_TOKEN_SCOPES = frozenset({"agent:read", "agent:inbox", "agent:post", "agent:ack"})
-DEFAULT_AGENT_TOKEN_SCOPES = tuple(sorted(AGENT_TOKEN_SCOPES))
-PRIVATE_CONTEXT_REF_MARKERS = (
-    "mcp://",
-    "file://",
-    "localhost",
-    "127.0.0.1",
-    "::1",
-    ".sock",
-    "tool://",
-    "raw_tool",
-    "raw-tool",
-    "tool_handle",
-    "tool-handle",
-    "mcp_server",
-    "mcp-server",
-    "credential",
-    "credentials",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "password",
-    "authorization",
-    "bearer ",
-)
-PRIVATE_PROFILE_MARKERS = PRIVATE_CONTEXT_REF_MARKERS
-
-AGENTS_TABLE = os.environ["AGENTS_TABLE"]
-MESSAGES_TABLE = os.environ["MESSAGES_TABLE"]
-THREADS_TABLE = os.environ["THREADS_TABLE"]
-DELIVERIES_TABLE = os.environ["DELIVERIES_TABLE"]
-IDEMPOTENCY_TABLE = os.environ["IDEMPOTENCY_TABLE"]
-ROUTING_RULES_TABLE = os.environ.get("ROUTING_RULES_TABLE")
-AGENT_TOKENS_TABLE = os.environ.get("AGENT_TOKENS_TABLE")
-THREAD_SUMMARIES_TABLE = os.environ["THREAD_SUMMARIES_TABLE"]
-TASKS_TABLE = os.environ.get("TASKS_TABLE")
-TOOL_REQUESTS_TABLE = os.environ.get("TOOL_REQUESTS_TABLE")
-TASK_RESULTS_TABLE = os.environ.get("TASK_RESULTS_TABLE")
-PAYLOADS_TABLE = os.environ.get("PAYLOADS_TABLE")
-PAYLOAD_OBJECTS_BUCKET = os.environ.get("PAYLOAD_OBJECTS_BUCKET", "").strip()
-AGENT_JOBS_QUEUE_URL = os.environ.get("AGENT_JOBS_QUEUE_URL")
-ALLOW_LEGACY_HANDLE_AGENT_ROUTES = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-LEGACY_HANDLE_ROUTE_SECRET = secret_env("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
-
-dynamodb = boto3.resource("dynamodb")
-sqs = boto3.client("sqs")
-s3 = boto3.client("s3")
-agents_table = dynamodb.Table(AGENTS_TABLE)
-messages_table = dynamodb.Table(MESSAGES_TABLE)
-threads_table = dynamodb.Table(THREADS_TABLE)
-deliveries_table = dynamodb.Table(DELIVERIES_TABLE)
-idempotency_table = dynamodb.Table(IDEMPOTENCY_TABLE)
-routing_rules_table = dynamodb.Table(ROUTING_RULES_TABLE) if ROUTING_RULES_TABLE else None
-agent_tokens_table = dynamodb.Table(AGENT_TOKENS_TABLE) if AGENT_TOKENS_TABLE else None
-thread_summaries_table = dynamodb.Table(THREAD_SUMMARIES_TABLE)
-tasks_table = dynamodb.Table(TASKS_TABLE) if TASKS_TABLE else None
-tool_requests_table = dynamodb.Table(TOOL_REQUESTS_TABLE) if TOOL_REQUESTS_TABLE else None
-task_results_table = dynamodb.Table(TASK_RESULTS_TABLE) if TASK_RESULTS_TABLE else None
-payloads_table = dynamodb.Table(PAYLOADS_TABLE) if PAYLOADS_TABLE else None
+# ---------------------------------------------------------------------------
+# Safety gateway adapter
 
 
-class BadRequest(ValueError):
-    pass
+class _SafetyStatus:
+    """Duck-typed action whose ``.value`` feeds domain ``safety_status_for``."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: str) -> None:
+        self.value = value
 
 
-class NotFound(ValueError):
-    pass
+_STATUS_APPROVED = _SafetyStatus("approved")
+_STATUS_APPROVED_WITH_WARNING = _SafetyStatus("approved_with_warning")
+_STATUS_NEEDS_REVIEW = _SafetyStatus("needs_review")
 
 
-class Conflict(ValueError):
-    pass
+class GatewaySafetyDecision:
+    """Deliverable decision carrying the remote gateway's metadata.
+
+    Duck-types ``seagull_policy.SafetyDecision`` for the fields the domain
+    consumes (``deliverable``, ``decision_id``, ``action.value``, ``reasons``).
+    Non-deliverable gateway actions never construct one — they raise
+    ``SafetyBlockedError`` instead.
+    """
+
+    __slots__ = ("decision_id", "action", "risk", "reasons", "policy_ids", "deliverable")
+
+    def __init__(
+        self,
+        *,
+        decision_id: str,
+        action: _SafetyStatus,
+        risk: str | None,
+        reasons: tuple[str, ...],
+        policy_ids: tuple[str, ...],
+    ) -> None:
+        self.decision_id = decision_id
+        self.action = action
+        self.risk = risk
+        self.reasons = reasons
+        self.policy_ids = policy_ids
+        self.deliverable = True
 
 
-class Blocked(ValueError):
-    pass
+class SafetyGatewayEvaluator:
+    """SafetyEvaluator that consults the deployed safety gateway over HTTPS.
+
+    Reproduces the legacy ``evaluate_safety_gateway()`` semantics: same
+    request payload, same admin-secret header, fail-closed on transport or
+    protocol errors, ``human_review`` mapped to a held-for-review send, and
+    ``block``/``quarantine``/``rate_limit`` rejected outright.
+    """
+
+    def __init__(
+        self,
+        *,
+        gateway_url: str,
+        admin_secret: str = "",
+        timeout_seconds: float = 5.0,
+        opener: Callable[..., Any] | None = None,
+        thread_lookup: Callable[[str], Any] | None = None,
+    ) -> None:
+        self._gateway_url = (gateway_url or "").strip().rstrip("/")
+        self._admin_secret = admin_secret
+        self._timeout_seconds = timeout_seconds
+        self._opener = opener
+        self._thread_lookup = thread_lookup
+        self._pending_review: dict[str, Any] | None = None
+
+    @property
+    def pending_review(self) -> dict[str, Any] | None:
+        return self._pending_review
+
+    def take_pending_review(self) -> dict[str, Any] | None:
+        pending, self._pending_review = self._pending_review, None
+        return pending
+
+    def evaluate_send(self, request: SafetyCheckRequest) -> GatewaySafetyDecision:
+        self._pending_review = None
+        subject = "task" if request.intent == "task_request" else "message"
+        decision = self._invoke_gateway(request)
+        decision_id = self._required_field(decision, "decision_id")
+        action = self._required_field(decision, "action")
+        reasons = _clean_string_values(decision.get("reasons"))
+        policy_ids = _clean_string_values(decision.get("policy_ids"))
+        risk = decision.get("risk")
+        risk = risk.strip() if isinstance(risk, str) and risk.strip() else None
+
+        if action == "allow":
+            status = _STATUS_APPROVED
+        elif action == "allow_with_warning":
+            status = _STATUS_APPROVED_WITH_WARNING
+        elif action == "human_review":
+            status = _STATUS_NEEDS_REVIEW
+            self._pending_review = {
+                "decision_id": decision_id,
+                "reasons": reasons,
+                "policy_ids": policy_ids,
+                "risk": risk,
+            }
+        elif action in {"block", "quarantine", "rate_limit"}:
+            raise SafetyBlockedError(
+                f"{subject} blocked by safety gateway: {', '.join(reasons) or action}"
+            )
+        else:
+            raise SafetyBlockedError(f"safety gateway returned unsupported action: {action}")
+
+        return GatewaySafetyDecision(
+            decision_id=decision_id,
+            action=status,
+            risk=risk,
+            reasons=tuple(reasons),
+            policy_ids=tuple(policy_ids),
+        )
+
+    def _invoke_gateway(self, request: SafetyCheckRequest) -> dict[str, Any]:
+        if not self._gateway_url:
+            raise SafetyBlockedError("safety gateway is not configured")
+
+        payload = without_none(
+            {
+                "actor_id": request.sender.agent_id,
+                "action_type": "task.request" if request.intent == "task_request" else "message.send",
+                "content": request.content,
+                "content_ref": request.content_ref,
+                "target_ids": [agent.agent_id for agent in request.recipients],
+                "intent": request.intent,
+                "visibility": request.visibility,
+                "thread_id": request.thread_id,
+                "thread_depth": self._thread_depth(request.thread_id),
+                "repeated_reply_count": 0,
+            }
+        )
+        headers = {"content-type": "application/json"}
+        if self._admin_secret:
+            headers["x-seagull-safety-secret"] = self._admin_secret
+        gateway_request = Request(
+            f"{self._gateway_url}/evaluate",
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        opener = self._opener or urlopen
+        try:
+            with opener(gateway_request, timeout=self._timeout_seconds) as result:
+                status_code = int(result.status)
+                raw = result.read().decode("utf-8")
+        except HTTPError as exc:
+            raise SafetyBlockedError(f"safety gateway rejected evaluation: HTTP {exc.code}") from exc
+        except (OSError, TimeoutError, URLError) as exc:
+            raise SafetyBlockedError(f"safety gateway is unavailable: {exc}") from exc
+
+        if status_code < 200 or status_code >= 300:
+            raise SafetyBlockedError(f"safety gateway rejected evaluation: HTTP {status_code}")
+
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError as exc:
+            raise SafetyBlockedError("safety gateway returned invalid JSON") from exc
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("decision"), dict):
+            raise SafetyBlockedError("safety gateway response is missing a decision")
+        return parsed["decision"]
+
+    def _thread_depth(self, thread_id: str | None) -> int:
+        if not thread_id or self._thread_lookup is None:
+            return 0
+        try:
+            thread = self._thread_lookup(thread_id)
+        except Exception:
+            return 0
+        return int(getattr(thread, "message_count", 0) or 0) if thread is not None else 0
+
+    @staticmethod
+    def _required_field(decision: dict[str, Any], field_name: str) -> str:
+        value = decision.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise SafetyBlockedError(f"safety gateway decision is missing {field_name}")
+        return value.strip()
 
 
-class Forbidden(ValueError):
-    pass
+def _clean_string_values(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
-class Unauthorized(ValueError):
-    pass
+# ---------------------------------------------------------------------------
+# Domain service wiring
 
 
-class PayloadUnavailable(ValueError):
-    pass
+class GatedMessageHubService(MessageHubService):
+    """MessageHubService with the deployed adapter's two deltas.
+
+    * A ``human_review`` safety decision stores the message but holds every
+      delivery for human review (status ``needs_review``, stage
+      ``human.review``), recording the gateway decision in the workflow trace.
+    * Delivery-created events are published for every recipient — not only
+      webhook mode — because the agent worker decides per recipient (webhook
+      POST vs WebSocket push). The publisher still skips non-delivered rows.
+    """
+
+    def __init__(
+        self,
+        repository: Any,
+        *,
+        safety_evaluator: Any,
+        delivery_event_publisher: Callable[[dict[str, Any]], None] | None = None,
+        review_hold: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> None:
+        super().__init__(
+            repository,
+            safety_evaluator=safety_evaluator,
+            delivery_event_publisher=delivery_event_publisher,
+        )
+        self._review_hold = review_hold
+
+    def send_message(self, **kwargs: Any) -> SendMessageResult:
+        result = super().send_message(**kwargs)
+        hold = self._review_hold() if self._review_hold is not None else None
+        if hold is None or not result.deliveries:
+            return result
+
+        note = f"held for human review by safety gateway decision {hold.get('decision_id')}"
+        reasons = hold.get("reasons") or []
+        if reasons:
+            note = f"{note}: {', '.join(reasons)}"
+        held = tuple(
+            self.apply_hook_result(
+                delivery.delivery_id,
+                hook="delivery.before",
+                runtime="cloud",
+                actor="safety-gateway",
+                action="review",
+                note=note,
+            )
+            for delivery in result.deliveries
+        )
+        return SendMessageResult(message=result.message, thread=result.thread, deliveries=held)
+
+    def _publish_delivery_created_events(self, *, deliveries, message, sender, recipients) -> None:
+        if self._delivery_event_publisher is None:
+            return
+        if len(deliveries) != len(recipients):
+            raise MessageHubError("delivery and recipient counts differ")
+        for delivery, recipient in zip(deliveries, recipients):
+            self._delivery_event_publisher(
+                delivery_created_event(
+                    delivery=delivery,
+                    message=message,
+                    sender=sender,
+                    recipient=recipient,
+                )
+            )
+
+
+class SqsDeliveryEventSink:
+    """Sends wire-shaped delivery events to the agent jobs SQS queue."""
+
+    def __init__(self, queue_url: str, *, sqs_client: Any = None) -> None:
+        self._queue_url = queue_url
+        self._sqs = sqs_client
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        if self._sqs is None:
+            import boto3
+
+            self._sqs = boto3.client("sqs")
+        self._sqs.send_message(
+            QueueUrl=self._queue_url,
+            MessageBody=json.dumps(clean_item(event), separators=(",", ":"), sort_keys=True),
+            MessageGroupId=event["data"]["thread_id"],
+            MessageDeduplicationId=event["data"]["delivery_id"],
+        )
+
+
+class DeliveryEventPublisher:
+    """Adapts domain delivery events to the wire payload the worker consumes.
+
+    The domain event omits ``refs``/``current_*``/``current_stage``; the agent
+    worker's webhook and socket payloads historically included them, so they
+    are restored here from the freshly stored delivery row. Non-``delivered``
+    rows (routing review holds) and sends pending a safety review hold are
+    never enqueued — matching the previous adapter.
+    """
+
+    def __init__(
+        self,
+        sink: Callable[[dict[str, Any]], None],
+        *,
+        repository: Any,
+        review_pending: Callable[[], bool] | None = None,
+    ) -> None:
+        self._sink = sink
+        self._repository = repository
+        self._review_pending = review_pending
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        data = dict(event.get("data") or {})
+        delivery = self._repository.get_delivery(str(data.get("delivery_id") or ""))
+        if delivery is None or delivery.status != DeliveryStatus.DELIVERED:
+            return
+        if self._review_pending is not None and self._review_pending():
+            return
+
+        data["refs"] = [
+            {"type": ref.type, "url": ref.url, "find": ref.find, "remember_as": ref.remember_as}
+            for ref in delivery.refs
+        ]
+        data["current_content_inline"] = delivery.current_content_inline or data.get("content_inline")
+        data["current_content_ref"] = delivery.current_content_ref or data.get("content_ref")
+        data["current_stage"] = delivery.current_stage
+        self._sink({**event, "data": data})
+
+
+def build_service(
+    *,
+    repository: Any = None,
+    safety_evaluator: Any = None,
+    delivery_event_publisher: Callable[[dict[str, Any]], None] | None = None,
+    config: dict[str, str] | None = None,
+) -> MessageHubService:
+    """Construct the domain service with lazily created AWS dependencies.
+
+    ``delivery_event_publisher`` receives wire-shaped events (the SQS payload
+    the agent worker consumes); when omitted, an SQS sink is used if
+    ``AGENT_JOBS_QUEUE_URL`` is configured.
+    """
+    if repository is None:
+        repository = _build_repository(config)
+
+    if safety_evaluator is None:
+        safety_evaluator = SafetyGatewayEvaluator(
+            gateway_url=_cfg(config, "SAFETY_GATEWAY_URL"),
+            admin_secret=secret_env("SAFETY_GATEWAY_ADMIN_SECRET", config=config),
+            timeout_seconds=float(_cfg(config, "SAFETY_GATEWAY_TIMEOUT_SECONDS", "5")),
+            thread_lookup=repository.get_thread,
+        )
+
+    sink = delivery_event_publisher
+    if sink is None:
+        queue_url = _cfg(config, "AGENT_JOBS_QUEUE_URL").strip()
+        if queue_url:
+            sink = SqsDeliveryEventSink(queue_url)
+
+    publisher = None
+    if sink is not None:
+        publisher = DeliveryEventPublisher(
+            sink,
+            repository=repository,
+            review_pending=lambda: getattr(safety_evaluator, "pending_review", None) is not None,
+        )
+
+    return GatedMessageHubService(
+        repository,
+        safety_evaluator=safety_evaluator,
+        delivery_event_publisher=publisher,
+        review_hold=getattr(safety_evaluator, "take_pending_review", None),
+    )
+
+
+def _build_repository(config: dict[str, str] | None) -> DynamoDbMessageHubRepository:
+    missing = sorted(name for name in REQUIRED_TABLE_ENV_VARS if not _cfg(config, name).strip())
+    if missing:
+        raise MessageHubConfigurationError(
+            "message hub configuration is incomplete; missing environment variables: "
+            + ", ".join(missing)
+        )
+
+    import boto3
+
+    dynamodb = boto3.resource("dynamodb")
+
+    def table(name: str) -> Any:
+        return dynamodb.Table(_cfg(config, name).strip())
+
+    def optional_table(name: str) -> Any:
+        value = _cfg(config, name).strip()
+        return dynamodb.Table(value) if value else None
+
+    payload_objects_bucket = _cfg(config, "PAYLOAD_OBJECTS_BUCKET").strip() or None
+    return DynamoDbMessageHubRepository(
+        agents_table=table("AGENTS_TABLE"),
+        messages_table=table("MESSAGES_TABLE"),
+        threads_table=table("THREADS_TABLE"),
+        deliveries_table=table("DELIVERIES_TABLE"),
+        idempotency_table=table("IDEMPOTENCY_TABLE"),
+        thread_summaries_table=table("THREAD_SUMMARIES_TABLE"),
+        **{kwarg: optional_table(env) for kwarg, env in OPTIONAL_TABLE_ENV_VARS.items()},
+        payload_objects_bucket=payload_objects_bucket,
+        s3_client=boto3.client("s3") if payload_objects_bucket else None,
+    )
+
+
+_RUNTIME: dict[str, Any] = {"api": None, "secrets": {}}
+
+
+def get_api() -> LocalMessageHubApi:
+    if _RUNTIME["api"] is None:
+        _RUNTIME["api"] = LocalMessageHubApi(build_service())
+    return _RUNTIME["api"]
+
+
+def configure_api(api: LocalMessageHubApi) -> None:
+    """Install a pre-built api (tests inject an in-memory service here)."""
+    _RUNTIME["api"] = api
+
+
+def reset_runtime() -> None:
+    _RUNTIME["api"] = None
+    _RUNTIME["secrets"].clear()
+
+
+def _cached_secret(name: str) -> str:
+    if name not in _RUNTIME["secrets"]:
+        _RUNTIME["secrets"][name] = secret_env(name)
+    return _RUNTIME["secrets"][name]
+
+
+# ---------------------------------------------------------------------------
+# HTTP entrypoint
 
 
 def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -170,1933 +546,308 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
 
     try:
-        if method == "GET" and path == "/health":
-            return response(200, {"ok": True, "app": APP_NAME, "storage": "dynamodb", "time": now_iso()})
-
-        if method == "POST" and path == "/agents":
-            return register_agent(event)
-
-        if method == "POST" and path == "/agent-registrations":
-            return create_agent_registration(event)
-
-        if path == "/agent" or path.startswith("/agent/"):
-            return route_agent_runtime(method, path, event)
-
-        if method == "GET" and public_agent_profile_path(path):
-            handle = unquote(path.removeprefix("/agents/").strip("/"))
-            return read_agent(handle)
-
-        if method == "POST" and path == "/payloads":
-            return create_payload(event)
-
-        if method == "GET" and path == "/payloads":
-            return read_payload(event)
-
-        require_legacy_handle_routes_enabled(event)
-
-        if method == "POST" and path == "/routing-rules":
-            return create_routing_rule(event)
-
-        if method == "GET" and path == "/routing-rules":
-            return read_routing_rules()
-
-        if method == "GET" and path.startswith("/agents/") and path.endswith("/inbox"):
-            handle = path_param(path, "/agents/", "/inbox")
-            require_legacy_agent_access(event, handle, "agent:inbox")
-            return read_inbox(handle, event)
-
-        if method == "GET" and path.startswith("/agents/") and path.endswith("/outbox"):
-            handle = path_param(path, "/agents/", "/outbox")
-            require_legacy_agent_access(event, handle, "agent:read")
-            return read_outbox(handle, event)
-
-        if method == "GET" and path.startswith("/agents/") and path.endswith("/sent"):
-            handle = path_param(path, "/agents/", "/sent")
-            require_legacy_agent_access(event, handle, "agent:read")
-            return read_sent_messages(handle, event)
-
-        if method == "POST" and path == "/messages":
-            return create_message(event)
-
-        if path.startswith("/personal-agents/"):
-            return route_personal_agent(method, path, event)
-
-        if method == "POST" and path == "/tasks":
-            return create_task(event)
-
-        if method == "POST" and path.startswith("/tasks/") and path.endswith("/accept"):
-            task_id = path_param(path, "/tasks/", "/accept")
-            return accept_task(task_id, event)
-
-        if method == "POST" and path.startswith("/tasks/") and path.endswith("/status"):
-            task_id = path_param(path, "/tasks/", "/status")
-            return update_task_status(task_id, event)
-
-        if method == "POST" and path.startswith("/tasks/") and path.endswith("/results"):
-            task_id = path_param(path, "/tasks/", "/results")
-            return return_task_result(task_id, event)
-
-        if method == "POST" and path.startswith("/tasks/") and path.endswith("/tool-requests"):
-            task_id = path_param(path, "/tasks/", "/tool-requests")
-            return create_task_tool_request(task_id, event)
-
-        if method == "POST" and path.startswith("/tool-requests/") and path.endswith("/complete"):
-            tool_request_id = path_param(path, "/tool-requests/", "/complete")
-            return complete_task_tool_request(tool_request_id, event)
-
-        if method == "GET" and path.startswith("/tasks/"):
-            task_id = unquote(path.removeprefix("/tasks/").strip("/"))
-            return read_task(task_id)
-
-        if method == "POST" and path.endswith("/hook-results"):
-            delivery_id = delivery_path_param(path, "/hook-results")
-            return submit_hook_result(delivery_id, event)
-
-        if method == "POST" and path.endswith("/decision"):
-            delivery_id = delivery_path_param(path, "/decision")
-            return submit_delivery_decision(delivery_id, event)
-
-        if method == "GET" and path.endswith("/contact-explanation"):
-            delivery_id = delivery_path_param(path, "/contact-explanation")
-            return read_contact_explanation(delivery_id)
-
-        if method == "GET" and path.startswith("/threads/") and path.endswith("/context"):
-            thread_id = path_param(path, "/threads/", "/context")
-            return read_thread_context(thread_id, event)
-
-        if method == "GET" and path.startswith("/threads/") and path.endswith("/context-pack"):
-            thread_id = path_param(path, "/threads/", "/context-pack")
-            return read_context_pack(thread_id, event)
-
-        if method == "GET" and path.startswith("/threads/") and path.endswith("/tasks"):
-            thread_id = path_param(path, "/threads/", "/tasks")
-            return read_thread_tasks(thread_id, event)
-
-        if method == "GET" and path.startswith("/threads/"):
-            thread_id = unquote(path.removeprefix("/threads/").strip("/"))
-            return read_thread(thread_id, event)
-
-        if method == "POST" and path.startswith("/messages/") and path.endswith("/ack"):
-            message_id = path_param(path, "/messages/", "/ack")
-            return ack_message(message_id, event)
-
-        return response(404, {"error": "not_found", "method": method, "path": path})
-    except BadRequest as exc:
+        return dispatch(method, path, event)
+    except ApiError as exc:
+        return response(exc.status_code, {"error": exc.error, "message": exc.message})
+    except RepositoryTableNotConfiguredError as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
-    except NotFound as exc:
-        return response(404, {"error": "not_found", "message": str(exc)})
-    except Conflict as exc:
-        return response(409, {"error": "conflict", "message": str(exc)})
-    except Blocked as exc:
+    except SafetyBlockedError as exc:
         return response(403, {"error": "blocked", "message": str(exc)})
-    except Forbidden as exc:
-        return response(403, {"error": "forbidden", "message": str(exc)})
-    except Unauthorized as exc:
-        return response(401, {"error": "unauthorized", "message": str(exc)})
-    except PayloadUnavailable as exc:
-        return response(410, {"error": "payload_unavailable", "message": str(exc)})
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
 
 
+def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    if method == "GET" and path == "/health":
+        app_name = os.environ.get("APP_NAME", DEFAULT_APP_NAME)
+        return response(200, {"ok": True, "app": app_name, "storage": "dynamodb", "time": now_iso()})
+
+    if method == "POST" and path == "/agents":
+        return register_agent(event)
+
+    if method == "POST" and path == "/agent-registrations":
+        return response(201, get_api().agent_registration(parse_body(event)))
+
+    if path == "/agent" or path.startswith("/agent/"):
+        return route_agent_runtime(method, path, event)
+
+    if method == "GET" and public_agent_profile_path(path):
+        handle = unquote(path.removeprefix("/agents/").strip("/"))
+        return response(200, get_api().read_agent(handle))
+
+    if method == "POST" and path == "/payloads":
+        return response(201, get_api().create_payload(parse_body(event)))
+
+    if method == "GET" and path == "/payloads":
+        return read_payload(event)
+
+    require_legacy_handle_routes_enabled(event)
+    api = get_api()
+
+    if method == "POST" and path == "/routing-rules":
+        return response(201, api.create_routing_rule(parse_body(event)))
+
+    if method == "GET" and path == "/routing-rules":
+        return response(200, api.read_routing_rules())
+
+    if method == "GET" and path.startswith("/agents/") and path.endswith("/inbox"):
+        handle = path_param(path, "/agents/", "/inbox")
+        api.require_agent_access(authorization_header(event), handle, required_scope="agent:inbox")
+        return read_inbox(handle, event)
+
+    if method == "GET" and path.startswith("/agents/") and path.endswith("/outbox"):
+        handle = path_param(path, "/agents/", "/outbox")
+        api.require_agent_access(authorization_header(event), handle, required_scope="agent:read")
+        agent = api.read_agent(handle)["agent"]
+        items = api.read_outbox(handle, limit=query_limit(event, default=20, maximum=100))["items"]
+        return response(200, {"agent": agent, "items": items})
+
+    if method == "GET" and path.startswith("/agents/") and path.endswith("/sent"):
+        handle = path_param(path, "/agents/", "/sent")
+        api.require_agent_access(authorization_header(event), handle, required_scope="agent:read")
+        agent = api.read_agent(handle)["agent"]
+        messages = api.read_sent_messages(handle, limit=query_limit(event, default=20, maximum=100))
+        return response(200, {"agent": agent, "messages": messages["messages"]})
+
+    if method == "POST" and path == "/messages":
+        return response(201, api.create_message(message_body(parse_body(event))))
+
+    if path.startswith("/personal-agents/"):
+        return route_personal_agent(method, path, event)
+
+    if method == "POST" and path == "/tasks":
+        return response(201, api.create_task(parse_body(event)))
+
+    if method == "POST" and path.startswith("/tasks/") and path.endswith("/accept"):
+        task_id = path_param(path, "/tasks/", "/accept")
+        return response(200, api.accept_task(task_id, parse_body(event)))
+
+    if method == "POST" and path.startswith("/tasks/") and path.endswith("/status"):
+        task_id = path_param(path, "/tasks/", "/status")
+        return response(200, api.update_task(task_id, parse_body(event)))
+
+    if method == "POST" and path.startswith("/tasks/") and path.endswith("/results"):
+        task_id = path_param(path, "/tasks/", "/results")
+        return response(200, api.return_task_result(task_id, parse_body(event)))
+
+    if method == "POST" and path.startswith("/tasks/") and path.endswith("/tool-requests"):
+        task_id = path_param(path, "/tasks/", "/tool-requests")
+        return response(201, api.create_tool_request(task_id, parse_body(event)))
+
+    if method == "POST" and path.startswith("/tool-requests/") and path.endswith("/complete"):
+        tool_request_id = path_param(path, "/tool-requests/", "/complete")
+        return response(200, api.complete_tool_request(tool_request_id, parse_body(event)))
+
+    if method == "GET" and path.startswith("/tasks/"):
+        task_id = unquote(path.removeprefix("/tasks/").strip("/"))
+        return response(200, api.read_task(task_id))
+
+    if method == "POST" and path.endswith("/hook-results"):
+        delivery_id = delivery_path_param(path, "/hook-results")
+        return response(200, api.submit_hook_result(delivery_id, parse_body(event)))
+
+    if method == "POST" and path.endswith("/decision"):
+        delivery_id = delivery_path_param(path, "/decision")
+        return response(200, api.submit_delivery_decision(delivery_id, parse_body(event)))
+
+    if method == "GET" and path.endswith("/contact-explanation"):
+        delivery_id = delivery_path_param(path, "/contact-explanation")
+        return response(200, api.read_contact_explanation(delivery_id))
+
+    if method == "GET" and path.startswith("/threads/") and path.endswith("/context"):
+        thread_id = path_param(path, "/threads/", "/context")
+        return read_thread_context(thread_id, event)
+
+    if method == "GET" and path.startswith("/threads/") and path.endswith("/context-pack"):
+        thread_id = path_param(path, "/threads/", "/context-pack")
+        return read_context_pack(thread_id, event)
+
+    if method == "GET" and path.startswith("/threads/") and path.endswith("/tasks"):
+        thread_id = path_param(path, "/threads/", "/tasks")
+        limit = query_limit(event, default=50, maximum=100)
+        return response(200, api.read_thread_tasks(thread_id, limit=limit))
+
+    if method == "GET" and path.startswith("/threads/"):
+        thread_id = unquote(path.removeprefix("/threads/").strip("/"))
+        return response(200, api.read_thread(thread_id, limit=query_limit(event, default=50, maximum=100)))
+
+    if method == "POST" and path.startswith("/messages/") and path.endswith("/ack"):
+        message_id = path_param(path, "/messages/", "/ack")
+        return ack_message(message_id, event)
+
+    return response(404, {"error": "not_found", "method": method, "path": path})
+
+
+# ---------------------------------------------------------------------------
+# Route handlers needing composition beyond a single api call
+
+
 def register_agent(event: dict[str, Any]) -> dict[str, Any]:
     body = parse_body(event)
-    agent, created = get_or_create_agent_from_body(body)
-    return response(201 if created else 200, {"created": created, "agent": public_agent(agent)})
-
-
-def create_agent_registration(event: dict[str, Any]) -> dict[str, Any]:
-    body = parse_body(event)
-    agent, created = get_or_create_agent_from_body(body)
-    if not created and agent_has_active_token(agent["agent_id"]):
-        # This route is unauthenticated and only bootstraps the first token for an
-        # agent. Handles are public, so once an agent already holds an active
-        # token, minting another one here would let anyone impersonate it.
-        # Additional tokens must go through an authenticated owner flow.
-        raise Conflict(
-            f"agent already has a registration token: {agent['handle']}; "
-            "issuing another token requires an authenticated owner flow"
-        )
-    issued = issue_agent_token(agent, body)
-    return response(
-        201,
-        {
-            "created": created,
-            "agent": public_agent(agent),
-            "token": issued["token"],
-            "record": public_agent_token_record(issued["record"]),
-        },
-    )
-
-
-def agent_has_active_token(agent_id: str) -> bool:
-    require_agent_tokens_table()
-    query_kwargs: dict[str, Any] = {
-        "IndexName": "agent-created-at-index",
-        "KeyConditionExpression": Key("agent_id").eq(agent_id),
-    }
-    while True:
-        result = agent_tokens_table.query(**query_kwargs)
-        for record in result.get("Items", []):
-            if record.get("revoked_at"):
-                continue
-            if token_expired(record.get("expires_at")):
-                continue
-            return True
-        last_key = result.get("LastEvaluatedKey")
-        if not last_key:
-            return False
-        query_kwargs["ExclusiveStartKey"] = last_key
-
-
-def get_or_create_agent_from_body(body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    handle = normalize_handle(required(body, "handle"))
-    now = now_iso()
-
-    existing_agent = get_agent_by_handle(handle)
-    if existing_agent is not None:
-        return existing_agent, False
-
-    agent = {
-        "agent_id": agent_id_for_handle(handle),
-        "handle": handle,
-        "display_name": optional_string(body, "display_name"),
-        "status": "active",
-        "created_at": now,
-        "updated_at": now,
-    }
-    capabilities = string_list(body.get("capabilities", []), "capabilities")
-    if capabilities:
-        agent["capabilities"] = set(capabilities)
-    response_rules = response_rules_object(body.get("response_rules"))
-    if response_rules is not None:
-        agent["response_rules"] = response_rules
-    trigger_mode, webhook_url = trigger_config(body)
-    agent["trigger_mode"] = trigger_mode
-    if webhook_url is not None:
-        agent["webhook_url"] = webhook_url
-
+    api = get_api()
     try:
-        agents_table.put_item(
-            Item=without_none(agent),
-            ConditionExpression="attribute_not_exists(agent_id)",
-        )
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+        return response(201, api.register_agent(body))
+    except ApiError as exc:
+        if exc.status_code != 409:
             raise
-        existing_agent = get_agent_by_handle(handle)
-        if existing_agent is None:
-            raise Conflict(f"agent already exists: {handle}") from exc
-        return existing_agent, False
-
-    return agent, True
-
-
-def issue_agent_token(agent: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    require_agent_tokens_table()
-    token_id = secrets.token_hex(12)
-    secret = secrets.token_hex(32)
-    token = f"{AGENT_TOKEN_PREFIX}_{token_id}_{secret}"
-    now = now_iso()
-    record = without_none(
-        {
-            "token_id": token_id,
-            "token_hash": hash_token_parts(token_id, secret),
-            "agent_id": agent["agent_id"],
-            "agent_handle": agent["handle"],
-            "scopes": agent_token_scopes(body.get("scopes")),
-            "name": optional_string(body, "name"),
-            "owner_user_id": optional_string(body, "owner_user_id"),
-            "node_id": optional_string(body, "node_id"),
-            "created_at": now,
-            "expires_at": optional_datetime_string(body, "expires_at"),
-        }
-    )
-    agent_tokens_table.put_item(Item=record, ConditionExpression="attribute_not_exists(token_id)")
-    return {"token": token, "record": record}
-
-
-def read_agent(handle: str) -> dict[str, Any]:
-    agent = require_agent_by_handle(handle)
-    return response(200, {"agent": public_agent(agent)})
-
-
-def create_payload(event: dict[str, Any]) -> dict[str, Any]:
-    require_payload_storage()
-    body = parse_body(event)
-    content = payload_content(body)
-    content_bytes = content.encode("utf-8")
-    media_type = optional_string(body, "media_type") or "text/plain; charset=utf-8"
-    access_scope = normalize_payload_access_scope(optional_string(body, "access_scope") or "recipients")
-    ttl_expires_at = optional_datetime_string(body, "ttl_expires_at")
-    compressed_content = gzip.compress(content_bytes, compresslevel=6, mtime=0)
-    payload_id = f"payload_{uuid.uuid4().hex}"
-    content_ref = f"payload://{payload_id}"
-    object_key = f"payloads/{payload_id}.gz"
-    storage_ref = f"s3://{PAYLOAD_OBJECTS_BUCKET}/{object_key}"
-    now = now_iso()
-    payload = without_none(
-        {
-            "content_ref": content_ref,
-            "media_type": media_type,
-            "byte_length": len(content_bytes),
-            "hash": payload_hash(content_bytes),
-            "compression": "gzip",
-            "compressed_byte_length": len(compressed_content),
-            "compressed_hash": payload_hash(compressed_content),
-            "ttl_expires_at": ttl_expires_at,
-            "ttl_expires_at_epoch": ttl_epoch(ttl_expires_at),
-            "retention_state": "ready",
-            "access_scope": access_scope,
-            "fetch_policy_ref": optional_string(body, "fetch_policy_ref"),
-            "chunk_manifest_ref": optional_string(body, "chunk_manifest_ref"),
-            "storage_provider": "aws_s3",
-            "storage_ref": storage_ref,
-            "created_at": now,
-        }
-    )
-    s3.put_object(
-        Bucket=PAYLOAD_OBJECTS_BUCKET,
-        Key=object_key,
-        Body=compressed_content,
-        ContentType="application/gzip",
-        Metadata={
-            "content-ref": content_ref,
-            "media-type": media_type,
-        },
-    )
-    payloads_table.put_item(Item=payload, ConditionExpression="attribute_not_exists(content_ref)")
-    return response(201, {"content_ref": content_ref, "payload": payload_record(payload)})
+        # Historical get-or-create semantics: re-posting an existing handle
+        # returns the current public profile instead of a conflict.
+        agent = api.read_agent(str(body.get("handle") or ""))["agent"]
+        return response(200, {"created": False, "agent": agent})
 
 
 def read_payload(event: dict[str, Any]) -> dict[str, Any]:
-    require_payload_storage()
     params = query_params(event)
-    content_ref = required(params, "content_ref")
-    payload = require_payload(content_ref)
-    payload = refresh_payload_retention(payload)
-    require_payload_fetch_authorized(
-        payload,
-        optional_string(params, "requester_handle"),
+    requester_handle = (params.get("requester_handle") or "").strip() or None
+    result = get_api().read_payload(
+        str(params.get("content_ref") or ""),
+        requester_handle=requester_handle,
     )
-    if payload.get("retention_state") != "ready":
-        raise PayloadUnavailable(f"payload content is {payload.get('retention_state')}: {payload['content_ref']}")
-
-    object_key = payload_object_key(payload)
-    try:
-        object_response = s3.get_object(Bucket=PAYLOAD_OBJECTS_BUCKET, Key=object_key)
-        compressed_content = object_response["Body"].read()
-    except ClientError as exc:
-        raise PayloadUnavailable(f"payload content is unavailable: {payload['content_ref']}") from exc
-
-    if payload.get("compression") == "gzip":
-        content_bytes = gzip.decompress(compressed_content)
-    else:
-        content_bytes = compressed_content
-    result: dict[str, Any] = {
-        "content_ref": payload["content_ref"],
-        "payload": payload_record(payload),
-    }
-    try:
-        result["content"] = content_bytes.decode("utf-8")
-    except UnicodeDecodeError:
+    content_bytes = result.pop("content_bytes", b"")
+    if "content" not in result:
         result["content_bytes_base64"] = base64.b64encode(content_bytes).decode("ascii")
     return response(200, result)
 
 
-def create_routing_rule(event: dict[str, Any]) -> dict[str, Any]:
-    if routing_rules_table is None:
-        raise BadRequest("routing rules are not configured")
-
-    body = parse_body(event)
-    mode = (optional_string(body, "mode") or "copy").lower()
-    if mode not in {"direct", "copy", "handoff", "review", "block"}:
-        raise BadRequest("mode must be direct, copy, handoff, review, or block")
-
-    route_to_handles = [normalize_handle(handle) for handle in string_list(body.get("route_to_handles", []), "route_to_handles")]
-    if mode != "block" and not route_to_handles:
-        raise BadRequest("route_to_handles is required unless mode is block")
-    for handle in route_to_handles:
-        require_agent_by_handle(handle)
-
-    url_contains = [
-        value.strip().lower()
-        for value in string_list(body.get("url_contains", []), "url_contains")
-        if value.strip()
-    ]
-    if not url_contains:
-        raise BadRequest("url_contains requires at least one value")
-
-    now = now_iso()
-    rule = {
-        "rule_id": f"routing_rule_{uuid.uuid4().hex}",
-        "name": required(body, "name"),
-        "mode": mode,
-        "route_to_handles": route_to_handles,
-        "url_contains": url_contains,
-        "enabled": optional_bool(body, "enabled", default=True),
-        "created_at": now,
-        "updated_at": now,
-    }
-    routing_rules_table.put_item(Item=without_none(rule), ConditionExpression="attribute_not_exists(rule_id)")
-    return response(201, {"created": True, "routing_rule": clean_item(rule)})
-
-
-def read_routing_rules() -> dict[str, Any]:
-    if routing_rules_table is None:
-        raise BadRequest("routing rules are not configured")
-    result = routing_rules_table.scan()
-    rules = result.get("Items", [])
-    rules.sort(key=lambda rule: (rule.get("created_at", ""), rule.get("rule_id", "")))
-    return response(200, {"items": clean_item(rules)})
-
-
-def create_message(event: dict[str, Any]) -> dict[str, Any]:
-    body = parse_body(event)
-    sender_handle = normalize_handle(body.get("sender_handle") or body.get("sender") or "")
-    sender = require_agent_by_handle(sender_handle)
-
-    recipient_handles = message_recipient_handles(body)
-    recipients = [require_agent_by_handle(handle) for handle in recipient_handles]
-    visibility = optional_string(body, "visibility") or "direct"
-    refs = refs_list(body.get("refs", []), "refs")
-    content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
-    content_ref = optional_string(body, "content_ref")
-    recipients, routing_trace, needs_review = apply_routing_rules(
-        recipients=recipients,
-        content_inline=content_inline,
-        content_ref=content_ref,
-        refs=refs,
-    )
-    if visibility != "public" and not recipients:
-        raise BadRequest("direct or limited messages require at least one recipient")
-
-    if content_inline is None and content_ref is None and not refs:
-        raise BadRequest("content, content_ref, or refs is required")
-
-    idempotency_key = optional_string(body, "idempotency_key")
-    if idempotency_key:
-        existing_message_id = get_idempotent_message_id(sender["agent_id"], idempotency_key)
-        if existing_message_id is not None:
-            return response(200, send_result(existing_message_id, idempotent=True))
-
-    thread_id = optional_string(body, "thread_id")
-    if thread_id:
-        existing_thread = get_thread_record(thread_id)
-        if existing_thread is None:
-            raise NotFound(f"thread not found: {thread_id}")
-        # Only current participants may post into an existing thread; otherwise any
-        # agent could inject messages into a conversation by guessing its id.
-        participants = existing_thread.get("participants") or set()
-        if sender["agent_id"] not in participants:
-            raise Forbidden("sender is not a participant of this thread")
-    else:
-        thread_id = f"thread_{uuid.uuid4().hex}"
-        existing_thread = None
-
-    safety_decision = evaluate_safety_gateway(
-        actor_id=sender["agent_id"],
-        action_type="message.send",
-        content=content_inline,
-        content_ref=content_ref,
-        target_ids=[agent["agent_id"] for agent in recipients],
-        intent=optional_string(body, "intent") or "message",
-        visibility=visibility,
-        thread_id=thread_id,
-        trace_id=optional_string(body, "trace_id"),
-        thread_depth=int(existing_thread.get("message_count", 0)) if existing_thread else 0,
-    )
-    safety_status, safety_needs_review = safety_outcome(safety_decision, subject="message")
-    needs_review = needs_review or safety_needs_review
-    stored_content_inline, stored_content_ref = envelope_content_for_storage(
-        content_inline,
-        content_ref,
-        "message content",
-    )
-
-    now = now_iso()
-    message_id = f"message_{uuid.uuid4().hex}"
-    recipient_agent_ids = [agent["agent_id"] for agent in recipients]
-    message = {
-        "message_id": message_id,
-        "thread_id": thread_id,
-        "sender_agent_id": sender["agent_id"],
-        "sender_handle": sender["handle"],
-        "intent": optional_string(body, "intent") or "message",
-        "visibility": visibility,
-        "content_inline": stored_content_inline,
-        "content_ref": stored_content_ref,
-        "refs": refs,
-        "schema_version": "seagull.message.v1",
-        "safety_status": safety_status,
-        "safety_action": safety_decision_action(safety_decision),
-        "safety_decision_id": safety_decision_id(safety_decision),
-        "safety_policy_ids": safety_decision_policy_ids(safety_decision),
-        "safety_reasons": safety_decision_reasons(safety_decision),
-        "safety_risk": safety_decision_risk(safety_decision),
-        "created_at": now,
-    }
-    if recipient_agent_ids:
-        message["recipient_agent_ids"] = set(recipient_agent_ids)
-        message["recipient_handles"] = set(agent["handle"] for agent in recipients)
-
-    if existing_thread is None:
-        thread = {
-            "thread_id": thread_id,
-            "root_message_id": message_id,
-            "participants": set([sender["agent_id"], *recipient_agent_ids]),
-            "message_count": 1,
-            "last_message_id": message_id,
-            "last_message_at": now,
-            "created_at": now,
-            "updated_at": now,
-        }
-    else:
-        thread = existing_thread
-
-    deliveries = [
-        {
-            "delivery_id": f"delivery_{message_id}_{recipient['agent_id']}",
-            "message_id": message_id,
-            "thread_id": thread_id,
-            "sender_agent_id": sender["agent_id"],
-            "sender_handle": sender["handle"],
-            "recipient_agent_id": recipient["agent_id"],
-            "recipient_handle": recipient["handle"],
-            "status": "needs_review" if needs_review else "delivered",
-            "retry_count": 0,
-            "current_content_inline": stored_content_inline,
-            "current_content_ref": stored_content_ref,
-            "refs": refs,
-            "workflow_trace": routing_trace,
-            "current_stage": "human.review" if needs_review else "agent.wait",
-            "created_at": now,
-            "updated_at": now,
-        }
-        for recipient in recipients
-    ]
-
-    messages_table.put_item(Item=without_none(message), ConditionExpression="attribute_not_exists(message_id)")
-    if existing_thread is None:
-        threads_table.put_item(Item=thread, ConditionExpression="attribute_not_exists(thread_id)")
-    else:
-        update_existing_thread(thread_id, message_id, now, [sender["agent_id"], *recipient_agent_ids])
-
-    for delivery in deliveries:
-        deliveries_table.put_item(Item=delivery, ConditionExpression="attribute_not_exists(delivery_id)")
-
-    enqueue_delivery_events(deliveries, message, sender, recipients)
-
-    if idempotency_key:
-        idempotency_table.put_item(
-            Item={
-                "sender_agent_id": sender["agent_id"],
-                "idempotency_key": idempotency_key,
-                "message_id": message_id,
-                "created_at": now,
-                "expires_at": int(time.time()) + 604800,
-            }
-        )
-
-    return response(
-        201,
-        {
-            "message": clean_item(message),
-            "thread": clean_item(get_thread_record(thread_id) or thread),
-            "deliveries": clean_item(deliveries),
-            "message_id": message_id,
-            "thread_id": thread_id,
-        },
-    )
-
-
-def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
-    agent_handle, parts = personal_agent_path_parts(path)
-
-    if method == "GET" and parts == ["inbox"]:
-        require_legacy_agent_access(event, agent_handle, "agent:inbox")
-        return read_inbox(agent_handle, event)
-
-    if method == "POST" and parts == ["send"]:
-        require_legacy_agent_access(event, agent_handle, "agent:post")
-        body = parse_body(event)
-        body["sender_handle"] = agent_handle
-        return create_message(event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 3 and parts[0] == "deliveries":
-        require_legacy_agent_access(event, agent_handle, "agent:post")
-        delivery_id = unquote(parts[1])
-        action = parts[2]
-        body = parse_body(event)
-        body["agent_handle"] = agent_handle
-        if action == "reply":
-            body["decision"] = "reply"
-        elif action == "ignore":
-            body["decision"] = "ignore"
-        elif action == "ask-owner":
-            body["decision"] = "ask_human"
-        else:
-            raise NotFound(f"personal-agent delivery action not found: {action}")
-        return submit_delivery_decision(delivery_id, event_with_json_body(body))
-
-    if method == "POST" and parts == ["tasks"]:
-        require_legacy_agent_access(event, agent_handle, "agent:post")
-        body = parse_body(event)
-        body["requester_handle"] = agent_handle
-        return create_task(event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "accept":
-        require_legacy_agent_access(event, agent_handle, "agent:post")
-        body = parse_body(event)
-        body["worker_handle"] = agent_handle
-        return accept_task(unquote(parts[1]), event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "results":
-        require_legacy_agent_access(event, agent_handle, "agent:post")
-        body = parse_body(event)
-        body["responder_handle"] = agent_handle
-        return return_task_result(unquote(parts[1]), event_with_json_body(body))
-
-    raise NotFound(f"personal-agent route not found: {method} {path}")
-
-
-def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
-    parts = [unquote(part) for part in path.strip("/").split("/") if part]
-
-    if method == "GET" and parts == ["agent", "me"]:
-        principal = require_agent_principal(event, "agent:read")
-        agent = require_agent(principal["agent_id"])
-        return response(200, {"agent": public_agent(agent), "principal": principal})
-
-    if method == "GET" and parts == ["agent", "inbox"]:
-        principal = require_agent_principal(event, "agent:inbox")
-        return read_inbox(principal["agent_handle"], event)
-
-    if method == "POST" and parts == ["agent", "posts"]:
-        principal = require_agent_principal(event, "agent:post")
-        body = parse_body(event)
-        body["sender_handle"] = principal["agent_handle"]
-        return create_message(event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "decision":
-        principal = require_agent_principal(event, "agent:post")
-        body = parse_body(event)
-        body["agent_handle"] = principal["agent_handle"]
-        return submit_delivery_decision(parts[2], event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
-        principal = require_agent_principal(event, "agent:ack")
-        return ack_delivery_for_agent(parts[2], principal)
-
-    if method == "POST" and parts == ["agent", "tasks"]:
-        principal = require_agent_principal(event, "agent:post")
-        body = parse_body(event)
-        body["requester_handle"] = principal["agent_handle"]
-        return create_task(event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "accept":
-        principal = require_agent_principal(event, "agent:post")
-        body = parse_body(event)
-        body["worker_handle"] = principal["agent_handle"]
-        return accept_task(parts[2], event_with_json_body(body))
-
-    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "results":
-        principal = require_agent_principal(event, "agent:post")
-        body = parse_body(event)
-        body["responder_handle"] = principal["agent_handle"]
-        return return_task_result(parts[2], event_with_json_body(body))
-
-    raise NotFound(f"agent runtime route not found: {method} {path}")
-
-
-def create_task(event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    reject_private_task_fields(body)
-    requester = require_agent_by_handle(required(body, "requester_handle"))
-    recipient = require_agent_by_handle(required(body, "recipient_handle"))
-    objective = required(body, "objective")
-    require_small_inline(objective, "objective")
-    task_safety_decision = evaluate_safety_gateway(
-        actor_id=requester["agent_id"],
-        action_type="task.request",
-        content=objective,
-        content_ref=optional_string(body, "input_ref"),
-        target_ids=[recipient["agent_id"]],
-        intent="task_request",
-        visibility="direct",
-        thread_id=optional_string(body, "thread_id"),
-        trace_id=optional_string(body, "trace_id"),
-    )
-    _, task_needs_review = safety_outcome(task_safety_decision, subject="task")
-    idempotency_key = optional_string(body, "idempotency_key")
-    if idempotency_key:
-        existing_task_id = get_idempotent_task_id(requester["agent_id"], idempotency_key)
-        if existing_task_id is not None:
-            existing_task = tasks_table.get_item(Key={"task_id": existing_task_id}).get("Item")
-            if existing_task is not None:
-                return response(200, {"created": False, "task": clean_item(existing_task), "task_id": existing_task_id, "thread_id": existing_task["thread_id"]})
-
-    task_id = f"task_{uuid.uuid4().hex}"
-    message_response = create_message(
-        {
-            "body": json.dumps(
-                without_none(
-                    {
-                        "sender_handle": requester["handle"],
-                        "recipient_handles": [recipient["handle"]],
-                        "thread_id": optional_string(body, "thread_id"),
-                        "intent": "task_request",
-                        "visibility": "direct",
-                        "refs": [task_ref(task_id, "task request")],
-                    }
-                )
-            )
-        }
-    )
-    message_body = json.loads(message_response["body"])
-    now = now_iso()
-    task = {
-        "task_id": task_id,
-        "thread_id": message_body["thread_id"],
-        "requester_agent_id": requester["agent_id"],
-        "recipient_agent_id": recipient["agent_id"],
-        "objective": objective,
-        "request_message_id": message_body["message_id"],
-        "context_refs": string_list(body.get("context_refs", []), "context_refs"),
-        "context_pack_id": optional_string(body, "context_pack_id"),
-        "context_pack_ref": optional_string(body, "context_pack_ref"),
-        "input_ref": optional_string(body, "input_ref"),
-        "stream_id": optional_string(body, "stream_id"),
-        "allowed_tool_names": string_list(body.get("allowed_tool_names", []), "allowed_tool_names"),
-        "allowed_use_terms": string_list(body.get("allowed_use_terms", []), "allowed_use_terms"),
-        "state": "needs_approval" if task_needs_review else "requested",
-        "policy_decision_id": safety_decision_id(task_safety_decision),
-        "safety_action": safety_decision_action(task_safety_decision),
-        "safety_policy_ids": safety_decision_policy_ids(task_safety_decision),
-        "safety_reasons": safety_decision_reasons(task_safety_decision),
-        "safety_risk": safety_decision_risk(task_safety_decision),
-        "quote_ids": [],
-        "escrow_ids": [],
-        "capacity_policy_ids": [],
-        "artifact_refs": [],
-        "tool_request_ids": [],
-        "created_at": now,
-        "updated_at": now,
-    }
-    tasks_table.put_item(Item=without_none(task), ConditionExpression="attribute_not_exists(task_id)")
-    if idempotency_key:
-        idempotency_table.put_item(
-            Item={
-                "sender_agent_id": requester["agent_id"],
-                "idempotency_key": f"task:{idempotency_key}",
-                "task_id": task_id,
-                "created_at": now,
-                "expires_at": int(time.time()) + 604800,
-            }
-        )
-    return response(201, {"created": True, "task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"]})
-
-
-def read_task(task_id: str) -> dict[str, Any]:
-    task = require_task(task_id)
-    return response(200, {"task": clean_item(task)})
-
-
-def read_thread_tasks(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    if get_thread_record(thread_id) is None:
-        raise NotFound(f"thread not found: {thread_id}")
-    result = tasks_table.query(
-        IndexName="thread-created-at-index",
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=True,
-        Limit=query_limit(event, default=50, maximum=100),
-    )
-    return response(200, {"thread_id": thread_id, "tasks": clean_item(result.get("Items", []))})
-
-
-def accept_task(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    task = require_task(task_id)
-    worker = require_agent_by_handle(required(body, "worker_handle"))
-    if worker["agent_id"] != task["recipient_agent_id"]:
-        raise Forbidden("only the recipient agent can accept this task")
-    now = now_iso()
-    task["state"] = "accepted"
-    task["accepted_by_agent_id"] = worker["agent_id"]
-    task["updated_at"] = now
-    tasks_table.put_item(Item=without_none(task))
-    send_task_notification(
-        task,
-        sender=worker,
-        recipient_agent_id=task["requester_agent_id"],
-        intent="status_update",
-        label="task accepted",
-        note=optional_string(body, "note"),
-    )
-    return response(200, {"task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"], "state": task["state"]})
-
-
-def update_task_status(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    task = require_task(task_id)
-    actor = require_agent_by_handle(required(body, "actor_handle"))
-    require_task_actor(task, actor)
-    state = normalize_task_state(required(body, "state"))
-    require_valid_task_transition(task, state, actor)
-    now = now_iso()
-    task["state"] = state
-    task["updated_at"] = now
-    tasks_table.put_item(Item=without_none(task))
-    recipient_agent_id = task["requester_agent_id"] if actor["agent_id"] != task["requester_agent_id"] else task["recipient_agent_id"]
-    send_task_notification(
-        task,
-        sender=actor,
-        recipient_agent_id=recipient_agent_id,
-        intent="status_update",
-        label=f"task {state}",
-        note=optional_string(body, "note"),
-    )
-    return response(200, {"task": clean_item(task), "task_id": task_id, "thread_id": task["thread_id"], "state": state})
-
-
-def return_task_result(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    task = require_task(task_id)
-    responder = require_agent_by_handle(required(body, "responder_handle"))
-    require_task_actor(task, responder)
-    if responder["agent_id"] == task["requester_agent_id"]:
-        raise Forbidden("requester cannot return its own task result")
-    current_state = str(task.get("state") or "").strip().lower()
-    if current_state in TASK_INACTIVE_STATES:
-        raise Conflict(f"cannot return a result for a task in terminal state {current_state}")
-    state = normalize_task_state(optional_string(body, "state") or "completed")
-    content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
-    content_ref = optional_string(body, "content_ref")
-    artifact_refs = string_list(body.get("artifact_refs", []), "artifact_refs")
-    tool_use_summary_refs = string_list(body.get("tool_use_summary_refs", []), "tool_use_summary_refs")
-    stored_content_inline, stored_content_ref = envelope_content_for_storage(
-        content_inline,
-        content_ref,
-        "task result content",
-    )
-    stream_id = optional_string(body, "stream_id") or task.get("stream_id")
-    if task.get("stream_id") and stream_id != task["stream_id"]:
-        raise BadRequest("task result stream_id must match task stream_id")
-    error = optional_string(body, "error")
-    if stored_content_inline is None and stored_content_ref is None and not artifact_refs and error is None:
-        raise BadRequest("task result requires content, content_ref, artifact_refs, or error")
-
-    result_id = f"task_result_{uuid.uuid4().hex}"
-    result_ref = f"seagull://tasks/{task_id}/results/{result_id}"
-    requester = require_agent(task["requester_agent_id"])
-    message_response = create_message(
-        {
-            "body": json.dumps(
-                without_none(
-                    {
-                        "sender_handle": responder["handle"],
-                        "recipient_handles": [requester["handle"]],
-                        "thread_id": task["thread_id"],
-                        "intent": "task_result",
-                        "visibility": "direct",
-                        "content_ref": stored_content_ref,
-                        "refs": [{"type": "task_result", "url": result_ref, "remember_as": "task result"}],
-                    }
-                )
-            )
-        }
-    )
-    message_body = json.loads(message_response["body"])
-    now = now_iso()
-    result = {
-        "result_id": result_id,
-        "task_id": task_id,
-        "thread_id": task["thread_id"],
-        "responder_agent_id": responder["agent_id"],
-        "state": state,
-        "result_message_id": message_body["message_id"],
-        "stream_id": stream_id,
-        "content_inline": stored_content_inline,
-        "content_ref": stored_content_ref,
-        "artifact_refs": artifact_refs,
-        "tool_use_summary_refs": tool_use_summary_refs,
-        "error": error,
-        "created_at": now,
-    }
-    task_results_table.put_item(Item=without_none(result), ConditionExpression="attribute_not_exists(result_id)")
-    task["state"] = state
-    task["result_message_id"] = message_body["message_id"]
-    task["result_ref"] = result_ref
-    if stream_id:
-        task["stream_id"] = stream_id
-    task["artifact_refs"] = list(dict.fromkeys([*task.get("artifact_refs", []), *artifact_refs]))
-    task["updated_at"] = now
-    tasks_table.put_item(Item=without_none(task))
-    return response(200, {"task_id": task_id, "thread_id": task["thread_id"], "state": state, "result": clean_item(result)})
-
-
-def create_task_tool_request(task_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    reject_private_task_fields(body)
-    task = require_task(task_id)
-    requester = require_agent_by_handle(required(body, "requester_handle"))
-    worker = require_agent_by_handle(required(body, "worker_handle"))
-    if requester["agent_id"] != task["requester_agent_id"]:
-        raise Forbidden("only the task requester can request delegated tool use")
-    if worker["agent_id"] != task["recipient_agent_id"]:
-        raise Forbidden("tool request worker must be the task recipient")
-    now = now_iso()
-    tool_request_id = f"tool_request_{uuid.uuid4().hex}"
-    tool_request = {
-        "tool_request_id": tool_request_id,
-        "task_id": task_id,
-        "thread_id": task["thread_id"],
-        "requester_agent_id": requester["agent_id"],
-        "worker_agent_id": worker["agent_id"],
-        "tool_name": required(body, "tool_name"),
-        "purpose": required(body, "purpose"),
-        "input_ref": optional_string(body, "input_ref"),
-        "requires_approval": optional_bool(body, "requires_approval", default=True),
-        "approval_id": optional_string(body, "approval_id"),
-        "policy_decision_id": optional_string(body, "policy_decision_id"),
-        "created_at": now,
-        "updated_at": now,
-    }
-    tool_request["status"] = "needs_approval" if tool_request["requires_approval"] else "requested"
-    tool_requests_table.put_item(Item=without_none(tool_request), ConditionExpression="attribute_not_exists(tool_request_id)")
-    task["tool_request_ids"] = [*task.get("tool_request_ids", []), tool_request_id]
-    task["updated_at"] = now
-    tasks_table.put_item(Item=without_none(task))
-    send_task_notification(
-        task,
-        sender=requester,
-        recipient_agent_id=worker["agent_id"],
-        intent="tool_request",
-        label="tool request",
-        ref={"type": "tool_request", "url": f"seagull://tasks/{task_id}/tool-requests/{tool_request_id}", "remember_as": "tool request"},
-    )
-    return response(201, {"tool_request": clean_item(tool_request), "tool_request_id": tool_request_id, "task_id": task_id})
-
-
-def complete_task_tool_request(tool_request_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    require_task_tables()
-    body = parse_body(event)
-    tool_request = require_tool_request(tool_request_id)
-    actor = require_agent_by_handle(required(body, "actor_handle"))
-    if actor["agent_id"] != tool_request["worker_agent_id"]:
-        raise Forbidden("only the worker agent can complete this tool request")
-    state = normalize_task_state(required(body, "state"))
-    now = now_iso()
-    tool_request["status"] = state
-    if state in {"accepted", "running", "result_ready", "completed"}:
-        tool_request["accepted_by_agent_id"] = actor["agent_id"]
-    tool_request["result_ref"] = optional_string(body, "result_ref")
-    tool_request["artifact_refs"] = string_list(body.get("artifact_refs", []), "artifact_refs")
-    tool_request["tool_use_summary_ref"] = optional_string(body, "tool_use_summary_ref")
-    tool_request["updated_at"] = now
-    tool_requests_table.put_item(Item=without_none(tool_request))
-    return response(200, {"tool_request": clean_item(tool_request), "tool_request_id": tool_request_id, "task_id": tool_request["task_id"], "state": state})
-
-
 def read_inbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
-    agent = require_agent_by_handle(handle)
-    result = deliveries_table.query(
-        IndexName="recipient-created-at-index",
-        KeyConditionExpression=Key("recipient_agent_id").eq(agent["agent_id"]),
-        ScanIndexForward=False,
-        Limit=query_limit(event, default=20, maximum=100),
-    )
-    # Hold-for-review deliveries must not expose their content to the recipient
-    # agent until a human releases them; the human review surface reads directly.
-    items = [item for item in result.get("Items", []) if item.get("status") != "needs_review"]
-    return response(200, {"agent": public_agent(agent), "items": delivery_items(items)})
-
-
-def read_outbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
-    agent = require_agent_by_handle(handle)
-    result = deliveries_table.query(
-        IndexName="sender-created-at-index",
-        KeyConditionExpression=Key("sender_agent_id").eq(agent["agent_id"]),
-        ScanIndexForward=False,
-        Limit=query_limit(event, default=20, maximum=100),
-    )
-    return response(200, {"agent": public_agent(agent), "items": delivery_items(result.get("Items", []))})
-
-
-def read_sent_messages(handle: str, event: dict[str, Any]) -> dict[str, Any]:
-    agent = require_agent_by_handle(handle)
-    result = messages_table.query(
-        IndexName="sender-created-at-index",
-        KeyConditionExpression=Key("sender_agent_id").eq(agent["agent_id"]),
-        ScanIndexForward=False,
-        Limit=query_limit(event, default=20, maximum=100),
-    )
-    return response(200, {"agent": public_agent(agent), "messages": clean_item(result.get("Items", []))})
-
-
-def read_thread(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    thread = get_thread_record(thread_id)
-    if thread is None:
-        raise NotFound(f"thread not found: {thread_id}")
-
-    result = messages_table.query(
-        IndexName="thread-created-at-index",
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=True,
-        Limit=query_limit(event, default=50, maximum=100),
-    )
-    return response(200, {"thread": clean_item(thread), "messages": clean_item(result.get("Items", []))})
+    api = get_api()
+    agent = api.read_agent(handle)["agent"]
+    items = api.read_inbox(handle, limit=query_limit(event, default=20, maximum=100))["items"]
+    return response(200, {"agent": agent, "items": items})
 
 
 def read_thread_context(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    thread = get_thread_record(thread_id)
-    if thread is None:
-        raise NotFound(f"thread not found: {thread_id}")
-
     params = query_params(event)
-    requester_handle = normalize_handle(required(params, "requester_handle"))
-    requester = require_agent_by_handle(requester_handle)
-    if requester["agent_id"] not in set(thread.get("participants", [])):
-        raise Forbidden("agent cannot read context for this thread")
-
-    message_result = messages_table.query(
-        IndexName="thread-created-at-index",
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=False,
-        Limit=query_limit(event, default=10, maximum=20),
+    requester_handle = (params.get("requester_handle") or "").strip()
+    if not requester_handle:
+        raise ApiError(400, "bad_request", "requester_handle is required")
+    result = get_api().read_thread_context_for(
+        thread_id,
+        requester_handle=requester_handle,
+        recent_limit=query_limit(event, default=10, maximum=20),
     )
-    recent_messages = list(reversed(message_result.get("Items", [])))
-    summary = latest_thread_summary(thread_id) or generated_summary(recent_messages)
-    return response(
-        200,
-        {
-            "thread": clean_item(thread),
-            "context_mode": "summary_plus_recent",
-            "summary": clean_item(summary),
-            "recent_messages": clean_item(recent_messages),
-        },
-    )
+    return response(200, result)
 
 
 def read_context_pack(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    thread = get_thread_record(thread_id)
-    if thread is None:
-        raise NotFound(f"thread not found: {thread_id}")
-
     params = query_params(event)
-    requester_handle = normalize_handle(required(params, "requester_handle"))
-    requester = require_agent_by_handle(requester_handle)
-    participants = set(thread.get("participants", []))
-    if requester["agent_id"] not in participants:
-        raise Forbidden("agent cannot read context for this thread")
-
-    max_inline_chars = query_int(
-        event,
-        "max_inline_chars",
-        default=DEFAULT_CONTEXT_MAX_INLINE_CHARS,
-        minimum=0,
-        maximum=20000,
+    requester_handle = (params.get("requester_handle") or "").strip()
+    if not requester_handle:
+        raise ApiError(400, "bad_request", "requester_handle is required")
+    result = get_api().read_context_pack(
+        thread_id,
+        requester_handle=requester_handle,
+        max_inline_chars=query_int(
+            event, "max_inline_chars", default=DEFAULT_CONTEXT_MAX_INLINE_CHARS, minimum=0, maximum=20000
+        ),
+        max_recent_messages=query_int(
+            event, "max_recent_messages", default=DEFAULT_CONTEXT_MAX_RECENT_MESSAGES, minimum=0, maximum=50
+        ),
+        max_payload_refs=query_int(
+            event, "max_payload_refs", default=DEFAULT_CONTEXT_MAX_PAYLOAD_REFS, minimum=0, maximum=100
+        ),
+        token_budget_estimate=optional_query_int(
+            event, "token_budget_estimate", minimum=0, maximum=1_000_000
+        ),
     )
-    max_recent_messages = query_int(
-        event,
-        "max_recent_messages",
-        default=DEFAULT_CONTEXT_MAX_RECENT_MESSAGES,
-        minimum=0,
-        maximum=50,
-    )
-    max_payload_refs = query_int(
-        event,
-        "max_payload_refs",
-        default=DEFAULT_CONTEXT_MAX_PAYLOAD_REFS,
-        minimum=0,
-        maximum=100,
-    )
-    token_budget_estimate = optional_query_int(
-        event,
-        "token_budget_estimate",
-        minimum=0,
-        maximum=1_000_000,
-    )
-
-    if max_recent_messages == 0:
-        messages = []
-    else:
-        message_result = messages_table.query(
-            IndexName="thread-created-at-index",
-            KeyConditionExpression=Key("thread_id").eq(thread_id),
-            ScanIndexForward=False,
-            Limit=max_recent_messages,
-        )
-        messages = list(reversed(message_result.get("Items", [])))
-    inline_chars_used = 0
-    truncated = False
-    budgeted_messages = []
-    selected_refs = []
-    payload_refs = []
-    redacted_refs = []
-
-    for message in messages:
-        budgeted_message = dict(message)
-        content_inline = budgeted_message.get("content_inline")
-        if isinstance(content_inline, str) and content_inline:
-            remaining_chars = max(max_inline_chars - inline_chars_used, 0)
-            if len(content_inline) <= remaining_chars:
-                inline_chars_used += len(content_inline)
-            elif remaining_chars > 0:
-                budgeted_message["content_inline"] = content_inline[:remaining_chars]
-                inline_chars_used += remaining_chars
-                truncated = True
-                redacted_refs.append(f"message://{message['message_id']}/content_inline")
-            else:
-                budgeted_message.pop("content_inline", None)
-                truncated = True
-                redacted_refs.append(f"message://{message['message_id']}/content_inline")
-
-        content_ref = budgeted_message.get("content_ref")
-        if isinstance(content_ref, str) and content_ref:
-            if private_context_value(content_ref):
-                budgeted_message.pop("content_ref", None)
-                redacted_refs.append(f"message://{message['message_id']}/content_ref")
-            elif len(payload_refs) < max_payload_refs:
-                payload_refs.append(
-                    {
-                        "content_ref": content_ref,
-                        "source_type": "message",
-                        "source_id": budgeted_message["message_id"],
-                    }
-                )
-
-        for ref in message.get("refs", []):
-            if private_context_ref(ref):
-                redacted_refs.append(f"message://{message['message_id']}/ref")
-                continue
-            if len(selected_refs) < max_payload_refs:
-                selected_refs.append(ref)
-
-        budgeted_message["refs"] = []
-        budgeted_messages.append(budgeted_message)
-
-    summary = latest_thread_summary(thread_id)
-    context_summary = dict(summary) if summary else None
-    if context_summary and isinstance(context_summary.get("content_ref"), str):
-        summary_content_ref = context_summary["content_ref"]
-        if private_context_value(summary_content_ref):
-            context_summary.pop("content_ref", None)
-            redacted_refs.append(f"summary://{context_summary.get('summary_id', 'latest')}/content_ref")
-        elif len(payload_refs) < max_payload_refs:
-            payload_refs.append(
-                {
-                    "content_ref": summary_content_ref,
-                    "source_type": "thread_summary",
-                    "source_id": context_summary.get("summary_id", "latest"),
-                }
-            )
-
-    allowed_recipients = sorted(
-        agent["handle"]
-        for agent_id in participants
-        for agent in (agents_table.get_item(Key={"agent_id": agent_id}).get("Item"),)
-        if agent is not None
-    )
-    return response(
-        200,
-        {
-            "context_pack_id": f"context_pack_{thread_id}_{requester['agent_id']}",
-            "thread": clean_item(thread),
-            "requester_handle": requester["handle"],
-            "summary": clean_item(context_summary),
-            "recent_messages": clean_item(budgeted_messages),
-            "selected_refs": clean_item(selected_refs),
-            "payload_refs": clean_item(payload_refs),
-            "budget": {
-                "max_inline_chars": max_inline_chars,
-                "max_recent_messages": max_recent_messages,
-                "max_payload_refs": max_payload_refs,
-                "token_budget_estimate": token_budget_estimate,
-                "inline_chars_used": inline_chars_used,
-                "recent_messages_returned": len(budgeted_messages),
-                "payload_refs_returned": len(payload_refs),
-                "truncated": truncated,
-            },
-            "access_scope": "recipients",
-            "allowed_recipients": allowed_recipients,
-            "redacted_refs": redacted_refs,
-            "created_at": now_iso(),
-        },
-    )
+    return response(200, result)
 
 
 def ack_message(message_id: str, event: dict[str, Any]) -> dict[str, Any]:
     body = parse_body(event, default={})
-    recipient_handle = optional_string(body, "recipient_handle") or optional_string(body, "recipient")
+    recipient_handle = body.get("recipient_handle") or body.get("recipient")
     if recipient_handle is None:
-        recipient_handle = query_params(event).get("recipient_handle") or query_params(event).get("recipient")
+        params = query_params(event)
+        recipient_handle = params.get("recipient_handle") or params.get("recipient")
+    result = get_api().ack_message(message_id, {"recipient_handle": recipient_handle})
+    return response(200, {"message_id": message_id, **result})
 
-    key_expression = Key("message_id").eq(message_id)
 
-    if recipient_handle:
-        recipient = require_agent_by_handle(recipient_handle)
-        key_expression = key_expression & Key("recipient_agent_id").eq(recipient["agent_id"])
+def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    parts = [unquote(part) for part in path.strip("/").split("/") if part]
+    api = get_api()
+    authorization = authorization_header(event)
 
-    result = deliveries_table.query(
-        IndexName="message-recipient-index",
-        KeyConditionExpression=key_expression,
-    )
-    deliveries = result.get("Items", [])
-    if not deliveries:
-        raise NotFound(f"delivery not found for message: {message_id}")
+    if method == "GET" and parts == ["agent", "me"]:
+        return response(200, api.agent_me(authorization))
 
-    now = now_iso()
-    updated = []
-    for delivery in deliveries:
-        update_result = deliveries_table.update_item(
-            Key={"delivery_id": delivery["delivery_id"]},
-            UpdateExpression="SET #status = :status, acked_at = :acked_at, updated_at = :updated_at",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":status": "acked",
-                ":acked_at": now,
-                ":updated_at": now,
-            },
-            ReturnValues="ALL_NEW",
-        )
-        updated.append(update_result["Attributes"])
+    if method == "GET" and parts == ["agent", "inbox"]:
+        limit = query_limit(event, default=20, maximum=100)
+        return response(200, api.agent_inbox(authorization, limit=limit))
 
-    return response(200, {"message_id": message_id, "deliveries": clean_item(updated)})
+    if method == "POST" and parts == ["agent", "posts"]:
+        return response(201, api.agent_post(authorization, message_body(parse_body(event))))
 
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "decision":
+        return response(200, api.agent_decide_delivery(authorization, parts[2], parse_body(event)))
 
-def submit_hook_result(delivery_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    body = parse_body(event)
-    delivery = require_delivery(delivery_id)
-    hook = normalize_hook(required(body, "hook"))
-    runtime = normalize_runtime(required(body, "runtime"))
-    action = normalize_hook_action(optional_string(body, "action") or "continue")
-    refs = refs_list(body.get("refs", []), "refs")
-    now = now_iso()
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
+        return response(200, api.agent_ack_delivery(authorization, parts[2]))
 
-    changed = []
-    content_inline = optional_string(body, "content") or optional_string(body, "current_content_inline")
-    content_ref = optional_string(body, "content_ref") or optional_string(body, "current_content_ref")
-    if content_inline is not None:
-        stored_content_inline, stored_content_ref = envelope_content_for_storage(
-            content_inline,
-            content_ref,
-            "delivery content",
-        )
-        delivery["current_content_inline"] = stored_content_inline
-        changed.append("current_content_inline")
-        if stored_content_ref is not None:
-            delivery["current_content_ref"] = stored_content_ref
-            changed.append("current_content_ref")
-    if content_ref is not None:
-        delivery["current_content_ref"] = content_ref
-        if content_inline is None:
-            delivery.pop("current_content_inline", None)
-            changed.append("current_content_inline")
-        if "current_content_ref" not in changed:
-            changed.append("current_content_ref")
-    if refs:
-        delivery["refs"] = list(delivery.get("refs", [])) + refs
-        changed.append("refs")
+    if method == "POST" and parts == ["agent", "tasks"]:
+        return response(201, api.agent_request_task(authorization, parse_body(event)))
 
-    delivery["status"] = delivery.get("status", "delivered")
-    delivery["current_stage"] = next_stage_after_hook(hook, delivery.get("current_stage", "agent.wait"))
-    note = optional_string(body, "note")
-    if action == "block":
-        delivery["status"] = "failed"
-        delivery["last_error"] = note or "blocked by hook result"
-        delivery["current_stage"] = "blocked"
-    elif action == "review":
-        delivery["status"] = "needs_review"
-        delivery["current_stage"] = "human.review"
-    elif action == "fail":
-        delivery["status"] = "failed"
-        delivery["last_error"] = note or "hook result failed"
-        delivery["current_stage"] = "failed"
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "accept":
+        return response(200, api.agent_accept_task(authorization, parts[2], parse_body(event)))
 
-    delivery["workflow_trace"] = list(delivery.get("workflow_trace", [])) + [
-        {
-            "hook": hook,
-            "runtime": runtime,
-            "action": action,
-            "actor": optional_string(body, "actor"),
-            "changed": changed,
-            "note": note,
-            "created_at": now,
-        }
-    ]
-    delivery["updated_at"] = now
-    deliveries_table.put_item(Item=without_none(delivery))
-    return response(200, {"delivery": clean_item(delivery)})
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "tasks"] and parts[3] == "results":
+        return response(200, api.agent_return_result(authorization, parts[2], parse_body(event)))
 
+    raise ApiError(404, "not_found", f"agent runtime route not found: {method} {path}")
 
-def submit_delivery_decision(delivery_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    body = parse_body(event)
-    delivery = require_delivery(delivery_id)
-    agent = require_agent_by_handle(required(body, "agent_handle"))
-    if delivery.get("recipient_agent_id") != agent["agent_id"]:
-        raise Forbidden("agent cannot decide another recipient's delivery")
-    if delivery.get("status") == "needs_review":
-        # Deliveries held for human review must not be actionable by the
-        # recipient until a human releases them.
-        raise Forbidden("delivery is held for human review and cannot be acted on until released")
 
-    decision = normalize_agent_decision(required(body, "decision"))
-    now = now_iso()
-    trace = {
-        "hook": "agent.decision",
-        "runtime": "agent_client",
-        "action": decision,
-        "actor": agent["handle"],
-        "note": optional_string(body, "note"),
-        "created_at": now,
-    }
+def route_personal_agent(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
+    agent_handle, parts = personal_agent_path_parts(path)
+    api = get_api()
+    authorization = authorization_header(event)
 
-    if decision == "reply":
-        content_inline = optional_string(body, "content") or optional_string(body, "content_inline")
-        content_ref = optional_string(body, "content_ref")
-        refs = refs_list(body.get("refs", []), "refs")
-        if content_inline is None and content_ref is None and not refs:
-            raise BadRequest("reply decision requires content, content_ref, or refs")
+    if method == "GET" and parts == ["inbox"]:
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:inbox")
+        return read_inbox(agent_handle, event)
 
-        sender = require_agent(delivery["sender_agent_id"])
-        reply_response = create_message(
-            {
-                "body": json.dumps(
-                    {
-                        "sender_handle": agent["handle"],
-                        "recipient_handles": [sender["handle"]],
-                        "content": content_inline,
-                        "content_ref": content_ref,
-                        "refs": refs,
-                        "intent": "reply",
-                        "visibility": "direct",
-                        "thread_id": delivery["thread_id"],
-                    }
-                )
-            }
-        )
-        reply_body = json.loads(reply_response["body"])
-        delivery["status"] = "replied"
-        delivery["current_stage"] = "done"
-        delivery["acked_at"] = now
-        delivery["updated_at"] = now
-        delivery["workflow_trace"] = list(delivery.get("workflow_trace", [])) + [trace]
-        deliveries_table.put_item(Item=without_none(delivery))
-        return response(200, {"delivery": clean_item(delivery), "reply": reply_body, "action_request": None})
+    if method == "POST" and parts == ["send"]:
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:post")
+        return response(201, api.personal_agent_send(agent_handle, message_body(parse_body(event))))
 
-    if decision == "action":
-        action_request = {
-            "action_request_id": f"action_{uuid.uuid4().hex}",
-            "type": required(body, "action_type"),
-            "target": optional_string(body, "action_target"),
-            "runtime": normalize_runtime(optional_string(body, "action_runtime") or "cloud"),
-            "requires_approval": optional_bool(body, "requires_approval", default=True),
-            "status": "pending",
-            "created_at": now,
-        }
-        delivery["status"] = "pending_action"
-        delivery["current_stage"] = "action.before"
-        delivery["action_request"] = action_request
-        delivery["updated_at"] = now
-        delivery["workflow_trace"] = list(delivery.get("workflow_trace", [])) + [trace]
-        deliveries_table.put_item(Item=without_none(delivery))
-        return response(200, {"delivery": clean_item(delivery), "reply": None, "action_request": action_request})
+    if method == "POST" and len(parts) == 3 and parts[0] == "deliveries":
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:post")
+        delivery_id = unquote(parts[1])
+        action = parts[2]
+        body = parse_body(event)
+        if action == "reply":
+            return response(200, api.personal_agent_reply(agent_handle, delivery_id, body))
+        if action == "ignore":
+            return response(200, api.personal_agent_ignore(agent_handle, delivery_id, body))
+        if action == "ask-owner":
+            return response(200, api.personal_agent_ask_owner(agent_handle, delivery_id, body))
+        raise ApiError(404, "not_found", f"personal-agent delivery action not found: {action}")
 
-    delivery["status"] = "ignored" if decision == "ignore" else "needs_review"
-    delivery["current_stage"] = "done" if decision == "ignore" else "human.review"
-    if decision == "ignore":
-        delivery["acked_at"] = now
-    delivery["updated_at"] = now
-    delivery["workflow_trace"] = list(delivery.get("workflow_trace", [])) + [trace]
-    deliveries_table.put_item(Item=without_none(delivery))
-    return response(200, {"delivery": clean_item(delivery), "reply": None, "action_request": None})
+    if method == "POST" and parts == ["tasks"]:
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:post")
+        return response(201, api.personal_agent_request_task(agent_handle, parse_body(event)))
 
+    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "accept":
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:post")
+        return response(200, api.personal_agent_accept_task(agent_handle, unquote(parts[1]), parse_body(event)))
 
-def read_contact_explanation(delivery_id: str) -> dict[str, Any]:
-    delivery = require_delivery(delivery_id)
-    message = messages_table.get_item(Key={"message_id": delivery["message_id"]}).get("Item")
-    if message is None:
-        raise NotFound(f"message not found: {delivery['message_id']}")
-    thread = get_thread_record(delivery["thread_id"])
-    if thread is None:
-        raise NotFound(f"thread not found: {delivery['thread_id']}")
+    if method == "POST" and len(parts) == 3 and parts[0] == "tasks" and parts[2] == "results":
+        api.require_agent_access(authorization, agent_handle, required_scope="agent:post")
+        return response(200, api.personal_agent_return_result(agent_handle, unquote(parts[1]), parse_body(event)))
 
-    requester = require_agent(delivery["sender_agent_id"])
-    recipient = require_agent(delivery["recipient_agent_id"])
-    relationship = DEFAULT_CONTACT_RELATIONSHIP
-    summary = latest_thread_summary(delivery["thread_id"])
-    tasks = contact_tasks_for_message(delivery["thread_id"], message["message_id"])
-    explanation = {
-        "explanation_id": f"contact_explanation_{delivery['delivery_id']}",
-        "delivery_id": delivery["delivery_id"],
-        "message_id": message["message_id"],
-        "thread_id": delivery["thread_id"],
-        "requester_agent_id": requester["agent_id"],
-        "requester_handle": requester["handle"],
-        "recipient_agent_id": recipient["agent_id"],
-        "recipient_handle": recipient["handle"],
-        "answering_asset_handle": recipient["handle"],
-        "relationship": relationship,
-        "reason": contact_reason(message, delivery, requester, recipient),
-        "allowed_reason": contact_allowed_reason(message, delivery, relationship),
-        "shared_context_summary": contact_shared_context_summary(message, delivery, summary),
-        "shared_context_refs": contact_shared_context_refs(message, delivery, tasks),
-        "pending_action": contact_pending_action(delivery, tasks),
-        "current_stage": delivery.get("current_stage", "agent.wait"),
-        "policy_refs": contact_policy_refs(message, delivery, relationship, tasks),
-        "audit_event_refs": contact_audit_refs(delivery, thread),
-        "created_at": delivery.get("updated_at") or delivery.get("created_at"),
-    }
-    return response(200, {"explanation": clean_item(explanation)})
+    raise ApiError(404, "not_found", f"personal-agent route not found: {method} {path}")
 
 
-def contact_tasks_for_message(thread_id: str, message_id: str) -> list[dict[str, Any]]:
-    if tasks_table is None:
-        return []
-    result = tasks_table.query(
-        IndexName="thread-created-at-index",
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=True,
-        Limit=100,
-    )
-    return [task for task in result.get("Items", []) if task.get("request_message_id") == message_id]
-
-
-def contact_reason(
-    message: dict[str, Any],
-    delivery: dict[str, Any],
-    requester: dict[str, Any],
-    recipient: dict[str, Any],
-) -> str:
-    intent = str(message.get("intent") or "message").replace("_", " ")
-    route_entries = [
-        entry
-        for entry in delivery.get("workflow_trace", [])
-        if entry.get("hook") == "route.resolve"
-    ]
-    if message.get("intent") == "task_request":
-        return f"{requester['handle']} requested delegated task work from {recipient['handle']}."
-    if message.get("intent") == "reply":
-        return f"{requester['handle']} replied to {recipient['handle']} in this thread."
-    if route_entries:
-        route_labels = ", ".join(str(entry.get("note") or entry.get("action")) for entry in route_entries)
-        return f"{requester['handle']} sent a {intent}; routing delivered it to {recipient['handle']} via {route_labels}."
-    return f"{requester['handle']} sent a {intent} to {recipient['handle']}."
-
-
-def contact_allowed_reason(
-    message: dict[str, Any],
-    delivery: dict[str, Any],
-    relationship: str,
-) -> str:
-    status = str(delivery.get("status") or "delivered")
-    reasons = [
-        f"message safety status is {message.get('safety_status', 'unknown')}",
-        f"relationship is {relationship}",
-    ]
-    if status == "needs_review":
-        reasons.append("delivery is held for human review")
-    elif status == "pending_action" and delivery.get("action_request"):
-        action_request = delivery["action_request"]
-        reasons.append(
-            "requested action requires approval"
-            if action_request.get("requires_approval", True)
-            else "requested action is preapproved"
-        )
-    else:
-        reasons.append(f"delivery state is {status}")
-    return f"Seagull allowed the contact because {'; '.join(reasons)}."
-
-
-def contact_shared_context_summary(
-    message: dict[str, Any],
-    delivery: dict[str, Any],
-    summary: dict[str, Any] | None,
-) -> str:
-    if summary and summary.get("summary_text"):
-        return truncate_contact_text(str(summary["summary_text"]))
-    content = delivery.get("current_content_inline") or message.get("content_inline")
-    if isinstance(content, str) and content:
-        return truncate_contact_text(content)
-    content_ref = delivery.get("current_content_ref") or message.get("content_ref")
-    if isinstance(content_ref, str) and content_ref:
-        return f"Context was shared by reference: {content_ref}."
-
-    refs = delivery.get("refs") or message.get("refs") or []
-    labels = [
-        ref.get("remember_as") or ref.get("find") or ref.get("type")
-        for ref in refs
-        if isinstance(ref, dict)
-    ]
-    if labels:
-        return truncate_contact_text(f"Context was shared as refs: {', '.join(labels)}.")
-    return "No inline context was shared."
-
-
-def contact_shared_context_refs(
-    message: dict[str, Any],
-    delivery: dict[str, Any],
-    tasks: list[dict[str, Any]],
-) -> list[str]:
-    values = [message.get("content_ref"), delivery.get("current_content_ref")]
-    for ref in [*message.get("refs", []), *delivery.get("refs", [])]:
-        if isinstance(ref, dict):
-            values.append(ref.get("url"))
-    for task in tasks:
-        values.extend(task.get("context_refs", []))
-        values.extend([task.get("context_pack_ref"), task.get("input_ref"), task.get("result_ref")])
-        values.extend(task.get("artifact_refs", []))
-    return unique_contact_strings(values)
-
-
-def contact_pending_action(delivery: dict[str, Any], tasks: list[dict[str, Any]]) -> str | None:
-    action_request = delivery.get("action_request")
-    if isinstance(action_request, dict):
-        approval = "requires approval" if action_request.get("requires_approval", True) else "preapproved"
-        target = f" for {action_request['target']}" if action_request.get("target") else ""
-        return f"{action_request.get('type')}{target} ({approval})"
-    if delivery.get("status") == "needs_review":
-        return "human review"
-    for task in tasks:
-        state = task.get("state")
-        if state not in {"released", "completed", "canceled", "refused", "failed"}:
-            return f"task {task.get('task_id')} is {state}"
-    if delivery.get("status") == "pending_action":
-        return str(delivery.get("current_stage") or "action.before")
-    return None
-
-
-def contact_policy_refs(
-    message: dict[str, Any],
-    delivery: dict[str, Any],
-    relationship: str,
-    tasks: list[dict[str, Any]],
-) -> list[str]:
-    values = [
-        f"message_safety:{message.get('safety_status', 'unknown')}",
-        f"relationship:{relationship}",
-    ]
-    if delivery.get("status") == "needs_review":
-        values.append("delivery_gate:human_review")
-    action_request = delivery.get("action_request")
-    if isinstance(action_request, dict):
-        approval = str(bool(action_request.get("requires_approval", True))).lower()
-        values.append(f"action_approval_required:{approval}")
-    for task in tasks:
-        if task.get("policy_decision_id"):
-            values.append(f"policy_decision:{task['policy_decision_id']}")
-    return unique_contact_strings(values)
-
-
-def contact_audit_refs(delivery: dict[str, Any], thread: dict[str, Any]) -> list[str]:
-    values = [
-        f"delivery:{delivery['delivery_id']}:{delivery.get('status', 'delivered')}",
-        f"message:{delivery['message_id']}",
-        f"thread:{thread['thread_id']}:message_count:{thread.get('message_count', 0)}",
-    ]
-    values.extend(
-        f"workflow_trace:{index}:{entry.get('hook')}:{entry.get('action')}"
-        for index, entry in enumerate(delivery.get("workflow_trace", []), start=1)
-        if isinstance(entry, dict)
-    )
-    action_request = delivery.get("action_request")
-    if isinstance(action_request, dict):
-        values.append(
-            f"action_request:{action_request.get('action_request_id')}:{action_request.get('status', 'pending')}"
-        )
-    return unique_contact_strings(values)
-
-
-def truncate_contact_text(value: str) -> str:
-    if len(value) <= CONTACT_EXPLANATION_SUMMARY_CHARS:
-        return value
-    return f"{value[:CONTACT_EXPLANATION_SUMMARY_CHARS].rstrip()}..."
-
-
-def unique_contact_strings(values: list[Any]) -> list[str]:
-    normalized = []
-    seen = set()
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        stripped = value.strip()
-        if not stripped or stripped in seen:
-            continue
-        normalized.append(stripped)
-        seen.add(stripped)
-    return normalized
-
-
-def send_result(message_id: str, *, idempotent: bool) -> dict[str, Any]:
-    message = messages_table.get_item(Key={"message_id": message_id}).get("Item")
-    if message is None:
-        raise NotFound(f"message not found: {message_id}")
-    thread = get_thread_record(message["thread_id"])
-    deliveries = deliveries_table.query(
-        IndexName="message-recipient-index",
-        KeyConditionExpression=Key("message_id").eq(message_id),
-    ).get("Items", [])
-    return {
-        "idempotent": idempotent,
-        "message": clean_item(message),
-        "thread": clean_item(thread),
-        "deliveries": clean_item(deliveries),
-        "message_id": message_id,
-        "thread_id": message["thread_id"],
-    }
-
-
-def evaluate_safety_gateway(
-    *,
-    actor_id: str,
-    action_type: str,
-    content: str | None,
-    content_ref: str | None,
-    target_ids: list[str],
-    intent: str,
-    visibility: str,
-    thread_id: str | None = None,
-    message_id: str | None = None,
-    trace_id: str | None = None,
-    thread_depth: int = 0,
-    repeated_reply_count: int = 0,
-) -> dict[str, Any]:
-    if not SAFETY_GATEWAY_URL:
-        raise Blocked("safety gateway is not configured")
-
-    payload = without_none(
-        {
-            "actor_id": actor_id,
-            "action_type": action_type,
-            "content": content,
-            "content_ref": content_ref,
-            "target_ids": target_ids,
-            "intent": intent,
-            "visibility": visibility,
-            "thread_id": thread_id,
-            "message_id": message_id,
-            "trace_id": trace_id,
-            "thread_depth": thread_depth,
-            "repeated_reply_count": repeated_reply_count,
-        }
-    )
-    headers = {"content-type": "application/json"}
-    if SAFETY_GATEWAY_ADMIN_SECRET:
-        headers["x-seagull-safety-secret"] = SAFETY_GATEWAY_ADMIN_SECRET
-    request = Request(
-        f"{SAFETY_GATEWAY_URL}/evaluate",
-        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-
-    try:
-        with urlopen(request, timeout=SAFETY_GATEWAY_TIMEOUT_SECONDS) as result:
-            status_code = int(result.status)
-            raw = result.read().decode("utf-8")
-    except HTTPError as exc:
-        raise Blocked(f"safety gateway rejected evaluation: HTTP {exc.code}") from exc
-    except (OSError, TimeoutError, URLError) as exc:
-        raise Blocked(f"safety gateway is unavailable: {exc}") from exc
-
-    if status_code < 200 or status_code >= 300:
-        raise Blocked(f"safety gateway rejected evaluation: HTTP {status_code}")
-
-    try:
-        parsed = json.loads(raw or "{}")
-    except json.JSONDecodeError as exc:
-        raise Blocked("safety gateway returned invalid JSON") from exc
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("decision"), dict):
-        raise Blocked("safety gateway response is missing a decision")
-    return parsed["decision"]
-
-
-def safety_outcome(decision: dict[str, Any], *, subject: str) -> tuple[str, bool]:
-    action = safety_decision_action(decision)
-    if action == "allow":
-        return "approved", False
-    if action == "allow_with_warning":
-        return "approved_with_warning", False
-    if action == "human_review":
-        return "needs_review", True
-    if action in {"block", "quarantine", "rate_limit"}:
-        reasons = ", ".join(safety_decision_reasons(decision)) or action
-        raise Blocked(f"{subject} blocked by safety gateway: {reasons}")
-    raise Blocked(f"safety gateway returned unsupported action: {action}")
-
-
-def safety_decision_id(decision: dict[str, Any]) -> str:
-    value = decision.get("decision_id")
-    if not isinstance(value, str) or not value.strip():
-        raise Blocked("safety gateway decision is missing decision_id")
-    return value.strip()
-
-
-def safety_decision_action(decision: dict[str, Any]) -> str:
-    value = decision.get("action")
-    if not isinstance(value, str) or not value.strip():
-        raise Blocked("safety gateway decision is missing action")
-    return value.strip()
-
-
-def safety_decision_risk(decision: dict[str, Any]) -> str | None:
-    value = decision.get("risk")
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def safety_decision_policy_ids(decision: dict[str, Any]) -> list[str]:
-    return clean_string_values(decision.get("policy_ids"))
-
-
-def safety_decision_reasons(decision: dict[str, Any]) -> list[str]:
-    return clean_string_values(decision.get("reasons"))
-
-
-def clean_string_values(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-
-def delivery_items(deliveries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    items = []
-    for delivery in deliveries:
-        message = messages_table.get_item(Key={"message_id": delivery["message_id"]}).get("Item")
-        items.append(
-            {
-                "delivery": clean_item(delivery),
-                "message": clean_item(message),
-                "current_message": {
-                    "content_inline": delivery.get("current_content_inline") or (message or {}).get("content_inline"),
-                    "content_ref": delivery.get("current_content_ref") or (message or {}).get("content_ref"),
-                    "refs": delivery.get("refs") or (message or {}).get("refs") or [],
-                },
-            }
-        )
-    return items
-
-
-def apply_routing_rules(
-    *,
-    recipients: list[dict[str, Any]],
-    content_inline: str | None,
-    content_ref: str | None,
-    refs: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-    routed = list(recipients)
-    trace = []
-    needs_review = False
-
-    for rule in list_routing_rule_items():
-        if not rule.get("enabled", True) or not routing_rule_matches(
-            rule,
-            content_inline=content_inline,
-            content_ref=content_ref,
-            refs=refs,
-        ):
-            continue
-
-        mode = rule.get("mode", "copy")
-        if mode == "block":
-            raise BadRequest(f"message blocked by routing rule: {rule.get('name')}")
-
-        rule_recipients = [require_agent_by_handle(handle) for handle in rule.get("route_to_handles", [])]
-        if mode in {"direct", "handoff"}:
-            routed = list(rule_recipients)
-        elif mode in {"copy", "review"}:
-            routed = merge_recipients(routed, rule_recipients)
-            needs_review = needs_review or mode == "review"
-
-        trace.append(
-            {
-                "hook": "route.resolve",
-                "runtime": "cloud",
-                "action": mode,
-                "actor": rule.get("rule_id"),
-                "changed": ["recipient_agent_ids"],
-                "note": rule.get("name"),
-                "created_at": now_iso(),
-            }
-        )
-
-    return routed, trace, needs_review
-
-
-def list_routing_rule_items() -> list[dict[str, Any]]:
-    if routing_rules_table is None:
-        return []
-    result = routing_rules_table.scan()
-    return list(result.get("Items", []))
-
-
-def routing_rule_matches(
-    rule: dict[str, Any],
-    *,
-    content_inline: str | None,
-    content_ref: str | None,
-    refs: list[dict[str, Any]],
-) -> bool:
-    haystacks = [content_inline or "", content_ref or ""]
-    haystacks.extend(str(ref.get("url") or "") for ref in refs)
-    normalized_haystacks = [haystack.lower() for haystack in haystacks]
-    return any(
-        needle in haystack
-        for needle in rule.get("url_contains", [])
-        for haystack in normalized_haystacks
-    )
-
-
-def merge_recipients(existing: list[dict[str, Any]], additions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged = list(existing)
-    seen = {agent["agent_id"] for agent in merged}
-    for agent in additions:
-        if agent["agent_id"] in seen:
-            continue
-        merged.append(agent)
-        seen.add(agent["agent_id"])
-    return merged
-
-
-def get_agent_by_handle(handle: str) -> dict[str, Any] | None:
-    normalized = normalize_handle(handle)
-    result = agents_table.query(
-        IndexName="handle-index",
-        KeyConditionExpression=Key("handle").eq(normalized),
-        Limit=1,
-    )
-    items = result.get("Items", [])
-    if not items:
-        return None
-    return items[0]
-
-
-def require_agent_by_handle(handle: str) -> dict[str, Any]:
-    agent = get_agent_by_handle(handle)
-    if agent is None:
-        raise NotFound(f"agent not found: {normalize_handle(handle)}")
-    return agent
-
-
-def require_agent(agent_id: str) -> dict[str, Any]:
-    agent = agents_table.get_item(Key={"agent_id": agent_id}).get("Item")
-    if agent is None:
-        raise NotFound(f"agent not found: {agent_id}")
-    return agent
-
-
-def require_delivery(delivery_id: str) -> dict[str, Any]:
-    delivery = deliveries_table.get_item(Key={"delivery_id": delivery_id}).get("Item")
-    if delivery is None:
-        raise NotFound(f"delivery not found: {delivery_id}")
-    return delivery
-
-
-def require_agent_tokens_table() -> None:
-    if agent_tokens_table is None:
-        raise BadRequest("agent token table is not configured")
-
-
-def require_payload_storage() -> None:
-    if payloads_table is None or not PAYLOAD_OBJECTS_BUCKET:
-        raise BadRequest("payload storage is not configured")
-
-
-def require_payload(content_ref: str) -> dict[str, Any]:
-    require_payload_storage()
-    normalized = normalize_required_ref(content_ref, "content_ref")
-    payload = payloads_table.get_item(Key={"content_ref": normalized}).get("Item")
-    if payload is None:
-        raise NotFound(f"payload not found: {normalized}")
-    return payload
-
-
-def refresh_payload_retention(payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("retention_state") != "ready":
-        return payload
-    expires_at = payload.get("ttl_expires_at")
-    if not isinstance(expires_at, str) or not expires_at.strip():
-        return payload
-    if parse_iso_datetime(expires_at) > datetime.now(timezone.utc):
-        return payload
-
-    updated = dict(payload)
-    updated["retention_state"] = "expired"
-    payloads_table.put_item(Item=without_none(updated))
-    try:
-        s3.delete_object(Bucket=PAYLOAD_OBJECTS_BUCKET, Key=payload_object_key(updated))
-    except ClientError:
-        pass
-    return updated
-
-
-def require_payload_fetch_authorized(payload: dict[str, Any], requester_handle: str | None) -> None:
-    access_scope = str(payload.get("access_scope") or "recipients").strip().lower()
-    if access_scope == "public":
-        return
-    if requester_handle is None:
-        raise Forbidden(f"requester_handle is required for {access_scope} payload access")
-
-    requester = require_agent_by_handle(requester_handle)
-    if payload_fetch_is_allowed_for_agent(payload, requester, access_scope):
-        return
-    raise Forbidden(f"agent cannot fetch payload: {requester['handle']}")
-
-
-def payload_fetch_is_allowed_for_agent(
-    payload: dict[str, Any],
-    agent: dict[str, Any],
-    access_scope: str,
-) -> bool:
-    messages = messages_for_content_ref(payload["content_ref"])
-    if not messages:
-        return False
-
-    if access_scope == "owner":
-        return any(message.get("sender_agent_id") == agent["agent_id"] for message in messages)
-    if access_scope == "recipients":
-        return any(agent["agent_id"] in collection_values(message.get("recipient_agent_ids")) for message in messages)
-    if access_scope == "thread":
-        for message in messages:
-            thread = get_thread_record(str(message.get("thread_id") or ""))
-            if thread is not None and agent["agent_id"] in collection_values(thread.get("participants")):
-                return True
-    return False
-
-
-def messages_for_content_ref(content_ref: str) -> list[dict[str, Any]]:
-    result = messages_table.scan()
-    return [
-        message
-        for message in result.get("Items", [])
-        if message.get("content_ref") == content_ref
-    ]
-
-
-def collection_values(value: Any) -> set[Any]:
-    if isinstance(value, set):
-        return value
-    if isinstance(value, (list, tuple)):
-        return set(value)
-    return set()
-
-
-def public_agent_profile_path(path: str) -> bool:
-    parts = [part for part in path.strip("/").split("/") if part]
-    return len(parts) == 2 and parts[0] == "agents"
+# ---------------------------------------------------------------------------
+# Auth helpers
 
 
 def require_legacy_handle_routes_enabled(event: dict[str, Any]) -> None:
-    if ALLOW_LEGACY_HANDLE_AGENT_ROUTES:
+    allow = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES", "").lower()
+    if allow in {"1", "true", "yes"}:
         return
-    if LEGACY_HANDLE_ROUTE_SECRET:
+    legacy_secret = _cached_secret("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
+    if legacy_secret:
         headers = event.get("headers") or {}
         provided = (
             headers.get("x-seagull-legacy-secret")
@@ -2104,494 +855,40 @@ def require_legacy_handle_routes_enabled(event: dict[str, Any]) -> None:
             or headers.get("x-seagull-admin-secret")
             or headers.get("X-Seagull-Admin-Secret")
         )
-        if provided and hmac.compare_digest(provided, LEGACY_HANDLE_ROUTE_SECRET):
+        if provided and hmac.compare_digest(provided, legacy_secret):
             return
-    raise Unauthorized("legacy handle-based message hub routes are disabled; use /agent runtime routes")
-
-
-def require_legacy_agent_access(event: dict[str, Any], handle: str, required_scope: str) -> None:
-    normalized_handle = normalize_handle(handle)
-    principal = require_agent_principal(event, required_scope)
-    if principal["agent_handle"] != normalized_handle:
-        raise Forbidden("agent token cannot access another agent's legacy route")
-
-
-def require_agent_principal(event: dict[str, Any], required_scope: str) -> dict[str, Any]:
-    require_agent_tokens_table()
-    if required_scope not in AGENT_TOKEN_SCOPES:
-        raise BadRequest(f"unknown agent token scope: {required_scope}")
-
-    token_id, secret = parse_agent_token(bearer_token_from_event(event))
-    token_record = agent_tokens_table.get_item(Key={"token_id": token_id}).get("Item")
-    if token_record is None:
-        raise Unauthorized("agent token not found")
-    expected_hash = str(token_record.get("token_hash") or "")
-    if not hmac.compare_digest(hash_token_parts(token_id, secret), expected_hash):
-        raise Unauthorized("agent token is invalid")
-    if token_record.get("revoked_at"):
-        raise Unauthorized("agent token is revoked")
-    if token_expired(token_record.get("expires_at")):
-        raise Unauthorized("agent token is expired")
-
-    raw_scopes = token_record.get("scopes", [])
-    if isinstance(raw_scopes, str):
-        raw_scopes = [raw_scopes]
-    scopes = sorted(str(scope).strip().lower() for scope in raw_scopes if str(scope).strip())
-    if required_scope not in scopes:
-        raise Forbidden(f"missing agent token scope: {required_scope}")
-
-    agent_id = token_record.get("agent_id")
-    if not isinstance(agent_id, str) or not agent_id.strip():
-        raise Unauthorized("agent token agent_id is invalid")
-    agent = require_agent(agent_id)
-    try:
-        agent_handle = normalize_handle(str(token_record.get("agent_handle") or agent["handle"]))
-    except BadRequest as exc:
-        raise Unauthorized("agent token agent_handle is invalid") from exc
-    if agent_handle != agent["handle"]:
-        raise Unauthorized("agent token agent handle is stale")
-
-    used_at = now_iso()
-    agent_tokens_table.update_item(
-        Key={"token_id": token_id},
-        UpdateExpression="SET last_used_at = :last_used_at",
-        ExpressionAttributeValues={":last_used_at": used_at},
-    )
-    return clean_item(
-        {
-            "token_id": token_id,
-            "agent_id": agent["agent_id"],
-            "agent_handle": agent["handle"],
-            "scopes": scopes,
-            "owner_user_id": token_record.get("owner_user_id"),
-            "node_id": token_record.get("node_id"),
-        }
+    raise ApiError(
+        401,
+        "unauthorized",
+        "legacy handle-based message hub routes are disabled; use /agent runtime routes",
     )
 
 
-def ack_delivery_for_agent(delivery_id: str, principal: dict[str, Any]) -> dict[str, Any]:
-    delivery = require_delivery(delivery_id)
-    if delivery.get("recipient_agent_id") != principal["agent_id"]:
-        raise Forbidden("agent token cannot ack another recipient's delivery")
-
-    now = now_iso()
-    result = deliveries_table.update_item(
-        Key={"delivery_id": delivery_id},
-        UpdateExpression="SET #status = :status, acked_at = :acked_at, updated_at = :updated_at",
-        ExpressionAttributeNames={"#status": "status"},
-        ExpressionAttributeValues={
-            ":status": "acked",
-            ":acked_at": now,
-            ":updated_at": now,
-        },
-        ReturnValues="ALL_NEW",
-    )
-    return response(200, {"delivery": clean_item(result["Attributes"])})
+def authorization_header(event: dict[str, Any]) -> str | None:
+    headers = event.get("headers") or {}
+    return headers.get("authorization") or headers.get("Authorization")
 
 
-def require_task_tables() -> None:
-    if tasks_table is None or tool_requests_table is None or task_results_table is None:
-        raise BadRequest("task tables are not configured")
+# ---------------------------------------------------------------------------
+# Request parsing helpers
 
 
-def require_task(task_id: str) -> dict[str, Any]:
-    require_task_tables()
-    task = tasks_table.get_item(Key={"task_id": task_id}).get("Item")
-    if task is None:
-        raise NotFound(f"task not found: {task_id}")
-    return task
-
-
-def require_tool_request(tool_request_id: str) -> dict[str, Any]:
-    require_task_tables()
-    tool_request = tool_requests_table.get_item(Key={"tool_request_id": tool_request_id}).get("Item")
-    if tool_request is None:
-        raise NotFound(f"tool request not found: {tool_request_id}")
-    return tool_request
-
-
-def require_task_actor(task: dict[str, Any], actor: dict[str, Any]) -> None:
-    allowed_agent_ids = {
-        task["requester_agent_id"],
-        task["recipient_agent_id"],
-    }
-    accepted_by_agent_id = task.get("accepted_by_agent_id")
-    if accepted_by_agent_id:
-        allowed_agent_ids.add(accepted_by_agent_id)
-    if actor["agent_id"] not in allowed_agent_ids:
-        raise Forbidden("agent cannot update this task")
-
-
-def send_task_notification(
-    task: dict[str, Any],
-    *,
-    sender: dict[str, Any],
-    recipient_agent_id: str,
-    intent: str,
-    label: str,
-    note: str | None = None,
-    ref: dict[str, Any] | None = None,
-) -> None:
-    recipient = require_agent(recipient_agent_id)
-    refs = [ref or task_ref(task["task_id"], label)]
-    if note:
-        refs.append({"type": "note", "find": note})
-    create_message(
-        {
-            "body": json.dumps(
-                {
-                    "sender_handle": sender["handle"],
-                    "recipient_handles": [recipient["handle"]],
-                    "thread_id": task["thread_id"],
-                    "intent": intent,
-                    "visibility": "direct",
-                    "refs": refs,
-                }
-            )
-        }
-    )
-
-
-def get_thread_record(thread_id: str) -> dict[str, Any] | None:
-    return threads_table.get_item(Key={"thread_id": thread_id}).get("Item")
-
-
-def update_existing_thread(
-    thread_id: str,
-    message_id: str,
-    updated_at: str,
-    participant_ids: list[str],
-) -> None:
-    update_expression = (
-        "SET last_message_id = :message_id, last_message_at = :updated_at, updated_at = :updated_at "
-        "ADD message_count :one"
-    )
-    expression_values: dict[str, Any] = {
-        ":one": 1,
-        ":message_id": message_id,
-        ":updated_at": updated_at,
-    }
-    if participant_ids:
-        update_expression = (
-            "SET last_message_id = :message_id, last_message_at = :updated_at, updated_at = :updated_at "
-            "ADD participants :participants, message_count :one"
-        )
-        expression_values[":participants"] = set(participant_ids)
-
-    threads_table.update_item(
-        Key={"thread_id": thread_id},
-        UpdateExpression=update_expression,
-        ExpressionAttributeValues=expression_values,
-    )
-
-
-def get_idempotent_message_id(sender_agent_id: str, idempotency_key: str) -> str | None:
-    result = idempotency_table.get_item(
-        Key={"sender_agent_id": sender_agent_id, "idempotency_key": idempotency_key}
-    )
-    item = result.get("Item")
-    if item is None:
-        return None
-    expires_at = item.get("expires_at")
-    if expires_at is not None and int(expires_at) <= int(time.time()):
-        return None
-    return item.get("message_id")
-
-
-def get_idempotent_task_id(requester_agent_id: str, idempotency_key: str) -> str | None:
-    result = idempotency_table.get_item(
-        Key={"sender_agent_id": requester_agent_id, "idempotency_key": f"task:{idempotency_key}"}
-    )
-    item = result.get("Item")
-    if item is None:
-        return None
-    expires_at = item.get("expires_at")
-    if expires_at is not None and int(expires_at) <= int(time.time()):
-        return None
-    return item.get("task_id")
-
-
-def latest_thread_summary(thread_id: str) -> dict[str, Any] | None:
-    result = thread_summaries_table.query(
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=False,
-        Limit=1,
-    )
-    items = result.get("Items", [])
-    if not items:
-        return None
-    return items[0]
-
-
-def generated_summary(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not messages:
-        return None
-    senders: list[str] = []
-    for message in messages:
-        sender = message.get("sender_handle") or message.get("sender_agent_id")
-        if sender and sender not in senders:
-            senders.append(sender)
-    return {
-        "summary_text": f"{len(messages)} recent message(s) involving {', '.join(senders)}.",
-        "generated": True,
-    }
-
-
-def public_agent(agent: dict[str, Any]) -> dict[str, Any]:
-    trigger_mode = agent.get("trigger_mode") or "manual"
-    return clean_item(
-        {
-            "agent_id": agent.get("agent_id"),
-            "handle": agent.get("handle"),
-            "display_name": agent.get("display_name"),
-            "capabilities": public_capabilities(agent.get("capabilities", [])),
-            "response_rules": public_response_rules(agent.get("response_rules")),
-            "status": agent.get("status"),
-            "trigger_mode": trigger_mode,
-            "webhook_enabled": trigger_mode == "webhook" and bool(agent.get("webhook_url")),
-            "created_at": agent.get("created_at"),
-            "updated_at": agent.get("updated_at"),
-        }
-    )
-
-
-def public_capabilities(capabilities: Any) -> list[str]:
-    if isinstance(capabilities, str):
-        values = [capabilities]
-    elif isinstance(capabilities, set):
-        values = sorted(item for item in capabilities if isinstance(item, str))
-    elif isinstance(capabilities, (list, tuple)):
-        values = [item for item in capabilities if isinstance(item, str)]
-    else:
-        values = []
-    return [capability for capability in values if not has_private_profile_marker(capability)]
-
-
-def public_response_rules(response_rules: Any) -> dict[str, Any] | None:
-    sanitized = sanitize_public_profile_value(response_rules)
-    return sanitized if isinstance(sanitized, dict) else None
-
-
-def sanitize_public_profile_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return None if has_private_profile_marker(value) else value
-    if isinstance(value, (list, tuple, set)):
-        sanitized_items = []
-        for item in value:
-            sanitized = sanitize_public_profile_value(item)
-            if sanitized is not None:
-                sanitized_items.append(sanitized)
-        return sanitized_items
-    if isinstance(value, dict):
-        sanitized_dict: dict[str, Any] = {}
-        for key, item in value.items():
-            if has_private_profile_marker(str(key)):
-                continue
-            sanitized = sanitize_public_profile_value(item)
-            if sanitized is not None:
-                sanitized_dict[str(key)] = sanitized
-        return sanitized_dict
-    if value is None or isinstance(value, (bool, int, float, Decimal)):
-        return value
-    return None
-
-
-def has_private_profile_marker(value: str) -> bool:
-    normalized = value.lower()
-    return any(marker in normalized for marker in PRIVATE_PROFILE_MARKERS)
-
-
-def trigger_config(body: dict[str, Any]) -> tuple[str, str | None]:
-    trigger_mode = (optional_string(body, "trigger_mode") or "manual").lower()
-    webhook_url = optional_string(body, "webhook_url")
-    if trigger_mode not in {"manual", "webhook"}:
-        raise BadRequest("trigger_mode must be manual or webhook")
-    if trigger_mode == "webhook" and webhook_url is None:
-        raise BadRequest("webhook_url is required when trigger_mode is webhook")
-    if trigger_mode == "manual" and webhook_url is not None:
-        raise BadRequest("webhook_url requires trigger_mode webhook")
-    if webhook_url is not None and not (webhook_url.startswith("http://") or webhook_url.startswith("https://")):
-        raise BadRequest("webhook_url must start with http:// or https://")
-    return trigger_mode, webhook_url
-
-
-def enqueue_delivery_events(
-    deliveries: list[dict[str, Any]],
-    message: dict[str, Any],
-    sender: dict[str, Any],
-    recipients: list[dict[str, Any]],
-) -> None:
-    if not AGENT_JOBS_QUEUE_URL:
-        return
-
-    if len(deliveries) != len(recipients):
-        raise RuntimeError("delivery and recipient counts differ")
-
-    for delivery, recipient in zip(deliveries, recipients):
-        if delivery.get("status") != "delivered":
-            continue
-        # All delivered recipients get an event (not just webhook mode): the
-        # agent worker decides per recipient — webhook POST for webhook mode,
-        # WebSocket push to any live router connections for everyone.
-
-        event = delivery_created_event(delivery=delivery, message=message, sender=sender, recipient=recipient)
-        sqs.send_message(
-            QueueUrl=AGENT_JOBS_QUEUE_URL,
-            MessageBody=json.dumps(clean_item(event), separators=(",", ":"), sort_keys=True),
-            MessageGroupId=message["thread_id"],
-            MessageDeduplicationId=delivery["delivery_id"],
-        )
-
-
-def delivery_created_event(
-    *,
-    delivery: dict[str, Any],
-    message: dict[str, Any],
-    sender: dict[str, Any],
-    recipient: dict[str, Any],
-) -> dict[str, Any]:
-    event_id = f"event_{delivery['delivery_id']}"
-    return {
-        "specversion": "1.0",
-        "type": "seagull.delivery.created.v1",
-        "source": "seagull.message-hub",
-        "id": event_id,
-        "event_id": event_id,
-        "time": delivery["created_at"],
-        "subject": delivery["delivery_id"],
-        "datacontenttype": "application/json",
-        "data": {
-            "event_id": event_id,
-            "delivery_id": delivery["delivery_id"],
-            "message_id": message["message_id"],
-            "thread_id": message["thread_id"],
-            "sender_agent_id": sender["agent_id"],
-            "sender_handle": sender["handle"],
-            "recipient_agent_id": recipient["agent_id"],
-            "recipient_handle": recipient["handle"],
-            "intent": message["intent"],
-            "visibility": message["visibility"],
-            "content_inline": message.get("content_inline"),
-            "content_ref": message.get("content_ref"),
-            "refs": message.get("refs", []),
-            "current_content_inline": delivery.get("current_content_inline") or message.get("content_inline"),
-            "current_content_ref": delivery.get("current_content_ref") or message.get("content_ref"),
-            "current_stage": delivery.get("current_stage"),
-            "created_at": message["created_at"],
-        },
-    }
-
-
-def message_recipient_handles(body: dict[str, Any]) -> list[str]:
-    raw_handles = body.get("recipient_handles")
-    if raw_handles is None and body.get("recipient_handle") is not None:
-        raw_handles = [body["recipient_handle"]]
-    if raw_handles is None and body.get("recipient") is not None:
-        raw_handles = [body["recipient"]]
-
-    handles = string_list(raw_handles or [], "recipient_handles")
-    normalized = []
-    seen = set()
-    for handle in handles:
-        normalized_handle = normalize_handle(handle)
-        if normalized_handle not in seen:
-            normalized.append(normalized_handle)
-            seen.add(normalized_handle)
+def message_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Map legacy sender/recipient aliases onto the api's field names."""
+    normalized = dict(body)
+    if normalized.get("sender_handle") is None and normalized.get("sender") is not None:
+        normalized["sender_handle"] = normalized["sender"]
+    if normalized.get("recipient_handles") is None:
+        for alias in ("recipient_handle", "recipient"):
+            if normalized.get(alias) is not None:
+                normalized["recipient_handles"] = [normalized[alias]]
+                break
     return normalized
 
 
-TASK_STATES = {
-    "requested",
-    "quoted",
-    "needs_approval",
-    "approved",
-    "escrowed",
-    "accepted",
-    "running",
-    "result_ready",
-    "result_accepted",
-    "released",
-    "completed",
-    "canceled",
-    "disputed",
-    "refused",
-    "failed",
-}
-
-# Mirrors TASK_LIFECYCLE_TRANSITIONS in message_hub.domain.models. Kept here as a
-# standalone copy because the Lambda is packaged without the domain source.
-TASK_LIFECYCLE_TRANSITIONS: dict[str, set[str]] = {
-    "requested": {"quoted", "needs_approval", "accepted", "canceled", "refused"},
-    "quoted": {"needs_approval", "approved", "canceled", "refused"},
-    "needs_approval": {"approved", "canceled", "refused"},
-    "approved": {"escrowed", "accepted", "canceled"},
-    "escrowed": {"accepted", "running", "canceled", "disputed"},
-    "accepted": {"running", "result_ready", "completed", "canceled", "refused"},
-    "running": {"result_ready", "completed", "failed", "disputed"},
-    "result_ready": {"result_accepted", "completed", "disputed"},
-    "result_accepted": {"released", "completed", "disputed"},
-    "released": {"completed"},
-    "disputed": {"result_accepted", "released", "completed", "canceled"},
-    "completed": set(),
-    "canceled": set(),
-    "refused": set(),
-    "failed": {"disputed"},
-}
-
-TASK_INACTIVE_STATES = {"released", "completed", "canceled", "refused", "failed"}
-
-# Settlement states credit the worker and release funds, so only the requester
-# (the counterparty) may set them; otherwise a worker could self-attest
-# acceptance/completion and corrupt task truth that escrow/release depends on.
-REQUESTER_ONLY_TASK_STATES = {"result_accepted", "released", "completed"}
-
-PRIVATE_TASK_FIELDS = {
-    "credential",
-    "credentials",
-    "mcp_server_url",
-    "mcp_session",
-    "private_prompt",
-    "prompt",
-    "raw_tool_handle",
-    "secret",
-    "secrets",
-    "tool_credentials",
-    "tool_runtime_config",
-}
-
-
-def normalize_task_state(state: str) -> str:
-    normalized = state.strip().lower()
-    if normalized not in TASK_STATES:
-        raise BadRequest(f"task state must be one of: {', '.join(sorted(TASK_STATES))}")
-    return normalized
-
-
-def require_valid_task_transition(
-    task: dict[str, Any],
-    next_state: str,
-    actor: dict[str, Any],
-    *,
-    requester_only_settlement: bool = True,
-) -> None:
-    current = str(task.get("state") or "").strip().lower()
-    if next_state == current:
-        return
-    if next_state not in TASK_LIFECYCLE_TRANSITIONS.get(current, set()):
-        raise Conflict(f"cannot transition task from {current} to {next_state}")
-    if requester_only_settlement and next_state in REQUESTER_ONLY_TASK_STATES:
-        if actor["agent_id"] != task["requester_agent_id"]:
-            raise Forbidden(f"only the task requester can set task state {next_state}")
-
-
-def task_ref(task_id: str, label: str) -> dict[str, str]:
-    return {"type": "task", "url": f"seagull://tasks/{task_id}", "remember_as": label}
-
-
-def reject_private_task_fields(body: dict[str, Any]) -> None:
-    private_fields = sorted(set(body) & PRIVATE_TASK_FIELDS)
-    if private_fields:
-        raise BadRequest(f"private task field(s) are not accepted: {', '.join(private_fields)}")
+def public_agent_profile_path(path: str) -> bool:
+    parts = [part for part in path.strip("/").split("/") if part]
+    return len(parts) == 2 and parts[0] == "agents"
 
 
 def path_param(path: str, prefix: str, suffix: str) -> str:
@@ -2604,19 +901,15 @@ def delivery_path_param(path: str, suffix: str) -> str:
         return path_param(path, "/agent/deliveries/", suffix)
     if path.startswith("/deliveries/"):
         return path_param(path, "/deliveries/", suffix)
-    raise BadRequest("delivery route must start with /deliveries or /agent/deliveries")
+    raise ApiError(400, "bad_request", "delivery route must start with /deliveries or /agent/deliveries")
 
 
 def personal_agent_path_parts(path: str) -> tuple[str, list[str]]:
     value = path.removeprefix("/personal-agents/").strip("/")
     parts = [part for part in value.split("/") if part]
     if len(parts) < 2:
-        raise NotFound(f"personal-agent route not found: {path}")
+        raise ApiError(404, "not_found", f"personal-agent route not found: {path}")
     return unquote(parts[0]), parts[1:]
-
-
-def event_with_json_body(body: dict[str, Any]) -> dict[str, Any]:
-    return {"body": json.dumps(without_none(body))}
 
 
 def parse_body(event: dict[str, Any], *, default: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2625,330 +918,17 @@ def parse_body(event: dict[str, Any], *, default: dict[str, Any] | None = None) 
         return default if default is not None else {}
     if event.get("isBase64Encoded"):
         raw_body = base64.b64decode(raw_body).decode("utf-8")
-    body = json.loads(raw_body)
+    try:
+        body = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise ApiError(400, "bad_request", "request body must be valid JSON") from exc
     if not isinstance(body, dict):
-        raise BadRequest("JSON body must be an object")
+        raise ApiError(400, "bad_request", "JSON body must be an object")
     return body
 
 
 def query_params(event: dict[str, Any]) -> dict[str, str]:
     return event.get("queryStringParameters") or {}
-
-
-def bearer_token_from_event(event: dict[str, Any]) -> str:
-    headers = event.get("headers") or {}
-    authorization = headers.get("authorization") or headers.get("Authorization")
-    if not authorization:
-        raise Unauthorized("missing authorization header")
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise Unauthorized("authorization header must be bearer token")
-    return parts[1].strip()
-
-
-def parse_agent_token(token: str) -> tuple[str, str]:
-    parts = token.split("_", 2)
-    if len(parts) != 3 or parts[0] != AGENT_TOKEN_PREFIX or not parts[1] or not parts[2]:
-        raise Unauthorized("agent token has invalid format")
-    return parts[1], parts[2]
-
-
-def hash_token_parts(token_id: str, secret: str) -> str:
-    return hashlib.sha256(f"{token_id}.{secret}".encode("utf-8")).hexdigest()
-
-
-def agent_token_scopes(value: Any) -> list[str]:
-    if value is None:
-        return list(DEFAULT_AGENT_TOKEN_SCOPES)
-    raw_scopes = string_list(value, "scopes")
-    normalized = sorted({scope.strip().lower() for scope in raw_scopes if scope.strip()})
-    if not normalized:
-        raise BadRequest("agent token scopes are required")
-    unknown = sorted(scope for scope in normalized if scope not in AGENT_TOKEN_SCOPES)
-    if unknown:
-        raise BadRequest(f"unknown agent token scope: {', '.join(unknown)}")
-    return normalized
-
-
-def optional_datetime_string(body: dict[str, Any], key: str) -> str | None:
-    value = optional_string(body, key)
-    if value is None:
-        return None
-    try:
-        parsed = parse_iso_datetime(value)
-    except ValueError as exc:
-        raise BadRequest(f"{key} must be an ISO datetime") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise BadRequest(f"{key} must include a timezone")
-    return parsed.isoformat().replace("+00:00", "Z")
-
-
-def parse_iso_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
-def ttl_epoch(value: str | None) -> int | None:
-    if value is None:
-        return None
-    return int(parse_iso_datetime(value).timestamp())
-
-
-def payload_content(body: dict[str, Any]) -> str:
-    value = body.get("content")
-    if value is None:
-        value = body.get("content_inline")
-    if value is None:
-        value = body.get("content_bytes")
-    if value is None:
-        raise BadRequest("payload content is required")
-    if not isinstance(value, str):
-        raise BadRequest("payload content must be a string")
-    return value
-
-
-def normalize_payload_access_scope(access_scope: str) -> str:
-    normalized = access_scope.strip().lower()
-    if normalized not in {"owner", "thread", "recipients", "public"}:
-        raise BadRequest("access_scope must be owner, thread, recipients, or public")
-    return normalized
-
-
-def normalize_required_ref(value: str, field_name: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        raise BadRequest(f"{field_name} is required")
-    if private_context_value(normalized):
-        raise BadRequest(f"{field_name} contains private or credential-bearing data")
-    return normalized
-
-
-def payload_hash(content: bytes) -> str:
-    return f"sha256:{hashlib.sha256(content).hexdigest()}"
-
-
-def payload_record(payload: dict[str, Any]) -> dict[str, Any]:
-    return clean_item(
-        {
-            "content_ref": payload.get("content_ref"),
-            "media_type": payload.get("media_type"),
-            "byte_length": payload.get("byte_length"),
-            "hash": payload.get("hash"),
-            "compression": payload.get("compression"),
-            "compressed_byte_length": payload.get("compressed_byte_length"),
-            "compressed_hash": payload.get("compressed_hash"),
-            "ttl_expires_at": payload.get("ttl_expires_at"),
-            "retention_state": payload.get("retention_state"),
-            "access_scope": payload.get("access_scope"),
-            "fetch_policy_ref": payload.get("fetch_policy_ref"),
-            "chunk_manifest_ref": payload.get("chunk_manifest_ref"),
-            "storage_provider": payload.get("storage_provider"),
-            "storage_ref": payload.get("storage_ref"),
-            "created_at": payload.get("created_at"),
-        }
-    )
-
-
-def payload_object_key(payload: dict[str, Any]) -> str:
-    storage_ref = str(payload.get("storage_ref") or "")
-    prefix = f"s3://{PAYLOAD_OBJECTS_BUCKET}/"
-    if storage_ref.startswith(prefix):
-        key = storage_ref.removeprefix(prefix)
-        if key:
-            return key
-    content_ref = str(payload.get("content_ref") or "")
-    payload_id = content_ref.removeprefix("payload://").strip("/")
-    if not payload_id:
-        raise PayloadUnavailable("payload storage reference is invalid")
-    return f"payloads/{payload_id}.gz"
-
-
-def public_agent_token_record(record: dict[str, Any]) -> dict[str, Any]:
-    public = {key: value for key, value in record.items() if key != "token_hash"}
-    return clean_item(public)
-
-
-def token_expired(expires_at: Any) -> bool:
-    if expires_at is None:
-        return False
-    if isinstance(expires_at, (int, float, Decimal)):
-        return float(expires_at) <= time.time()
-    if not isinstance(expires_at, str) or not expires_at.strip():
-        return False
-    try:
-        parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise Unauthorized("agent token expires_at is invalid") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise Unauthorized("agent token expires_at is invalid")
-    return parsed <= datetime.now(timezone.utc)
-
-
-def required(body: dict[str, Any], key: str) -> str:
-    value = optional_string(body, key)
-    if value is None:
-        raise BadRequest(f"{key} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], key: str) -> str | None:
-    value = body.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise BadRequest(f"{key} must be a string")
-    value = value.strip()
-    return value or None
-
-
-def require_small_inline(value: str, field_name: str) -> None:
-    if len(value) > MAX_ENVELOPE_INLINE_CHARS:
-        raise BadRequest(f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; use refs or content_ref")
-
-
-def envelope_content_for_storage(
-    content_inline: str | None,
-    content_ref: str | None,
-    field_name: str,
-) -> tuple[str | None, str | None]:
-    if content_inline is not None and len(content_inline) > MAX_ENVELOPE_INLINE_CHARS:
-        if content_ref is None:
-            raise BadRequest(f"{field_name} exceeds {MAX_ENVELOPE_INLINE_CHARS} characters; provide content_ref")
-        return None, content_ref
-    return content_inline, content_ref
-
-
-def string_list(value: Any, name: str) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        raise BadRequest(f"{name} must be a list of strings")
-
-    values = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise BadRequest(f"{name} must be a list of non-empty strings")
-        values.append(item.strip())
-    return values
-
-
-def response_rules_object(value: Any) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise BadRequest("response_rules must be an object")
-    allowed = {
-        "schema_version",
-        "persona",
-        "style",
-        "reply_posture",
-        "max_reply_chars",
-        "ask_human_triggers",
-        "prohibited_behavior",
-    }
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise BadRequest(f"unknown response_rules field(s): {', '.join(unknown)}")
-    return dict(value)
-
-
-def refs_list(value: Any, name: str) -> list[dict[str, Any]]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise BadRequest(f"{name} must be a list")
-
-    refs = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise BadRequest(f"{name} must contain objects")
-        ref_type = optional_string(item, "type")
-        if ref_type is None:
-            raise BadRequest("ref type is required")
-        refs.append(
-            without_none(
-                {
-                    "type": ref_type,
-                    "url": optional_string(item, "url"),
-                    "find": optional_string(item, "find"),
-                    "remember_as": optional_string(item, "remember_as"),
-                }
-            )
-        )
-    return refs
-
-
-def optional_bool(body: dict[str, Any], key: str, *, default: bool) -> bool:
-    value = body.get(key)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise BadRequest(f"{key} must be a boolean")
-    return value
-
-
-def normalize_hook(hook: str) -> str:
-    normalized = hook.strip().lower()
-    if normalized not in {
-        "send.before",
-        "route.resolve",
-        "delivery.before",
-        "receive.before",
-        "action.before",
-        "reply.before",
-        "after",
-        "agent.decision",
-    }:
-        raise BadRequest("unsupported lifecycle hook")
-    return normalized
-
-
-def normalize_runtime(runtime: str) -> str:
-    normalized = runtime.strip().lower()
-    if normalized not in {"cloud", "cloud_node", "lan_node", "agent_client"}:
-        raise BadRequest("runtime must be cloud, cloud_node, lan_node, or agent_client")
-    return normalized
-
-
-def normalize_hook_action(action: str) -> str:
-    normalized = action.strip().lower()
-    if normalized not in {"continue", "block", "review", "fail"}:
-        raise BadRequest("hook action must be continue, block, review, or fail")
-    return normalized
-
-
-def normalize_agent_decision(decision: str) -> str:
-    normalized = decision.strip().lower()
-    if normalized not in {"reply", "action", "ignore", "ask_human"}:
-        raise BadRequest("agent decision must be reply, action, ignore, or ask_human")
-    return normalized
-
-
-def next_stage_after_hook(hook: str, fallback: str) -> str:
-    return {
-        "send.before": "route.resolve",
-        "route.resolve": "delivery.before",
-        "delivery.before": "receive.before",
-        "receive.before": "agent.wait",
-        "action.before": "action.ready",
-        "reply.before": "publish",
-        "after": "done",
-    }.get(hook, fallback)
-
-
-def normalize_handle(handle: str) -> str:
-    normalized = handle.strip().lower()
-    if not normalized:
-        raise BadRequest("agent handle is required")
-    if not normalized.startswith("@"):
-        raise BadRequest("agent handle must start with @")
-    return normalized
-
-
-def agent_id_for_handle(handle: str) -> str:
-    digest = hashlib.sha256(handle.encode("utf-8")).hexdigest()[:32]
-    return f"agent_{digest}"
 
 
 def query_limit(event: dict[str, Any], *, default: int, maximum: int) -> int:
@@ -2976,27 +956,12 @@ def optional_query_int(event: dict[str, Any], key: str, *, minimum: int, maximum
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
-        raise BadRequest(f"{key} must be an integer") from None
+        raise ApiError(400, "bad_request", f"{key} must be an integer") from None
     return max(minimum, min(value, maximum))
 
 
-def private_context_ref(ref: dict[str, Any]) -> bool:
-    haystacks = (
-        str(ref.get("type") or ""),
-        str(ref.get("url") or ""),
-        str(ref.get("find") or ""),
-        str(ref.get("remember_as") or ""),
-    )
-    return private_context_value(*haystacks)
-
-
-def private_context_value(*values: str) -> bool:
-    normalized = " ".join(values).lower()
-    return any(marker in normalized for marker in PRIVATE_CONTEXT_REF_MARKERS)
-
-
-def without_none(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if value is not None}
+# ---------------------------------------------------------------------------
+# Response helpers
 
 
 def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -3014,12 +979,15 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def without_none(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if value is not None}
+
+
 def clean_item(value: Any) -> Any:
-    if isinstance(value, list):
+    """Match the historical wire format: drop null fields, sort sets."""
+    if isinstance(value, (list, tuple)):
         return [clean_item(item) for item in value]
-    if isinstance(value, tuple):
-        return [clean_item(item) for item in value]
-    if isinstance(value, set):
+    if isinstance(value, (set, frozenset)):
         return sorted(clean_item(item) for item in value)
     if isinstance(value, dict):
         return {key: clean_item(item) for key, item in value.items() if item is not None}
@@ -3031,6 +999,6 @@ def clean_item(value: Any) -> Any:
 def json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return int(value) if value % 1 == 0 else float(value)
-    if isinstance(value, set):
+    if isinstance(value, (set, frozenset)):
         return sorted(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

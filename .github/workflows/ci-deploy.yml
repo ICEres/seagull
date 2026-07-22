@@ -210,6 +210,7 @@ jobs:
         run: |
           make safety-gateway-build
           make ai-provider-build
+          make message-hub-build
           make mcp-connector-build
 
       - name: Upload Gulls Lambda package artifacts
@@ -219,6 +220,7 @@ jobs:
           path: |
             infra/terraform/envs/dev/.terraform/build/safety-gateway/package
             infra/terraform/envs/dev/.terraform/build/ai-provider/package
+            infra/terraform/envs/dev/.terraform/build/message-hub-api/package
             infra/terraform/envs/dev/.terraform/build/mcp-connector/package
           if-no-files-found: error
           retention-days: 1
@@ -346,6 +348,8 @@ jobs:
           test -f infra/terraform/envs/dev/.terraform/build/safety-gateway/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/ai_worker.py
+          test -f infra/terraform/envs/dev/.terraform/build/message-hub-api/package/lambda_function.py
+          test -d infra/terraform/envs/dev/.terraform/build/message-hub-api/package/message_hub
           test -f infra/terraform/envs/dev/.terraform/build/mcp-connector/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/social-api/package/lambda_function.py
           test -x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap

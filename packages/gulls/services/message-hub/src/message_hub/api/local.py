@@ -46,6 +46,7 @@ from message_hub.domain import (
     ThreadRecord,
     WorkflowTraceEntry,
 )
+from message_hub.domain.service import normalize_handle
 from message_hub.storage import InMemoryMessageHubRepository
 
 
@@ -240,6 +241,16 @@ class LocalMessageHubApi:
             "record": agent_token_record_to_dict(issued.record),
         }
 
+    def read_agent(self, handle: str) -> dict[str, Any]:
+        try:
+            agent = self._service.get_agent(handle)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"agent": agent_to_dict(agent)}
+
     def create_message(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
             result = self._service.send_message(
@@ -278,6 +289,13 @@ class LocalMessageHubApi:
 
         return {"created": True, "routing_rule": routing_rule_to_dict(rule)}
 
+    def read_routing_rules(self) -> dict[str, Any]:
+        # The domain service applies rules during sends but has no list method
+        # yet; read through its repository so ordering and serialization stay
+        # consistent with create_routing_rule.
+        rules = self._service._repository.list_routing_rules()  # noqa: SLF001
+        return {"items": [routing_rule_to_dict(rule) for rule in rules]}
+
     def read_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
         try:
             items = self._service.get_inbox(handle, limit=limit)
@@ -287,6 +305,26 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return {"items": [inbox_item_to_dict(item) for item in items]}
+
+    def read_outbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
+        try:
+            items = self._service.get_outbox(handle, limit=limit)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"items": [inbox_item_to_dict(item) for item in items]}
+
+    def read_sent_messages(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
+        try:
+            messages = self._service.get_sent_messages(handle, limit=limit)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {"messages": [message_to_dict(message) for message in messages]}
 
     def personal_agent_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
         return self.read_inbox(handle, limit=limit)
@@ -332,6 +370,23 @@ class LocalMessageHubApi:
         wrapped = {**body, "agent_handle": principal.agent_handle}
         return self.submit_delivery_decision(delivery_id, wrapped)
 
+    def agent_request_task(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        return self.create_task({**body, "requester_handle": principal.agent_handle})
+
+    def agent_accept_task(
+        self,
+        authorization: str | None,
+        task_id: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        return self.accept_task(task_id, {**(body or {}), "worker_handle": principal.agent_handle})
+
+    def agent_return_result(self, authorization: str | None, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        return self.return_task_result(task_id, {**body, "responder_handle": principal.agent_handle})
+
     def personal_agent_send(self, handle: str, body: dict[str, Any]) -> dict[str, Any]:
         wrapped = {**body, "sender_handle": handle}
         return self.create_message(wrapped)
@@ -373,6 +428,27 @@ class LocalMessageHubApi:
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
 
+    def require_agent_access(
+        self,
+        authorization: str | None,
+        handle: str,
+        *,
+        required_scope: str,
+    ) -> dict[str, Any]:
+        """Verify a scoped agent token that must belong to ``handle``.
+
+        Used by the legacy handle-addressed routes: a valid token for a
+        different agent is a 403, not a 401, matching the deployed adapter.
+        """
+        principal = self._require_agent_token(authorization, required_scope=required_scope)
+        try:
+            normalized_handle = normalize_handle(handle)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        if principal.agent_handle != normalized_handle:
+            raise ApiError(403, "forbidden", "agent token cannot access another agent's legacy route")
+        return agent_token_principal_to_dict(principal)
+
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
             messages = self._service.get_thread(thread_id, limit=limit)
@@ -391,6 +467,37 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return thread_context_to_dict(context)
+
+    def read_thread_context_for(
+        self,
+        thread_id: str,
+        *,
+        requester_handle: str,
+        recent_limit: int = 10,
+    ) -> dict[str, Any]:
+        """Thread context restricted to thread participants.
+
+        The participant gate matches the deployed adapter; get_context_pack
+        owns that check in the domain, so it authorizes the requester before
+        the context itself is read.
+        """
+        try:
+            self._service.get_context_pack(
+                thread_id,
+                requester_handle=requester_handle,
+                max_recent_messages=0,
+                max_payload_refs=0,
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        result = self.read_thread_context(thread_id, recent_limit=recent_limit)
+        result["context_mode"] = "summary_plus_recent"
+        return result
 
     def read_context_pack(
         self,

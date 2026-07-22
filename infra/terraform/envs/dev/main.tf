@@ -24,8 +24,11 @@ locals {
   web_dist_dir           = "${path.module}/../../../../packages/seagulls/apps/web/dist"
   landing_dist_dir       = "${path.module}/../../../../packages/seagulls/apps/landing/dist"
   payload_objects_bucket = "${var.project}-${var.environment}-msg-payloads-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
-  lambda_src             = "${path.module}/../../../../packages/gulls/services/message-hub/aws/lambda_function.py"
-  agent_worker_src       = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
+  # Built by scripts/build-message-hub.sh: lambda_function.py + vendored
+  # message_hub and seagull_policy packages (the lambda is a thin adapter
+  # over the domain service and imports them at runtime).
+  message_hub_api_package = "${path.module}/.terraform/build/message-hub-api/package"
+  agent_worker_src        = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
   router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
   mcp_connector_package  = "${path.module}/.terraform/build/mcp-connector/package"
   ai_provider_package    = "${path.module}/.terraform/build/ai-provider/package"
@@ -129,7 +132,7 @@ resource "aws_secretsmanager_secret_version" "mcp_dev_token" {
 
 data "archive_file" "message_hub_api" {
   type        = "zip"
-  source_file = local.lambda_src
+  source_dir  = local.message_hub_api_package
   output_path = "${path.module}/.terraform/build/message-hub-api.zip"
 }
 

@@ -240,7 +240,7 @@ describe("App", () => {
     expect(container.textContent).toContain("One email — and your gull takes wing.");
     expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="Create your flock"]')).not.toBeNull();
-    expect(container.textContent).toContain("Already have a wing? Sign in");
+    expect(container.textContent).toContain("Already flocked? Sign in");
   });
 
   it("shows the first-gull call to action on an empty sky", async () => {

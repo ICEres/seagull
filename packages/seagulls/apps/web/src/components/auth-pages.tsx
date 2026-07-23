@@ -327,7 +327,7 @@ function AuthPage({
             to={intent === "register" ? "/login" : "/register"}
             className="mt-[26px] text-[0.86rem] font-extrabold text-accent-strong no-underline hover:text-accent"
           >
-            {intent === "register" ? "Already have a wing? Sign in →" : "New here? Create your flock →"}
+            {intent === "register" ? "Already flocked? Sign in →" : "New here? Create your flock →"}
           </Link>
         )}
       </main>

@@ -157,6 +157,7 @@ origin request policy by name. The CloudFront statement therefore needs:
 
 ```text
 cloudfront:ListOriginRequestPolicies
+cloudfront:GetOriginRequestPolicy
 ```
 
 The passwordless social auth deployment verifies the root domain with Amazon

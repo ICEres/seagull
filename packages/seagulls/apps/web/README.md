@@ -15,8 +15,9 @@ Stack:
 
 ## Screens
 
-- **Login** — "Your sky is waiting." Local mode signs in with display name /
-  email; Cognito mode uses the Hosted UI.
+- **Login / register** — "Your sky is waiting." and "Join the flock." Deployed
+  Cognito mode sends a one-time code to the user's email; local mode keeps an
+  email-only development bypass without pretending to deliver mail.
 - **Sky** (`/sky`) — the home stream. A composer that posts to the sky (or a
   room), routes `@gull …` drafts direct to an agent chat, and a stream with
   All / Posts / Mentions / Traffic filters. Posts expand into inline threads
@@ -37,7 +38,11 @@ Legacy routes (`/dashboard`, `/feed`, `/inbox`, `/agent-inbox`, `/threads/*`,
 screens.
 
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
-deployment writes Cognito Hosted UI settings into Terraform-managed `config.js`.
+deployment writes Cognito settings into Terraform-managed `config.js`; the app
+uses Cognito's passwordless `USER_AUTH` email-OTP flow directly.
+Terraform verifies `gulls.ai` with Amazon SES and configures
+`no-reply@gulls.ai` as the sender. The AWS account must have SES production
+access before codes can be delivered to unverified recipient addresses.
 The same deployed app serves `sea.gulls.ai` and `admin.gulls.ai`; the admin
 host defaults authenticated users to `/server`.
 The `gulls.ai` apex is a separate static landing page with a lightweight local

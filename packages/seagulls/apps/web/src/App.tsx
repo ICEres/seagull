@@ -1,5 +1,5 @@
-import { LogIn, Moon, Sun } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -14,12 +14,9 @@ import { SocialApiClient, SocialApiError } from "./lib/api";
 import { configuredAiProviderApiUrl } from "./lib/ai-provider";
 import {
   clearAuthSession,
-  completeHostedCallback,
   configuredAuth,
-  hostedLogoutUrl,
   isSessionActive,
   loadAuthSession,
-  type AuthConfig,
   type AuthSession,
 } from "./lib/auth";
 import { createFirstLoop } from "./lib/demo";
@@ -41,63 +38,6 @@ import {
 } from "./lib/theme";
 
 type AppMutationError = Error | SocialApiError;
-
-function AuthCallbackPage({
-  authConfig,
-  postAuthPath,
-  onSession,
-  onNotice,
-}: {
-  authConfig: AuthConfig;
-  postAuthPath: string;
-  onSession: (session: AuthSession) => void;
-  onNotice: (notice: Notice) => void;
-}) {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (authConfig.mode !== "cognito") {
-      onNotice({ tone: "error", message: "Cognito auth is not configured." });
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    const callbackUrl = `${window.location.origin}${location.pathname}${location.search}`;
-    let cancelled = false;
-
-    void completeHostedCallback(authConfig, callbackUrl)
-      .then((session) => {
-        if (cancelled) {
-          return;
-        }
-        onSession(session);
-        onNotice({ tone: "ok", message: "Signed in." });
-        navigate(postAuthPath, { replace: true });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        clearAuthSession();
-        onNotice({ tone: "error", message: error instanceof Error ? error.message : "Sign in failed." });
-        navigate("/login", { replace: true });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authConfig, location.pathname, location.search, navigate, onNotice, onSession, postAuthPath]);
-
-  return (
-    <section className="grid min-h-screen place-items-center">
-      <div className="inline-flex items-center gap-2 font-extrabold text-ink">
-        <LogIn size={18} />
-        Entering the sky
-      </div>
-    </section>
-  );
-}
 
 const NAV_ITEMS: Array<{ to: string; label: string }> = [
   { to: "/sky", label: "Sky" },
@@ -125,6 +65,12 @@ export default function App() {
   const isAuthenticated =
     authConfig.mode === "local" ? Boolean(state.activeUser) : Boolean(activeAuthSession);
   const resolvedTheme = resolveTheme(themePreference);
+  const resetAuthenticatedState = useCallback(() => {
+    clearAuthSession();
+    queryClient.clear();
+    setAuthSession(null);
+    setState(clearLoopState());
+  }, [queryClient]);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -144,11 +90,10 @@ export default function App() {
 
   useEffect(() => {
     if (authConfig.mode === "cognito" && authSession && !isSessionActive(authSession)) {
-      clearAuthSession();
-      setAuthSession(null);
+      resetAuthenticatedState();
       setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
     }
-  }, [authConfig.mode, authSession]);
+  }, [authConfig.mode, authSession, resetAuthenticatedState]);
 
   const api = useMemo(
     () => new SocialApiClient(state.apiUrl, activeAuthSession?.accessToken ?? null),
@@ -321,8 +266,7 @@ export default function App() {
     // transient network error or a 5xx must not destroy a valid session.
     const isAuthError = error instanceof SocialApiError && (error.status === 401 || error.status === 403);
     if (isAuthError) {
-      clearAuthSession();
-      setAuthSession(null);
+      resetAuthenticatedState();
       setNotice({ tone: "error", message: "Your session expired. Please sign in again." });
       return;
     }
@@ -330,19 +274,10 @@ export default function App() {
       tone: "error",
       message: error instanceof Error ? error.message : "Could not load your sky.",
     });
-  }, [authConfig.mode, dashboardQuery.error]);
+  }, [authConfig.mode, dashboardQuery.error, resetAuthenticatedState]);
 
   function signOut() {
-    clearAuthSession();
-    setAuthSession(null);
-    const nextState = clearLoopState();
-    setState(nextState);
-    if (authConfig.mode === "cognito") {
-      // Also end the Cognito Hosted UI session; otherwise the next sign-in
-      // silently re-authenticates the same user without a real login.
-      window.location.assign(hostedLogoutUrl(authConfig));
-      return;
-    }
+    resetAuthenticatedState();
     setNotice({ tone: "warn", message: "Signed out." });
     navigate("/login");
   }
@@ -397,7 +332,10 @@ export default function App() {
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
+                resolvedTheme={resolvedTheme}
+                onToggleTheme={toggleTheme}
                 onLocalIdentity={(identity) => rememberUser(identity)}
+                onAuthSession={setAuthSession}
                 onNotice={setNotice}
               />
             }
@@ -410,22 +348,15 @@ export default function App() {
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
+                resolvedTheme={resolvedTheme}
+                onToggleTheme={toggleTheme}
                 onLocalIdentity={(identity) => rememberUser(identity)}
+                onAuthSession={setAuthSession}
                 onNotice={setNotice}
               />
             }
           />
-          <Route
-            path="/auth/callback"
-            element={
-              <AuthCallbackPage
-                authConfig={authConfig}
-                postAuthPath={defaultAuthenticatedPath}
-                onSession={setAuthSession}
-                onNotice={setNotice}
-              />
-            }
-          />
+          <Route path="/auth/callback" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </main>

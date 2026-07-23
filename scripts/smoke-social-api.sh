@@ -43,6 +43,14 @@ python3 -c 'headers=open(".local/social-smoke-cors-headers.txt").read().lower();
 cat .local/social-smoke-cors-headers.txt | sed -n '1,6p'
 echo
 
+if [ "${SOCIAL_SMOKE_HEALTH_ONLY:-0}" = "1" ]; then
+  echo "Protected route:"
+  STATUS="$(curl -sS -o /dev/null -w "%{http_code}" "$API_URL/me")"
+  test "$STATUS" = "401"
+  echo "Social API health/auth-boundary smoke passed for $API_URL"
+  exit 0
+fi
+
 if [ -n "$AUTH_TOKEN" ]; then
   echo "Current authenticated user:"
   curl -fsS "${AUTH_CURL_ARGS[@]}" "$API_URL/me" | tee .local/social-smoke-alice.json

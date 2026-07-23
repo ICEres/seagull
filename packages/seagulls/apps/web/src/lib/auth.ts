@@ -21,10 +21,7 @@ export type AuthConfig =
   | {
       mode: "cognito";
       issuer: string;
-      hostedDomain: string;
       clientId: string;
-      redirectUri: string;
-      logoutUri: string;
     };
 
 export type AuthSession = {
@@ -35,34 +32,45 @@ export type AuthSession = {
   expiresAt: number;
 };
 
-type PendingLogin = {
-  state: string;
-  codeVerifier: string;
-  createdAt: number;
+export type EmailOtpChallenge =
+  | {
+      kind: "sign-in";
+      email: string;
+      session: string;
+    }
+  | {
+      kind: "registration";
+      email: string;
+    };
+
+type CognitoAuthenticationResult = {
+  AccessToken?: string;
+  IdToken?: string;
+  RefreshToken?: string;
+  TokenType?: string;
+  ExpiresIn?: number;
 };
 
-type TokenPayload = {
-  access_token?: string;
-  id_token?: string;
-  refresh_token?: string;
-  token_type?: string;
-  expires_in?: number;
-  error?: string;
-  error_description?: string;
+type CognitoAuthResponse = {
+  AuthenticationResult?: CognitoAuthenticationResult;
+  ChallengeName?: string;
+  Session?: string;
+};
+
+type CognitoErrorPayload = {
+  __type?: string;
+  message?: string;
+  Message?: string;
 };
 
 const SESSION_KEY = "seagull.web.auth.session";
 const PENDING_KEY = "seagull.web.auth.pending";
-const OAUTH_SCOPE = "openid email profile";
 
 export function configuredAuth(): AuthConfig {
   return authConfigFromRuntime(window.SEAGULL_CONFIG, {
     mode: import.meta.env.VITE_AUTH_MODE,
     issuer: import.meta.env.VITE_COGNITO_ISSUER,
-    hostedDomain: import.meta.env.VITE_COGNITO_HOSTED_DOMAIN,
     clientId: import.meta.env.VITE_COGNITO_CLIENT_ID,
-    redirectUri: import.meta.env.VITE_COGNITO_REDIRECT_URI,
-    logoutUri: import.meta.env.VITE_COGNITO_LOGOUT_URI,
   });
 }
 
@@ -79,10 +87,7 @@ export function authConfigFromRuntime(
   return {
     mode: "cognito",
     issuer: requiredAuthValue(runtimeAuth.issuer || env.issuer, "issuer"),
-    hostedDomain: requiredAuthValue(runtimeAuth.hostedDomain || env.hostedDomain, "hostedDomain"),
     clientId: requiredAuthValue(runtimeAuth.clientId || env.clientId, "clientId"),
-    redirectUri: requiredAuthValue(runtimeAuth.redirectUri || env.redirectUri, "redirectUri"),
-    logoutUri: requiredAuthValue(runtimeAuth.logoutUri || env.logoutUri, "logoutUri"),
   };
 }
 
@@ -127,153 +132,141 @@ export function isSessionActive(session: AuthSession | null, now = Date.now()): 
   return Boolean(session && session.expiresAt - 30_000 > now);
 }
 
-export async function beginHostedLogin(config: Extract<AuthConfig, { mode: "cognito" }>): Promise<string> {
-  const state = randomBase64Url(24);
-  const codeVerifier = randomBase64Url(48);
-  const codeChallenge = await sha256Base64Url(codeVerifier);
-  savePendingLogin({ state, codeVerifier, createdAt: Date.now() });
-  return hostedAuthorizeUrl(config, state, codeChallenge);
+export async function beginEmailOtpSignIn(
+  config: Extract<AuthConfig, { mode: "cognito" }>,
+  email: string,
+  fetcher: typeof fetch = fetch,
+): Promise<Extract<EmailOtpChallenge, { kind: "sign-in" }>> {
+  const normalizedEmail = normalizeEmail(email);
+  const response = await cognitoRequest<CognitoAuthResponse>(
+    config,
+    "InitiateAuth",
+    {
+      AuthFlow: "USER_AUTH",
+      AuthParameters: {
+        USERNAME: normalizedEmail,
+        PREFERRED_CHALLENGE: "EMAIL_OTP",
+      },
+      ClientId: config.clientId,
+    },
+    fetcher,
+  );
+  if (response.ChallengeName !== "EMAIL_OTP" || !response.Session) {
+    throw new Error("Cognito did not start an email-code challenge.");
+  }
+  return { kind: "sign-in", email: normalizedEmail, session: response.Session };
 }
 
-export async function completeHostedCallback(
+export async function completeEmailOtpSignIn(
   config: Extract<AuthConfig, { mode: "cognito" }>,
-  callbackUrl: string,
+  challenge: Extract<EmailOtpChallenge, { kind: "sign-in" }>,
+  code: string,
   fetcher: typeof fetch = fetch,
 ): Promise<AuthSession> {
-  const callback = parseAuthCallbackUrl(callbackUrl);
-  if (callback.error) {
-    throw new Error(callback.errorDescription || callback.error);
-  }
-  if (!callback.code || !callback.state) {
-    throw new Error("OAuth callback is missing code or state.");
-  }
-
-  const pending = loadPendingLogin();
-  if (!pending || pending.state !== callback.state) {
-    throw new Error("OAuth callback state does not match the pending login.");
-  }
-
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: config.clientId,
-    code: callback.code,
-    redirect_uri: config.redirectUri,
-    code_verifier: pending.codeVerifier,
-  });
-
-  const response = await fetcher(`https://${config.hostedDomain}/oauth2/token`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
+  const response = await cognitoRequest<CognitoAuthResponse>(
+    config,
+    "RespondToAuthChallenge",
+    {
+      ChallengeName: "EMAIL_OTP",
+      ChallengeResponses: {
+        USERNAME: challenge.email,
+        EMAIL_OTP_CODE: code.trim(),
+      },
+      ClientId: config.clientId,
+      Session: challenge.session,
     },
-    body,
-  });
-  const payload = (await response.json()) as TokenPayload;
-  if (!response.ok || !payload.access_token) {
-    throw new Error(payload.error_description || payload.error || "Token exchange failed.");
-  }
-
-  const session: AuthSession = {
-    accessToken: payload.access_token,
-    idToken: payload.id_token ?? null,
-    refreshToken: null,
-    tokenType: payload.token_type ?? "Bearer",
-    expiresAt: Date.now() + (payload.expires_in ?? 3600) * 1000,
-  };
-  saveAuthSession(session);
-  clearPendingLogin();
-  return session;
+    fetcher,
+  );
+  return saveCognitoAuthentication(response.AuthenticationResult);
 }
 
-export function hostedAuthorizeUrl(
+export async function beginEmailOtpRegistration(
   config: Extract<AuthConfig, { mode: "cognito" }>,
-  state: string,
-  codeChallenge: string,
-): string {
-  const url = new URL(`https://${config.hostedDomain}/oauth2/authorize`);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", config.clientId);
-  url.searchParams.set("redirect_uri", config.redirectUri);
-  url.searchParams.set("scope", OAUTH_SCOPE);
-  url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", codeChallenge);
-  url.searchParams.set("code_challenge_method", "S256");
-  return url.toString();
-}
-
-export function hostedLogoutUrl(config: Extract<AuthConfig, { mode: "cognito" }>): string {
-  const url = new URL(`https://${config.hostedDomain}/logout`);
-  url.searchParams.set("client_id", config.clientId);
-  url.searchParams.set("logout_uri", config.logoutUri);
-  return url.toString();
-}
-
-export function parseAuthCallbackUrl(url: string): {
-  code: string | null;
-  state: string | null;
-  error: string | null;
-  errorDescription: string | null;
-} {
-  const parsed = new URL(url);
-  return {
-    code: parsed.searchParams.get("code"),
-    state: parsed.searchParams.get("state"),
-    error: parsed.searchParams.get("error"),
-    errorDescription: parsed.searchParams.get("error_description"),
-  };
-}
-
-function savePendingLogin(pending: PendingLogin, storage: Storage = window.sessionStorage): void {
-  window.localStorage.removeItem(PENDING_KEY);
-  storage.setItem(PENDING_KEY, JSON.stringify(pending));
-}
-
-function loadPendingLogin(storage: Storage = window.sessionStorage): PendingLogin | null {
-  const stored = storage.getItem(PENDING_KEY);
-  if (!stored) {
-    return null;
-  }
+  email: string,
+  fetcher: typeof fetch = fetch,
+): Promise<EmailOtpChallenge> {
+  const normalizedEmail = normalizeEmail(email);
   try {
-    const parsed = JSON.parse(stored) as Partial<PendingLogin>;
-    if (!parsed.state || !parsed.codeVerifier || !parsed.createdAt) {
-      return null;
+    await cognitoRequest(
+      config,
+      "SignUp",
+      {
+        ClientId: config.clientId,
+        Username: normalizedEmail,
+        UserAttributes: [{ Name: "email", Value: normalizedEmail }],
+      },
+      fetcher,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "UsernameExistsException") {
+      throw error;
     }
-    return {
-      state: parsed.state,
-      codeVerifier: parsed.codeVerifier,
-      createdAt: parsed.createdAt,
-    };
-  } catch {
-    return null;
+    try {
+      await resendEmailOtpRegistration(config, normalizedEmail, fetcher);
+    } catch (resendError) {
+      if (
+        resendError instanceof Error &&
+        resendError.name === "InvalidParameterException" &&
+        /confirmed/i.test(resendError.message)
+      ) {
+        return beginEmailOtpSignIn(config, normalizedEmail, fetcher);
+      }
+      throw resendError;
+    }
   }
+  return { kind: "registration", email: normalizedEmail };
 }
 
-function clearPendingLogin(storage: Storage = window.sessionStorage): void {
-  storage.removeItem(PENDING_KEY);
-  window.localStorage.removeItem(PENDING_KEY);
-}
-
-function randomBase64Url(byteLength: number): string {
-  const bytes = new Uint8Array(byteLength);
-  window.crypto.getRandomValues(bytes);
-  return bytesToBase64Url(bytes);
-}
-
-async function sha256Base64Url(value: string): Promise<string> {
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return bytesToBase64Url(new Uint8Array(digest));
-}
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+export async function completeEmailOtpRegistration(
+  config: Extract<AuthConfig, { mode: "cognito" }>,
+  challenge: Extract<EmailOtpChallenge, { kind: "registration" }>,
+  code: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AuthSession | EmailOtpChallenge> {
+  const confirmation = await cognitoRequest<{ Session?: string }>(
+    config,
+    "ConfirmSignUp",
+    {
+      ClientId: config.clientId,
+      Username: challenge.email,
+      ConfirmationCode: code.trim(),
+    },
+    fetcher,
+  );
+  if (!confirmation.Session) {
+    return beginEmailOtpSignIn(config, challenge.email, fetcher);
   }
-  return window
-    .btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const response = await cognitoRequest<CognitoAuthResponse>(
+    config,
+    "InitiateAuth",
+    {
+      AuthFlow: "USER_AUTH",
+      AuthParameters: {
+        USERNAME: challenge.email,
+        PREFERRED_CHALLENGE: "EMAIL_OTP",
+      },
+      ClientId: config.clientId,
+      Session: confirmation.Session,
+    },
+    fetcher,
+  );
+  return saveCognitoAuthentication(response.AuthenticationResult);
+}
+
+export async function resendEmailOtpRegistration(
+  config: Extract<AuthConfig, { mode: "cognito" }>,
+  email: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await cognitoRequest(
+    config,
+    "ResendConfirmationCode",
+    {
+      ClientId: config.clientId,
+      Username: normalizeEmail(email),
+    },
+    fetcher,
+  );
 }
 
 function requiredAuthValue(value: string | undefined, fieldName: string): string {
@@ -282,4 +275,48 @@ function requiredAuthValue(value: string | undefined, fieldName: string): string
     throw new Error(`Cognito auth config is missing ${fieldName}.`);
   }
   return stripped;
+}
+
+async function cognitoRequest<T>(
+  config: Extract<AuthConfig, { mode: "cognito" }>,
+  operation: string,
+  body: unknown,
+  fetcher: typeof fetch,
+): Promise<T> {
+  const issuer = new URL(config.issuer);
+  const response = await fetcher(`${issuer.origin}/`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-amz-json-1.1",
+      "x-amz-target": `AWSCognitoIdentityProviderService.${operation}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as T & CognitoErrorPayload;
+  if (!response.ok) {
+    const errorType = payload.__type?.split("#").pop() || "CognitoError";
+    const error = new Error(payload.message || payload.Message || "Cognito authentication failed.");
+    error.name = errorType;
+    throw error;
+  }
+  return payload;
+}
+
+function saveCognitoAuthentication(result: CognitoAuthenticationResult | undefined): AuthSession {
+  if (!result?.AccessToken) {
+    throw new Error("Cognito did not return an authenticated session.");
+  }
+  const session: AuthSession = {
+    accessToken: result.AccessToken,
+    idToken: result.IdToken ?? null,
+    refreshToken: null,
+    tokenType: result.TokenType ?? "Bearer",
+    expiresAt: Date.now() + (result.ExpiresIn ?? 3600) * 1000,
+  };
+  saveAuthSession(session);
+  return session;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }

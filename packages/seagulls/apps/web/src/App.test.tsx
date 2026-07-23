@@ -220,9 +220,27 @@ describe("App", () => {
     const container = renderApp("/");
     await waitForText(container, "Your sky is waiting");
 
-    expect(container.textContent).toContain("Enter the sky");
+    expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
+    expect(container.querySelector('input[aria-label="Display name"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Sign in"]')).not.toBeNull();
+    expect(container.textContent).toContain("New here? Create your flock");
     expect(container.textContent).not.toContain("The stream");
     expect(container.textContent).not.toContain("Sign out");
+  });
+
+  it("renders the email-only registration design", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+    });
+
+    const container = renderApp("/register");
+    await waitForText(container, "Join the flock");
+
+    expect(container.textContent).toContain("One email — and your gull takes wing.");
+    expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Create your flock"]')).not.toBeNull();
+    expect(container.textContent).toContain("Already have a wing? Sign in");
   });
 
   it("shows the first-gull call to action on an empty sky", async () => {
@@ -504,7 +522,47 @@ describe("App", () => {
     expect(window.localStorage.getItem("seagull.web.theme")).toBe("light");
   });
 
-  it("completes Cognito Hosted UI callbacks without direct password auth APIs", async () => {
+  it("clears user-scoped state and cached data on sign out", async () => {
+    window.SEAGULL_CONFIG = {
+      socialApiUrl: "https://api.example.test",
+      messageApiUrl: "https://message.example.test",
+      auth: { mode: "local" },
+    };
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+    });
+
+    const { container, queryClient } = renderAppWithQueryClient("/sky");
+    await waitForText(container, "The sky");
+    queryClient.setQueryData(["message-routing-rules", "https://message.example.test"], {
+      items: [{ name: "account A private rule" }],
+    });
+
+    const signOutButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Sign out",
+    );
+    if (!signOutButton) {
+      throw new Error("Sign-out button not found.");
+    }
+    await act(async () => {
+      signOutButton.click();
+    });
+    await waitForText(container, "Your sky is waiting");
+
+    expect(
+      queryClient.getQueryData(["message-routing-rules", "https://message.example.test"]),
+    ).toBeUndefined();
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}").activeUser).toBeNull();
+  });
+
+  it("signs in through the custom Cognito email-code screen", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       auth: {
@@ -516,49 +574,139 @@ describe("App", () => {
         logoutUri: "https://app.example.test/register",
       },
     };
-    window.sessionStorage.setItem(
-      "seagull.web.auth.pending",
-      JSON.stringify({ state: "state_1", codeVerifier: "verifier_1", createdAt: 1 }),
+    const cognitoBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const target = new Headers(init?.headers).get("x-amz-target") ?? "";
+        if (target) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          cognitoBodies.push(body);
+          if (target.endsWith(".InitiateAuth")) {
+            return new Response(
+              JSON.stringify({ ChallengeName: "EMAIL_OTP", Session: "challenge_session_1" }),
+              { status: 200 },
+            );
+          }
+          if (target.endsWith(".RespondToAuthChallenge")) {
+            return new Response(
+              JSON.stringify({
+                AuthenticationResult: {
+                  AccessToken: "email-code-access-token",
+                  IdToken: "email-code-id-token",
+                  TokenType: "Bearer",
+                  ExpiresIn: 3600,
+                },
+              }),
+              { status: 200 },
+            );
+          }
+        }
+
+        const url = new URL(String(input));
+        const key = `${url.pathname}${url.search}`;
+        const responses: Record<string, unknown> = {
+          "/health": { ok: true, app: "social-api", storage: "memory" },
+          "/dashboard": {
+            identity,
+            profiles: { items: [profile] },
+            feed: { items: [post] },
+            notifications: { unread_count: 0, items: [] },
+            moderation: { count: 0, items: [] },
+            health: { ok: true, app: "social-api", storage: "memory" },
+          },
+          "/profiles": { items: [profile] },
+          "/feed?owner_user_id=user_1&limit=50": { items: [post] },
+          "/profiles/%40researcher%3Aseagull.local/notifications?limit=50": { items: [] },
+          "/moderation?limit=50": { items: [] },
+        };
+        const responseBody = responses[key] ?? { error: "not_found", message: key };
+        return new Response(JSON.stringify(responseBody), {
+          status: key in responses ? 200 : 404,
+          headers: { "content-type": "application/json" },
+        });
+      }),
     );
+
+    const container = renderApp("/login");
+    await waitForText(container, "Your sky is waiting");
+
+    const emailInput = container.querySelector('input[aria-label="Email"]');
+    if (!(emailInput instanceof HTMLInputElement)) {
+      throw new Error("Email input not found.");
+    }
+    await act(async () => {
+      setNativeValue(emailInput, "ALICE@example.com");
+    });
+    const requestButton = container.querySelector('button[aria-label="Send login code"]');
+    if (!(requestButton instanceof HTMLButtonElement)) {
+      throw new Error("Send-login-code button not found.");
+    }
+    await act(async () => {
+      requestButton.click();
+    });
+    await waitForText(container, "Check your inbox");
+
+    expect(container.textContent).toContain("We sent a code to alice@example.com.");
+    const codeInput = container.querySelector('input[aria-label="Email code"]');
+    if (!(codeInput instanceof HTMLInputElement)) {
+      throw new Error("Email-code input not found.");
+    }
+    await act(async () => {
+      setNativeValue(codeInput, "123456");
+    });
+    const verifyButton = container.querySelector('button[aria-label="Verify code"]');
+    if (!(verifyButton instanceof HTMLButtonElement)) {
+      throw new Error("Verify-code button not found.");
+    }
+    await act(async () => {
+      verifyButton.click();
+    });
+    await waitForText(container, "The sky");
+
+    const session = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.session") ?? "{}");
+    expect(session.accessToken).toBe("email-code-access-token");
+    expect(cognitoBodies[0]).toMatchObject({
+      AuthFlow: "USER_AUTH",
+      AuthParameters: {
+        USERNAME: "alice@example.com",
+        PREFERRED_CHALLENGE: "EMAIL_OTP",
+      },
+    });
+    expect(cognitoBodies[1]).toMatchObject({
+      ChallengeName: "EMAIL_OTP",
+      ChallengeResponses: { EMAIL_OTP_CODE: "123456" },
+    });
+    expect(JSON.stringify(cognitoBodies)).not.toContain("PASSWORD");
+  });
+
+  it("redirects legacy Hosted UI callbacks to the email-code login", async () => {
+    window.SEAGULL_CONFIG = {
+      socialApiUrl: "https://api.example.test",
+      auth: {
+        mode: "cognito",
+        issuer: "https://cognito-idp.example.test/pool",
+        hostedDomain: "seagull.auth.example.test",
+        clientId: "client_1",
+        redirectUri: "https://app.example.test/auth/callback",
+        logoutUri: "https://app.example.test/register",
+      },
+    };
     mockApi({
       "/health": { ok: true, app: "social-api", storage: "memory" },
-      "/dashboard": {
-        identity,
-        profiles: { items: [profile] },
-        feed: { items: [post] },
-        notifications: { unread_count: 0, items: [] },
-        moderation: { count: 0, items: [] },
-        health: { ok: true, app: "social-api", storage: "memory" },
-      },
-      "/profiles": { items: [profile] },
-      "/feed?owner_user_id=user_1&limit=50": { items: [post] },
-      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
-        items: [],
-      },
-      "/moderation?limit=50": { items: [] },
-      "https://seagull.auth.example.test/oauth2/token": {
-        access_token: "access_1",
-        id_token: "id_1",
-        token_type: "Bearer",
-        expires_in: 3600,
-      },
     });
 
     const container = renderApp("/auth/callback?code=code_1&state=state_1");
-    await waitForText(container, "Planning the first social loop.");
-
-    const session = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.session") ?? "{}");
-    expect(session.accessToken).toBe("access_1");
+    await waitForText(container, "Your sky is waiting");
 
     const fetchMock = vi.mocked(fetch);
-    const tokenCall = fetchMock.mock.calls.find(([input]) => String(input) === "https://seagull.auth.example.test/oauth2/token");
-    expect(String(tokenCall?.[1]?.body)).toContain("code_verifier=verifier_1");
     expect(
       fetchMock.mock.calls.some(([, init]) => {
         const target = new Headers(init?.headers).get("x-amz-target") ?? "";
-        return target.includes("SignUp") || target.includes("ConfirmSignUp") || target.includes("InitiateAuth");
+        return target.length > 0;
       }),
     ).toBe(false);
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
   });
 
   it("renders AI provider admin config on the server screen", async () => {
@@ -669,6 +817,13 @@ describe("App", () => {
 });
 
 function renderApp(path: string): HTMLElement {
+  return renderAppWithQueryClient(path).container;
+}
+
+function renderAppWithQueryClient(path: string): {
+  container: HTMLElement;
+  queryClient: QueryClient;
+} {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -690,7 +845,7 @@ function renderApp(path: string): HTMLElement {
       </QueryClientProvider>,
     );
   });
-  return container;
+  return { container, queryClient };
 }
 
 function saveLoopState(partial: Record<string, unknown>): void {

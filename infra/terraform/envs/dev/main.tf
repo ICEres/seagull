@@ -1091,11 +1091,56 @@ module "ai_provider" {
   tags                           = local.message_hub_tags
 }
 
+resource "aws_ses_domain_identity" "social_auth" {
+  domain = var.root_domain
+}
+
+resource "aws_route53_record" "social_auth_ses_verification" {
+  zone_id = data.aws_route53_zone.root.zone_id
+  name    = "_amazonses.${aws_ses_domain_identity.social_auth.domain}"
+  type    = "TXT"
+  ttl     = 600
+  records = [aws_ses_domain_identity.social_auth.verification_token]
+}
+
+resource "aws_ses_domain_identity_verification" "social_auth" {
+  domain = aws_ses_domain_identity.social_auth.domain
+
+  depends_on = [aws_route53_record.social_auth_ses_verification]
+}
+
+resource "aws_ses_domain_dkim" "social_auth" {
+  domain = aws_ses_domain_identity.social_auth.domain
+}
+
+resource "aws_route53_record" "social_auth_ses_dkim" {
+  count = 3
+
+  zone_id = data.aws_route53_zone.root.zone_id
+  name    = "${aws_ses_domain_dkim.social_auth.dkim_tokens[count.index]}._domainkey"
+  type    = "CNAME"
+  ttl     = 600
+  records = ["${aws_ses_domain_dkim.social_auth.dkim_tokens[count.index]}.dkim.amazonses.com"]
+}
+
 resource "aws_cognito_user_pool" "social_web" {
-  name = "${local.social_api_prefix}-users"
+  name           = "${local.social_api_prefix}-users"
+  user_pool_tier = "ESSENTIALS"
 
   auto_verified_attributes = ["email"]
   username_attributes      = ["email"]
+
+  sign_in_policy {
+    # Cognito won't remove PASSWORD from an existing password-based pool.
+    # The web app only requests EMAIL_OTP, and new registrations omit passwords.
+    allowed_first_auth_factors = ["PASSWORD", "EMAIL_OTP"]
+  }
+
+  email_configuration {
+    email_sending_account = "DEVELOPER"
+    from_email_address    = "Seagulls <no-reply@${var.root_domain}>"
+    source_arn            = aws_ses_domain_identity_verification.social_auth.arn
+  }
 
   username_configuration {
     case_sensitive = false
@@ -1148,10 +1193,7 @@ resource "aws_cognito_user_pool_client" "social_web" {
   supported_identity_providers  = ["COGNITO"]
   prevent_user_existence_errors = "ENABLED"
   explicit_auth_flows = [
-    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
-    "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_PASSWORD_AUTH",
-    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_USER_AUTH",
   ]
   access_token_validity  = 1
   id_token_validity      = 1

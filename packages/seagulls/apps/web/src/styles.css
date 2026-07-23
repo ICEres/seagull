@@ -21,6 +21,8 @@
   --danger: #dc2626;
   --danger-soft: #fdeaea;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 10px 24px rgba(0, 0, 0, 0.05),
+    0 32px 80px rgba(0, 0, 0, 0.1);
 }
 
 .dark {
@@ -42,6 +44,8 @@
   --danger: #f87171;
   --danger-soft: #3b1414;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.35),
+    0 36px 90px rgba(0, 0, 0, 0.45);
 }
 
 @theme inline {
@@ -172,6 +176,79 @@
   to {
     left: 104%;
   }
+}
+
+@keyframes auth-gull-liftoff {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  35% {
+    transform: translate(-5px, -13px);
+  }
+  65% {
+    transform: translate(3px, -9px);
+  }
+}
+
+@keyframes auth-gull-wing-left {
+  0%,
+  100% {
+    transform: rotate(20deg);
+  }
+  30% {
+    transform: rotate(4deg);
+  }
+  55% {
+    transform: rotate(-13deg);
+  }
+  80% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes auth-gull-wing-right {
+  0%,
+  100% {
+    transform: rotate(-20deg);
+  }
+  30% {
+    transform: rotate(-4deg);
+  }
+  55% {
+    transform: rotate(13deg);
+  }
+  80% {
+    transform: rotate(-5deg);
+  }
+}
+
+@keyframes auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.auth-perched-gull {
+  animation: gull-bob 3.4s ease-in-out infinite;
+}
+
+.auth-flying-gull {
+  animation: auth-gull-liftoff 1.6s ease-in-out infinite;
+}
+
+.auth-wing-left {
+  transform-origin: 16px 8px;
+  animation: auth-gull-wing-left 0.9s ease-in-out infinite;
+}
+
+.auth-wing-right {
+  transform-origin: 16px 8px;
+  animation: auth-gull-wing-right 0.9s ease-in-out infinite;
+}
+
+.auth-spinner {
+  animation: auth-spin 0.7s linear infinite;
 }
 
 @keyframes msg-in {

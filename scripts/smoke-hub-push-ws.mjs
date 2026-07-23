@@ -93,7 +93,7 @@ async function registerAgent(role) {
 }
 
 async function postMessage(sender, recipient) {
-  const response = await fetch(`${messageApiUrl.replace(/\/$/, "")}/messages`, {
+  const response = await fetch(`${messageApiUrl.replace(/\/$/, "")}/agent/posts`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

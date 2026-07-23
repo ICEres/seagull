@@ -89,6 +89,37 @@ variable "api_throttling_rate_limit" {
   default     = 50
 }
 
+variable "guest_status_signing_secret" {
+  type        = string
+  description = "Signing secret for guest status-poll and invite tokens on public agent URLs. Leave empty to refuse guest sends (503)."
+  default     = ""
+  sensitive   = true
+}
+
+variable "public_agent_send_throttling_burst_limit" {
+  type        = number
+  description = "API Gateway burst throttle for POST /agents/{name}/messages (guest-reachable)."
+  default     = 10
+}
+
+variable "public_agent_send_throttling_rate_limit" {
+  type        = number
+  description = "API Gateway steady-state requests per second for POST /agents/{name}/messages (guest-reachable)."
+  default     = 5
+}
+
+variable "public_agent_status_throttling_burst_limit" {
+  type        = number
+  description = "API Gateway burst throttle for GET /agents/{name}/messages/{deliveryId} (guest-reachable)."
+  default     = 20
+}
+
+variable "public_agent_status_throttling_rate_limit" {
+  type        = number
+  description = "API Gateway steady-state requests per second for GET /agents/{name}/messages/{deliveryId} (guest-reachable)."
+  default     = 10
+}
+
 variable "api_access_log_retention_days" {
   type        = number
   description = "Retention in days for API Gateway access logs."

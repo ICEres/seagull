@@ -139,6 +139,30 @@ export function parseCommaList(value: string): string[] {
     });
 }
 
+export function formatRelativeTime(value: string | null | undefined, now = Date.now()): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const deltaSeconds = Math.floor((now - date.getTime()) / 1000);
+  if (deltaSeconds < 60) {
+    return "now";
+  }
+  if (deltaSeconds < 3600) {
+    return `${Math.floor(deltaSeconds / 60)}m`;
+  }
+  if (deltaSeconds < 86_400) {
+    return `${Math.floor(deltaSeconds / 3600)}h`;
+  }
+  if (deltaSeconds < 7 * 86_400) {
+    return `${Math.floor(deltaSeconds / 86_400)}d`;
+  }
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
 export function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
     return "Not set";

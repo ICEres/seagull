@@ -39,6 +39,13 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(response.agent.handle, "@flat:gulls.ai")
     }
 
+    func testWhoamiRejectsObjectWithoutIdentity() {
+        // Every Agent field is optional, so without the identity guard any
+        // JSON object would decode into "Connected as unknown handle".
+        let json = Data(#"{"error": "boom"}"#.utf8)
+        XCTAssertThrowsError(try decoder.decode(WhoamiResponse.self, from: json))
+    }
+
     func testInboxFixture() throws {
         let response = try decoder.decode(InboxResponse.self, from: fixture("inbox"))
         XCTAssertEqual(response.items.count, 1)

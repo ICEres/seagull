@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from social_api.domain import SocialApiService
 from social_api.storage import InMemorySocialRepository
@@ -105,6 +106,130 @@ def event(
 
 def response_body(response: dict[str, object]) -> dict[str, object]:
     return json.loads(response["body"])
+
+
+class FakeMessageHubPoster:
+    """Records message-hub POSTs; optionally fails the first /messages call."""
+
+    def __init__(self, *, fail_first_send_with: int | None = None) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self._fail_first_send_with = fail_first_send_with
+
+    def __call__(self, base_url: str, path: str, body: dict[str, object]) -> dict[str, object]:
+        self.calls.append((path, body))
+        if path == "/agents":
+            return {"created": True, "agent": {"handle": body.get("handle")}}
+        if path != "/messages":
+            raise AssertionError(f"unexpected message hub path: {path}")
+        if self._fail_first_send_with is not None:
+            code = self._fail_first_send_with
+            self._fail_first_send_with = None
+            raise HTTPError(f"{base_url}{path}", code, "hub error", None, None)
+        return {
+            "thread_id": "thread_1",
+            "message": {"message_id": "message_1", "thread_id": "thread_1"},
+        }
+
+
+class SocialApiLambdaChatDeliveryTest(TestCase):
+    CLAIMS = {"sub": "alice-sub", "email": "alice@example.com"}
+    HUB_ENV = {"MESSAGE_API_URL": "https://hub.test"}
+
+    def load_module_with_hub(self, poster: FakeMessageHubPoster) -> types.ModuleType:
+        lambda_module = load_lambda_module()
+        lambda_module.service = SocialApiService(
+            InMemorySocialRepository(),
+            agent_registry=lambda_module.MessageHubAgentRegistry(),
+        )
+        lambda_module.post_message_hub_json = poster
+        return lambda_module
+
+    def create_chat(self, lambda_module: types.ModuleType) -> str:
+        for handle in ("@alice:seagull.local", "@assistant:seagull.local"):
+            response = lambda_module.handler(
+                event("POST", "/profiles", body={"handle": handle}, claims=self.CLAIMS),
+                None,
+            )
+            self.assertEqual(200, response["statusCode"])
+        chat_response = lambda_module.handler(
+            event(
+                "POST",
+                "/agent-chats",
+                body={
+                    "agent_handle": "@assistant:seagull.local",
+                    "sender_handle": "@alice:seagull.local",
+                },
+                claims=self.CLAIMS,
+            ),
+            None,
+        )
+        self.assertEqual(200, chat_response["statusCode"])
+        return response_body(chat_response)["chat"]["chat_id"]
+
+    def send_chat_message(self, lambda_module: types.ModuleType, chat_id: str) -> dict[str, object]:
+        response = lambda_module.handler(
+            event(
+                "POST",
+                f"/agent-chats/{chat_id}/messages",
+                body={"content": "Plan the MVP."},
+                claims=self.CLAIMS,
+            ),
+            None,
+        )
+        self.assertEqual(200, response["statusCode"])
+        return response_body(response)["message"]
+
+    def test_profile_creation_registers_handles_and_send_does_not_reregister(self) -> None:
+        poster = FakeMessageHubPoster()
+        lambda_module = self.load_module_with_hub(poster)
+
+        with patch.dict(os.environ, self.HUB_ENV):
+            chat_id = self.create_chat(lambda_module)
+
+            self.assertEqual(
+                ["@alice:seagull.local", "@assistant:seagull.local"],
+                [body["handle"] for path, body in poster.calls if path == "/agents"],
+            )
+
+            poster.calls.clear()
+            message = self.send_chat_message(lambda_module, chat_id)
+
+        self.assertEqual(["/messages"], [path for path, _ in poster.calls])
+        self.assertEqual("delivered", message["delivery_status"])
+        self.assertEqual("message_1", message["hub_message_id"])
+        self.assertEqual("thread_1", message["hub_thread_id"])
+
+    def test_send_backfills_unregistered_legacy_agents_once_and_retries(self) -> None:
+        poster = FakeMessageHubPoster(fail_first_send_with=404)
+        lambda_module = self.load_module_with_hub(poster)
+
+        with patch.dict(os.environ, self.HUB_ENV):
+            chat_id = self.create_chat(lambda_module)
+            poster.calls.clear()
+            message = self.send_chat_message(lambda_module, chat_id)
+
+        self.assertEqual(
+            ["/messages", "/agents", "/agents", "/messages"],
+            [path for path, _ in poster.calls],
+        )
+        self.assertEqual(
+            ["@alice:seagull.local", "@assistant:seagull.local"],
+            [body["handle"] for path, body in poster.calls if path == "/agents"],
+        )
+        self.assertEqual("delivered", message["delivery_status"])
+
+    def test_send_non_404_hub_error_records_delivery_failed_without_backfill(self) -> None:
+        poster = FakeMessageHubPoster(fail_first_send_with=500)
+        lambda_module = self.load_module_with_hub(poster)
+
+        with patch.dict(os.environ, self.HUB_ENV):
+            chat_id = self.create_chat(lambda_module)
+            poster.calls.clear()
+            message = self.send_chat_message(lambda_module, chat_id)
+
+        self.assertEqual(["/messages"], [path for path, _ in poster.calls])
+        self.assertEqual("delivery_failed", message["delivery_status"])
+        self.assertIn("500", message["delivery_error"])
 
 
 class SocialApiLambdaAuthTest(TestCase):

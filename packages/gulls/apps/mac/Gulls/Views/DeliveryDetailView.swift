@@ -47,7 +47,7 @@ struct DeliveryDetailView: View {
     private var metadata: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 2) {
             if let created = item.message?.createdAt {
-                metadataRow("Received", created)
+                metadataRow("Received", Self.displayReceived(created))
             }
             if let safety = item.message?.safetyStatus {
                 metadataRow("Safety", safety)
@@ -68,5 +68,10 @@ struct DeliveryDetailView: View {
             Text(label).gridColumnAlignment(.trailing)
             Text(value).textSelection(.enabled)
         }
+    }
+
+    static func displayReceived(_ raw: String) -> String {
+        guard let date = GullsDates.parse(raw) else { return raw }
+        return date.formatted(date: .abbreviated, time: .standard)
     }
 }

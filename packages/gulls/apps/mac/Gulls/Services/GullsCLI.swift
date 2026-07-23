@@ -5,8 +5,12 @@ import Foundation
 // Go flag package stops parsing at the first non-flag argument) and decodes
 // stdout with the Codable models pinned by the shared contract fixtures.
 //
-// Serialized as an actor: the CLI writes shared files under the context dir,
-// and interleaved invocations must not race.
+// One-shot commands are strictly serialized (FIFO). Actor isolation alone is
+// not enough: actors are reentrant, so a second call would enter while the
+// first is suspended waiting on its subprocess. Since the CLI reads and
+// writes shared files under the context dir, `run` chains each invocation on
+// the previous one. The long-lived `stream` subprocess is exempt — it only
+// reads, and serializing it would block every command behind it.
 actor GullsCLI {
 
     // Explicit subprocess environment built from app settings. The env-file
@@ -61,6 +65,9 @@ actor GullsCLI {
 
     private let executableURL: URL
     private let decoder = JSONDecoder()
+
+    // Tail of the FIFO command chain; each `run` awaits the previous one.
+    private var commandTail: Task<Void, Never>?
 
     init(executableURL: URL) {
         self.executableURL = executableURL
@@ -129,27 +136,20 @@ actor GullsCLI {
 
     // Handle for a running stream subprocess: NDJSON lines as they arrive,
     // plus a terminate control. The subprocess handles its own WebSocket
-    // reconnects; it only exits on SIGTERM (clean) or a fatal config/auth
-    // error (stream throws with stderr).
+    // reconnects; it only exits on SIGTERM (clean) or a fatal error. A fatal
+    // exit throws .configuration for exit code 2 (bad URL/token/scope — the
+    // caller should stop retrying) and .runtime otherwise.
     struct StreamHandle {
         let lines: AsyncThrowingStream<Data, Error>
         let terminate: @Sendable () -> Void
     }
 
     func openStream(environment: Environment) throws -> StreamHandle {
-        try? FileManager.default.createDirectory(at: environment.contextDir, withIntermediateDirectories: true)
-
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = ["--json", "stream"]
-        process.environment = environment.processEnvironment()
-        process.currentDirectoryURL = environment.contextDir
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        process.standardInput = FileHandle.nullDevice
+        let (process, stdoutPipe, stderrPipe) = Self.makeProcess(
+            executableURL: executableURL,
+            command: ["stream"],
+            environment: environment
+        )
 
         let stderrCollector = PipeCollector(handle: stderrPipe.fileHandleForReading)
         let terminated = TerminationFlag()
@@ -166,7 +166,11 @@ actor GullsCLI {
                 } else {
                     let message = String(decoding: stderr, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    continuation.finish(throwing: Failure.runtime(message.isEmpty ? "stream exited unexpectedly" : message))
+                    let text = message.isEmpty ? "stream exited unexpectedly" : message
+                    let failure: Failure = finished.terminationStatus == 2
+                        ? .configuration(text)
+                        : .runtime(text)
+                    continuation.finish(throwing: failure)
                 }
             }
             continuation.onTermination = { _ in
@@ -206,6 +210,69 @@ actor GullsCLI {
     }
 
     func run(_ command: [String], environment: Environment) async throws -> Data {
+        let previous = commandTail
+        let executableURL = self.executableURL
+        let task = Task<Data, Error> {
+            _ = await previous?.value
+            return try await Self.execute(command, executableURL: executableURL, environment: environment)
+        }
+        commandTail = Task { _ = try? await task.value }
+        return try await task.value
+    }
+
+    private static func execute(
+        _ command: [String],
+        executableURL: URL,
+        environment: Environment
+    ) async throws -> Data {
+        let (process, stdoutPipe, stderrPipe) = makeProcess(
+            executableURL: executableURL,
+            command: command,
+            environment: environment
+        )
+
+        // Drain pipes as data arrives — waiting for termination before reading
+        // deadlocks once output exceeds the 64KB pipe buffer.
+        let stdoutCollector = PipeCollector(handle: stdoutPipe.fileHandleForReading)
+        let stderrCollector = PipeCollector(handle: stderrPipe.fileHandleForReading)
+
+        let status: Int32
+        do {
+            status = try await withCheckedThrowingContinuation { continuation in
+                process.terminationHandler = { finished in
+                    continuation.resume(returning: finished.terminationStatus)
+                }
+                do {
+                    try process.run()
+                } catch {
+                    process.terminationHandler = nil
+                    continuation.resume(throwing: Failure.launch(error.localizedDescription))
+                }
+            }
+        } catch {
+            _ = stdoutCollector.finish()
+            _ = stderrCollector.finish()
+            throw error
+        }
+
+        let stdout = stdoutCollector.finish()
+        let stderr = stderrCollector.finish()
+
+        switch status {
+        case 0:
+            return stdout
+        case 2:
+            throw Failure.configuration(trimmedText(stderr))
+        default:
+            throw Failure.runtime(trimmedText(stderr))
+        }
+    }
+
+    private static func makeProcess(
+        executableURL: URL,
+        command: [String],
+        environment: Environment
+    ) -> (process: Process, stdout: Pipe, stderr: Pipe) {
         try? FileManager.default.createDirectory(at: environment.contextDir, withIntermediateDirectories: true)
 
         let process = Process()
@@ -219,35 +286,7 @@ actor GullsCLI {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.standardInput = FileHandle.nullDevice
-
-        // Drain pipes as data arrives — waiting for termination before reading
-        // deadlocks once output exceeds the 64KB pipe buffer.
-        let stdoutCollector = PipeCollector(handle: stdoutPipe.fileHandleForReading)
-        let stderrCollector = PipeCollector(handle: stderrPipe.fileHandleForReading)
-
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { finished in
-                continuation.resume(returning: finished.terminationStatus)
-            }
-            do {
-                try process.run()
-            } catch {
-                process.terminationHandler = nil
-                continuation.resume(throwing: Failure.launch(error.localizedDescription))
-            }
-        }
-
-        let stdout = stdoutCollector.finish()
-        let stderr = stderrCollector.finish()
-
-        switch status {
-        case 0:
-            return stdout
-        case 2:
-            throw Failure.configuration(Self.trimmedText(stderr))
-        default:
-            throw Failure.runtime(Self.trimmedText(stderr))
-        }
+        return (process, stdoutPipe, stderrPipe)
     }
 
     private static func trimmedText(_ data: Data) -> String {

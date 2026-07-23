@@ -1,21 +1,73 @@
 @import "tailwindcss";
 
-@theme {
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f2f2f2;
+  --card: #ffffff;
+  --ink: #000000;
+  --body-text: #1a1a1a;
+  --muted: #555555;
+  --faint: #999999;
+  --line: #ebebeb;
+  --accent: #7c3aed;
+  --accent-strong: #6d28d9;
+  --accent-soft: #f0e9fe;
+  --indigo: #0891b2;
+  --indigo-soft: #d9f6fb;
+  --amber: #b45309;
+  --amber-soft: #fdf0d7;
+  --ok: #059669;
+  --danger: #dc2626;
+  --danger-soft: #fdeaea;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 10px 24px rgba(0, 0, 0, 0.05),
+    0 32px 80px rgba(0, 0, 0, 0.1);
+}
+
+.dark {
+  --bg: #000000;
+  --card: #1a1a1a;
+  --ink: #ffffff;
+  --body-text: #d6d6d6;
+  --muted: #a3a3a3;
+  --faint: #666666;
+  --line: #2b2b2b;
+  --accent: #9d6bff;
+  --accent-strong: #bd9aff;
+  --accent-soft: #2a1b4d;
+  --indigo: #22d3ee;
+  --indigo-soft: #123a45;
+  --amber: #fbbf24;
+  --amber-soft: #362a0e;
+  --ok: #34d399;
+  --danger: #f87171;
+  --danger-soft: #3b1414;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.35),
+    0 36px 90px rgba(0, 0, 0, 0.45);
+}
+
+@theme inline {
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --color-app-bg: #f6f7f4;
-  --color-surface: #ffffff;
-  --color-surface-soft: #f0f5f1;
-  --color-ink: #18211f;
-  --color-muted: #63706b;
-  --color-line: #dce3df;
-  --color-accent: #0f8b7d;
-  --color-accent-strong: #0b6f65;
-  --color-accent-soft: #dff4ef;
-  --color-coral: #c85a3e;
-  --color-coral-soft: #fde7df;
-  --color-gold: #9c7418;
-  --color-gold-soft: #fff2cb;
-  --shadow-panel: 0 18px 50px rgba(32, 44, 39, 0.1);
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-body: var(--body-text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-indigo: var(--indigo);
+  --color-indigo-soft: var(--indigo-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-ok: var(--ok);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --shadow-panel: var(--shadow);
 }
 
 @layer base {
@@ -23,12 +75,18 @@
     color-scheme: light;
   }
 
+  .dark {
+    color-scheme: dark;
+  }
+
   body {
     margin: 0;
     min-width: 320px;
     min-height: 100vh;
-    background: linear-gradient(140deg, #f8f9f4 0%, #eef7f2 48%, #f8f0e9 100%);
-    @apply font-sans text-ink;
+    background: var(--bg);
+    color: var(--ink);
+    transition: background 0.25s ease, color 0.25s ease;
+    @apply font-sans;
   }
 
   button,
@@ -45,24 +103,179 @@
   input,
   select,
   textarea {
-    @apply w-full rounded-lg border border-line bg-white text-ink outline-none;
+    @apply box-border w-full rounded-lg border-[1.5px] border-line bg-card text-ink outline-none;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--faint);
   }
 
   input:focus,
   select:focus,
   textarea:focus {
-    @apply border-accent shadow-[0_0_0_3px_rgba(15,139,125,0.12)];
+    @apply border-accent;
   }
 
   input {
-    @apply min-h-10 px-3;
+    @apply min-h-[42px] px-3.5;
   }
 
   select {
-    @apply min-h-10 py-0 pr-[34px] pl-3;
+    @apply min-h-[42px] py-0 pr-8 pl-3;
   }
 
   textarea {
-    @apply min-h-[88px] resize-y p-3 leading-[1.45];
+    @apply min-h-[72px] resize-y p-3 leading-[1.45];
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes gull-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes gull-flap {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.5);
+  }
+}
+
+@keyframes gull-cruise {
+  0% {
+    transform: translate(-50%, -50%) translateX(-16px);
+  }
+  100% {
+    transform: translate(-50%, -50%) translateX(16px);
+  }
+}
+
+@keyframes gull-cross {
+  from {
+    left: -8%;
+  }
+  to {
+    left: 104%;
+  }
+}
+
+@keyframes auth-gull-liftoff {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  35% {
+    transform: translate(-5px, -13px);
+  }
+  65% {
+    transform: translate(3px, -9px);
+  }
+}
+
+@keyframes auth-gull-wing-left {
+  0%,
+  100% {
+    transform: rotate(20deg);
+  }
+  30% {
+    transform: rotate(4deg);
+  }
+  55% {
+    transform: rotate(-13deg);
+  }
+  80% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes auth-gull-wing-right {
+  0%,
+  100% {
+    transform: rotate(-20deg);
+  }
+  30% {
+    transform: rotate(-4deg);
+  }
+  55% {
+    transform: rotate(13deg);
+  }
+  80% {
+    transform: rotate(-5deg);
+  }
+}
+
+@keyframes auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.auth-perched-gull {
+  animation: gull-bob 3.4s ease-in-out infinite;
+}
+
+.auth-flying-gull {
+  animation: auth-gull-liftoff 1.6s ease-in-out infinite;
+}
+
+.auth-wing-left {
+  transform-origin: 16px 8px;
+  animation: auth-gull-wing-left 0.9s ease-in-out infinite;
+}
+
+.auth-wing-right {
+  transform-origin: 16px 8px;
+  animation: auth-gull-wing-right 0.9s ease-in-out infinite;
+}
+
+.auth-spinner {
+  animation: auth-spin 0.7s linear infinite;
+}
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fly-off {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(280px, -170px) scale(0.72) rotate(-8deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -24,13 +24,16 @@ locals {
   web_dist_dir           = "${path.module}/../../../../packages/seagulls/apps/web/dist"
   landing_dist_dir       = "${path.module}/../../../../packages/seagulls/apps/landing/dist"
   payload_objects_bucket = "${var.project}-${var.environment}-msg-payloads-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
-  lambda_src             = "${path.module}/../../../../packages/gulls/services/message-hub/aws/lambda_function.py"
-  agent_worker_src       = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
-  router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
-  mcp_connector_package  = "${path.module}/.terraform/build/mcp-connector/package"
-  ai_provider_package    = "${path.module}/.terraform/build/ai-provider/package"
-  safety_gateway_package = "${path.module}/.terraform/build/safety-gateway/package"
-  social_api_package     = "${path.module}/.terraform/build/social-api/package"
+  # Built by scripts/build-message-hub.sh: lambda_function.py + vendored
+  # message_hub and seagull_policy packages (the lambda is a thin adapter
+  # over the domain service and imports them at runtime).
+  message_hub_api_package = "${path.module}/.terraform/build/message-hub-api/package"
+  agent_worker_src        = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
+  router_bootstrap        = "${path.module}/.terraform/build/message-router/bootstrap"
+  mcp_connector_package   = "${path.module}/.terraform/build/mcp-connector/package"
+  ai_provider_package     = "${path.module}/.terraform/build/ai-provider/package"
+  safety_gateway_package  = "${path.module}/.terraform/build/safety-gateway/package"
+  social_api_package      = "${path.module}/.terraform/build/social-api/package"
   message_hub_tags = {
     Project     = var.project
     Environment = var.environment
@@ -41,6 +44,7 @@ locals {
   )
   message_hub_api_secret_arns = [
     aws_secretsmanager_secret.safety_gateway_admin.arn,
+    aws_secretsmanager_secret.guest_status_signing.arn,
   ]
   agent_worker_secret_arns = [
     aws_secretsmanager_secret.agent_webhook_signing.arn,
@@ -69,6 +73,19 @@ resource "aws_secretsmanager_secret" "agent_webhook_signing" {
 resource "aws_secretsmanager_secret_version" "agent_webhook_signing" {
   secret_id     = aws_secretsmanager_secret.agent_webhook_signing.id
   secret_string = var.agent_webhook_signing_secret
+}
+
+resource "aws_secretsmanager_secret" "guest_status_signing" {
+  name = "${local.message_hub_prefix}/runtime/guest-status-signing-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "message-hub-api"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "guest_status_signing" {
+  secret_id     = aws_secretsmanager_secret.guest_status_signing.id
+  secret_string = var.guest_status_signing_secret
 }
 
 resource "aws_secretsmanager_secret" "safety_gateway_admin" {
@@ -129,7 +146,7 @@ resource "aws_secretsmanager_secret_version" "mcp_dev_token" {
 
 data "archive_file" "message_hub_api" {
   type        = "zip"
-  source_file = local.lambda_src
+  source_dir  = local.message_hub_api_package
   output_path = "${path.module}/.terraform/build/message-hub-api.zip"
 }
 
@@ -272,6 +289,7 @@ resource "aws_lambda_function" "message_hub_api" {
       AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
       APP_NAME                        = local.message_hub_prefix
       DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
+      GUEST_STATUS_SIGNING_SECRET_ARN = aws_secretsmanager_secret.guest_status_signing.arn
       IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
       MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
       PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
@@ -906,6 +924,22 @@ resource "aws_apigatewayv2_route" "default" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+# Explicit routes for the guest-reachable public agent URL paths: stage-level
+# route_settings only throttle named routes, never $default, so these exist
+# purely to hang the tighter guest throttles on. Same integration, same
+# lambda dispatch.
+resource "aws_apigatewayv2_route" "public_agent_send" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "POST /agents/{name}/messages"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "public_agent_message_status" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "GET /agents/{name}/messages/{deliveryId}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
@@ -914,6 +948,18 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.public_agent_send.route_key
+    throttling_burst_limit = var.public_agent_send_throttling_burst_limit
+    throttling_rate_limit  = var.public_agent_send_throttling_rate_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.public_agent_message_status.route_key
+    throttling_burst_limit = var.public_agent_status_throttling_burst_limit
+    throttling_rate_limit  = var.public_agent_status_throttling_rate_limit
   }
 
   tags = {
@@ -1045,11 +1091,56 @@ module "ai_provider" {
   tags                           = local.message_hub_tags
 }
 
+resource "aws_ses_domain_identity" "social_auth" {
+  domain = var.root_domain
+}
+
+resource "aws_route53_record" "social_auth_ses_verification" {
+  zone_id = data.aws_route53_zone.root.zone_id
+  name    = "_amazonses.${aws_ses_domain_identity.social_auth.domain}"
+  type    = "TXT"
+  ttl     = 600
+  records = [aws_ses_domain_identity.social_auth.verification_token]
+}
+
+resource "aws_ses_domain_identity_verification" "social_auth" {
+  domain = aws_ses_domain_identity.social_auth.domain
+
+  depends_on = [aws_route53_record.social_auth_ses_verification]
+}
+
+resource "aws_ses_domain_dkim" "social_auth" {
+  domain = aws_ses_domain_identity.social_auth.domain
+}
+
+resource "aws_route53_record" "social_auth_ses_dkim" {
+  count = 3
+
+  zone_id = data.aws_route53_zone.root.zone_id
+  name    = "${aws_ses_domain_dkim.social_auth.dkim_tokens[count.index]}._domainkey"
+  type    = "CNAME"
+  ttl     = 600
+  records = ["${aws_ses_domain_dkim.social_auth.dkim_tokens[count.index]}.dkim.amazonses.com"]
+}
+
 resource "aws_cognito_user_pool" "social_web" {
-  name = "${local.social_api_prefix}-users"
+  name           = "${local.social_api_prefix}-users"
+  user_pool_tier = "ESSENTIALS"
 
   auto_verified_attributes = ["email"]
   username_attributes      = ["email"]
+
+  sign_in_policy {
+    # Cognito won't remove PASSWORD from an existing password-based pool.
+    # The web app only requests EMAIL_OTP, and new registrations omit passwords.
+    allowed_first_auth_factors = ["PASSWORD", "EMAIL_OTP"]
+  }
+
+  email_configuration {
+    email_sending_account = "DEVELOPER"
+    from_email_address    = "Seagulls <no-reply@${var.root_domain}>"
+    source_arn            = aws_ses_domain_identity_verification.social_auth.arn
+  }
 
   username_configuration {
     case_sensitive = false
@@ -1102,10 +1193,7 @@ resource "aws_cognito_user_pool_client" "social_web" {
   supported_identity_providers  = ["COGNITO"]
   prevent_user_existence_errors = "ENABLED"
   explicit_auth_flows = [
-    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
-    "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_PASSWORD_AUTH",
-    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_USER_AUTH",
   ]
   access_token_validity  = 1
   id_token_validity      = 1
@@ -1157,14 +1245,18 @@ module "web" {
   landing_dist_dir    = local.landing_dist_dir
   hosted_zone_id      = data.aws_route53_zone.root.zone_id
   message_api_url     = "https://${var.message_api_domain}"
-  social_api_url      = module.social_api.api_endpoint
-  ai_provider_api_url = module.ai_provider.api_endpoint
-  auth_mode           = "cognito"
-  auth_issuer         = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
-  auth_hosted_domain  = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
-  auth_client_id      = aws_cognito_user_pool_client.social_web.id
-  auth_redirect_uri   = "https://${var.web_domain_name}/auth/callback"
-  auth_logout_uri     = "https://${var.web_domain_name}/register"
+
+  # Apex public agent URLs (M3.1): route /agents/* and /.well-known/* on the
+  # landing distribution to the message API origin.
+  message_api_origin_domain = var.message_api_domain
+  social_api_url            = module.social_api.api_endpoint
+  ai_provider_api_url       = module.ai_provider.api_endpoint
+  auth_mode                 = "cognito"
+  auth_issuer               = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
+  auth_hosted_domain        = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
+  auth_client_id            = aws_cognito_user_pool_client.social_web.id
+  auth_redirect_uri         = "https://${var.web_domain_name}/auth/callback"
+  auth_logout_uri           = "https://${var.web_domain_name}/register"
 
   tags = local.message_hub_tags
 }

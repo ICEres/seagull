@@ -1,0 +1,7 @@
+{
+  "delivery_id": "delivery_ID",
+  "status": "quarantined",
+  "created_at": "TIMESTAMP",
+  "updated_at": "TIMESTAMP",
+  "thread_url": "/threads/thread_ID"
+}

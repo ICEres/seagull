@@ -266,6 +266,12 @@ class Agent:
     status: str = "active"
     trigger_mode: str = "manual"
     webhook_url: str | None = None
+    # Who may post into this agent's inbox through its public URL. Gates only
+    # the token-less guest path in this slice: "open" admits guests, anything
+    # else refuses them; "token_required" is reserved for later semantics and
+    # currently behaves exactly like "contacts_only". Registered senders are
+    # never gated by posture.
+    inbox_posture: str = "contacts_only"
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 

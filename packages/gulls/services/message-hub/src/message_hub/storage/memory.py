@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from datetime import datetime
 from threading import RLock
@@ -69,6 +70,8 @@ class InMemoryMessageHubRepository:
         self._tool_request_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_results_by_task: dict[str, list[TaskResultRecord]] = defaultdict(list)
         self._task_idempotency: dict[tuple[str, str], tuple[str, datetime | None]] = {}
+        # (scope_key, window_start_epoch) -> (count, ttl_epoch)
+        self._guest_send_counts: dict[tuple[str, int], tuple[int, int]] = {}
 
     def add_agent(self, agent: Agent) -> None:
         with self._lock:
@@ -90,6 +93,37 @@ class InMemoryMessageHubRepository:
             if agent_id is None:
                 return None
             return self._agents_by_id[agent_id]
+
+    def update_agent(self, agent: Agent) -> None:
+        with self._lock:
+            existing = self._agents_by_id.get(agent.agent_id)
+            if existing is None:
+                raise ValueError(f"agent does not exist: {agent.agent_id}")
+            if existing.handle != agent.handle:
+                raise ValueError(f"agent handle is immutable: {existing.handle}")
+            self._agents_by_id[agent.agent_id] = agent
+
+    def increment_guest_send_count(
+        self,
+        scope_key: str,
+        window_start_epoch: int,
+        *,
+        ttl_epoch: int,
+    ) -> int:
+        now = int(time.time())
+        with self._lock:
+            expired = [
+                key
+                for key, (_, expires_at) in self._guest_send_counts.items()
+                if expires_at <= now
+            ]
+            for key in expired:
+                del self._guest_send_counts[key]
+
+            key = (scope_key, int(window_start_epoch))
+            count = self._guest_send_counts.get(key, (0, 0))[0] + 1
+            self._guest_send_counts[key] = (count, int(ttl_epoch))
+            return count
 
     def put_agent_token(self, token: AgentTokenRecord) -> None:
         with self._lock:

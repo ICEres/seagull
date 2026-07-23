@@ -40,7 +40,10 @@ struct MainWindow: View {
                 DraftReplyView(store: store, deliveryID: item.id)
             }
         }
-        .task {
+        // Keyed on isConfigured so finishing first-run Settings starts
+        // polling/streaming right away — a plain .task would only ever run
+        // once, leaving a freshly configured app idle until relaunch.
+        .task(id: store.config.isConfigured) {
             guard store.config.isConfigured else {
                 openSettings()
                 return
@@ -159,13 +162,18 @@ struct MainWindow: View {
 
     private var statusSymbol: String {
         if store.isRefreshing { return "arrow.triangle.2.circlepath" }
-        return store.streamState == .off ? "circle.fill" : "bolt.fill"
+        switch store.streamState {
+        case .off: return "circle.fill"
+        case .failed: return "bolt.slash.fill"
+        default: return "bolt.fill"
+        }
     }
 
     private var statusColor: Color {
         switch store.streamState {
         case .connected: return .green
         case .connecting, .down: return .orange
+        case .failed: return .red
         case .off: return store.lastError == nil ? .secondary : .red
         }
     }
@@ -175,6 +183,7 @@ struct MainWindow: View {
         case .connected: return "Connected via stream — new deliveries arrive instantly"
         case .connecting: return "Stream connecting — polling in the meantime"
         case .down: return "Stream down — falling back to polling"
+        case .failed(let message): return "Stream disabled (\(message)) — polling only; check Settings"
         case .off: return "Polling every \(Int(max(store.config.pollInterval, 5)))s (no stream URL configured)"
         }
     }

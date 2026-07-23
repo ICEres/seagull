@@ -36,11 +36,20 @@ struct WhoamiResponse: Decodable, Equatable {
     }
 
     init(from decoder: Decoder) throws {
-        let container = try? decoder.container(keyedBy: CodingKeys.self)
-        if let nested = try? container?.decode(Agent.self, forKey: .agent) {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let nested = try container.decodeIfPresent(Agent.self, forKey: .agent) {
             agent = nested
         } else {
             agent = try Agent(from: decoder)
+        }
+        // Every Agent field is optional, so any JSON object would "decode".
+        // Require at least one identity field so contract drift fails loudly
+        // instead of showing "Connected as unknown handle".
+        guard firstNonEmpty(agent.agentId, agent.handle) != nil else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "whoami output contains neither agent_id nor handle"
+            ))
         }
     }
 }
@@ -72,6 +81,17 @@ struct InboxItem: Decodable, Equatable, Identifiable {
     }
 }
 
+// The delivery lifecycle states this build knows about. Decoding keeps the
+// raw string (the hub may grow states we don't know yet); filtering, badge
+// colors, and notification logic all switch on this one definition.
+enum DeliveryStatus: String {
+    case delivered
+    case replied
+    case acked
+    case ignored
+    case failed
+}
+
 struct Delivery: Decodable, Equatable {
     let deliveryId: String
     let messageId: String?
@@ -97,6 +117,11 @@ struct Delivery: Decodable, Equatable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case ackedAt = "acked_at"
+    }
+
+    // nil when the hub sent no status or one this build doesn't know.
+    var statusValue: DeliveryStatus? {
+        status.flatMap(DeliveryStatus.init(rawValue:))
     }
 }
 
@@ -264,4 +289,32 @@ func firstNonEmpty(_ values: String?...) -> String? {
         }
     }
     return nil
+}
+
+// Hub timestamps arrive in more than one ISO 8601 flavor: the Go hubstub
+// emits second-precision RFC 3339 ("…T09:15:23Z"), while the real hub's
+// datetime_to_string uses Python isoformat() — microseconds plus a "+00:00"
+// offset. Formatters are cached; building one per row render is expensive.
+enum GullsDates {
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let plain = ISO8601DateFormatter()
+
+    static func parse(_ raw: String) -> Date? {
+        if let date = plain.date(from: raw) ?? fractional.date(from: raw) {
+            return date
+        }
+        // ISO8601DateFormatter is strict about fractional-second width;
+        // Python emits 6 digits. Drop the fraction and parse the rest.
+        if let fraction = raw.range(of: #"\.\d+"#, options: .regularExpression) {
+            var trimmed = raw
+            trimmed.removeSubrange(fraction)
+            return plain.date(from: trimmed)
+        }
+        return nil
+    }
 }

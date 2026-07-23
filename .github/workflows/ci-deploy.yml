@@ -34,6 +34,7 @@ env:
   TF_VAR_mcp_connector_admin_secret: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
   TF_VAR_mcp_dev_token: ${{ secrets.MCP_DEV_TOKEN }}
   TF_VAR_safety_gateway_admin_secret: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
+  TF_VAR_guest_status_signing_secret: ${{ secrets.GUEST_STATUS_SIGNING_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   AGENT_WEBHOOK_SIGNING_SECRET: ${{ secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   AI_PROVIDER_ADMIN_SECRET: ${{ secrets.AI_PROVIDER_ADMIN_SECRET }}
   MCP_CONNECTOR_ADMIN_SECRET: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
@@ -210,6 +211,7 @@ jobs:
         run: |
           make safety-gateway-build
           make ai-provider-build
+          make message-hub-build
           make mcp-connector-build
 
       - name: Upload Gulls Lambda package artifacts
@@ -219,6 +221,7 @@ jobs:
           path: |
             infra/terraform/envs/dev/.terraform/build/safety-gateway/package
             infra/terraform/envs/dev/.terraform/build/ai-provider/package
+            infra/terraform/envs/dev/.terraform/build/message-hub-api/package
             infra/terraform/envs/dev/.terraform/build/mcp-connector/package
           if-no-files-found: error
           retention-days: 1
@@ -346,6 +349,8 @@ jobs:
           test -f infra/terraform/envs/dev/.terraform/build/safety-gateway/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/ai-provider/package/ai_worker.py
+          test -f infra/terraform/envs/dev/.terraform/build/message-hub-api/package/lambda_function.py
+          test -d infra/terraform/envs/dev/.terraform/build/message-hub-api/package/message_hub
           test -f infra/terraform/envs/dev/.terraform/build/mcp-connector/package/lambda_function.py
           test -f infra/terraform/envs/dev/.terraform/build/social-api/package/lambda_function.py
           test -x infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
@@ -395,45 +400,42 @@ jobs:
         working-directory: infra/terraform/envs/dev
         run: terraform apply -input=false -auto-approve tfplan
 
-      - name: Create social smoke token
+      - name: Verify email-code auth configuration
         shell: bash
         run: |
           set -euo pipefail
 
           USER_POOL_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_user_pool_id)"
           CLIENT_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_client_id)"
-          USERNAME="ci-social-smoke@example.com"
-          PASSWORD="$(python3 -c 'import secrets, string; alphabet = string.ascii_letters + string.digits; print("".join(secrets.choice(alphabet) for _ in range(32)) + "Aa1")')"
-
-          if ! aws cognito-idp admin-get-user --user-pool-id "$USER_POOL_ID" --username "$USERNAME" >/dev/null 2>&1; then
-            aws cognito-idp admin-create-user \
-              --user-pool-id "$USER_POOL_ID" \
-              --username "$USERNAME" \
-              --user-attributes Name=email,Value="$USERNAME" Name=email_verified,Value=true \
-              --message-action SUPPRESS
-          fi
-
-          aws cognito-idp admin-set-user-password \
+          USER_POOL_TIER="$(aws cognito-idp describe-user-pool \
             --user-pool-id "$USER_POOL_ID" \
-            --username "$USERNAME" \
-            --password "$PASSWORD" \
-            --permanent
-
-          TOKEN_JSON="$(aws cognito-idp initiate-auth \
-            --auth-flow USER_PASSWORD_AUTH \
+            --query 'UserPool.UserPoolTier' \
+            --output text)"
+          AUTH_FACTORS="$(aws cognito-idp describe-user-pool \
+            --user-pool-id "$USER_POOL_ID" \
+            --query 'UserPool.Policies.SignInPolicy.AllowedFirstAuthFactors' \
+            --output text)"
+          EMAIL_SENDER="$(aws cognito-idp describe-user-pool \
+            --user-pool-id "$USER_POOL_ID" \
+            --query 'UserPool.EmailConfiguration.EmailSendingAccount' \
+            --output text)"
+          CLIENT_FLOWS="$(aws cognito-idp describe-user-pool-client \
+            --user-pool-id "$USER_POOL_ID" \
             --client-id "$CLIENT_ID" \
-            --auth-parameters USERNAME="$USERNAME",PASSWORD="$PASSWORD")"
-          ID_TOKEN="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["AuthenticationResult"]["IdToken"])' <<<"$TOKEN_JSON")"
+            --query 'UserPoolClient.ExplicitAuthFlows' \
+            --output text)"
 
-          echo "::add-mask::$ID_TOKEN"
-          echo "SOCIAL_API_BEARER_TOKEN=$ID_TOKEN" >> "$GITHUB_ENV"
+          test "$USER_POOL_TIER" = "ESSENTIALS"
+          test "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" = "1"
+          test "$EMAIL_SENDER" = "DEVELOPER"
+          test "$CLIENT_FLOWS" = "ALLOW_USER_AUTH"
 
       - name: Smoke dev deploy
         run: |
           make aws-dev-smoke
           make aws-dev-safety-smoke
-          make aws-dev-ai-smoke
-          make aws-dev-social-smoke
+          AI_PROVIDER_ADMIN_SECRET="" make aws-dev-ai-smoke
+          SOCIAL_SMOKE_HEALTH_ONLY=1 make aws-dev-social-smoke
           make aws-dev-web-smoke
           make aws-dev-router-smoke
           make aws-dev-push-smoke

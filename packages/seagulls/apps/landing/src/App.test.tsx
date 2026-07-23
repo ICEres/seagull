@@ -14,6 +14,7 @@ afterEach(async () => {
   }
   document.body.innerHTML = "";
   document.body.classList.remove("sending");
+  document.body.classList.remove("flying");
   document.documentElement.classList.remove("dark");
   window.localStorage.clear();
   window.SEAGULL_CONFIG = undefined;
@@ -29,9 +30,20 @@ describe("landing App", () => {
     expect(container.textContent).toContain("@you");
     expect(container.textContent).toContain("sea.gulls.ai");
     expect(container.querySelectorAll(".sky .gull[data-handle]")).toHaveLength(4);
+    expect(container.querySelectorAll(".sky .gull[data-handle] .dot")).toHaveLength(4);
     expect(container.querySelectorAll(".sky .gull.ambient")).toHaveLength(18);
     expect(container.querySelector("#gull-seagull")?.classList.contains("active")).toBe(true);
+    expect(container.querySelector("#gull-researcher")?.getAttribute("data-status")).toBe("busy");
     expect(container.querySelectorAll("#targetSelect option")).toHaveLength(5);
+  });
+
+  it("gives each agent its own wing silhouette", () => {
+    const container = renderApp();
+
+    const pathFor = (id: string) =>
+      container.querySelector(`#${id} .bob path`)?.getAttribute("d");
+    const paths = ["gull-seagull", "gull-researcher", "gull-planner", "gull-reviewer"].map(pathFor);
+    expect(new Set(paths).size).toBe(4);
   });
 
   it("runs the provider demo flow and marks the message delivered", async () => {
@@ -57,6 +69,7 @@ describe("landing App", () => {
     );
     expect(container.textContent).toContain("hello gulls");
     expect(container.textContent).toContain("stored by the gulls layer · prompt snapshot · skill snapshot");
+    expect(container.textContent).toContain("@seagull ·");
     expect(container.querySelector(".tick")?.textContent).toBe("✓✓");
     expect(container.querySelector("#continueLink")?.hasAttribute("hidden")).toBe(false);
     expect(container.querySelector("#hero-title")?.hasAttribute("hidden")).toBe(true);
@@ -77,6 +90,25 @@ describe("landing App", () => {
     const container = renderApp();
     submitMessage(container, "hello gulls");
     await waitForText(container, "Provider offline.");
+
+    expect(container.querySelector(".tick")).toBeNull();
+  });
+
+  it("falls back to the stored-message copy when the provider is unreachable", async () => {
+    window.SEAGULL_CONFIG = { aiProviderApiUrl: "https://ai.example.test" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+
+    const container = renderApp();
+    submitMessage(container, "hello gulls");
+    await waitForText(
+      container,
+      "Provider delivery is unavailable for this demo run, so the message stays stored with its asset snapshot for connector handling.",
+    );
 
     expect(container.querySelector(".tick")).toBeNull();
   });
@@ -131,7 +163,7 @@ describe("landing App", () => {
     await waitForText(container, "Demo reply from provider.");
 
     expect(original.classList.contains("carrying")).toBe(false);
-    expect(original.querySelector(".tag")?.textContent).toBe("@seagull");
+    expect(original.querySelector(".tag")?.textContent).toBe("@seagull · online");
   });
 
   it("retargets the demo from the sky gulls", () => {

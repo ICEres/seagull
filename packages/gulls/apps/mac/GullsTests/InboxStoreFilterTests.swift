@@ -4,8 +4,30 @@ import XCTest
 @MainActor
 final class InboxStoreFilterTests: XCTestCase {
 
+    private var tmp: URL!
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUpWithError() throws {
+        tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("InboxStoreFilterTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        suiteName = "filter-tests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)!
+    }
+
+    override func tearDownWithError() throws {
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: tmp)
+    }
+
     private func makeStore() -> InboxStore {
-        InboxStore(cli: nil, config: GullsConfig(defaults: UserDefaults(suiteName: "filter-tests")!), notifier: Notifier())
+        InboxStore(
+            cli: nil,
+            config: GullsConfig(defaults: defaults),
+            notifier: Notifier(),
+            notifiedStore: NotifiedSetStore(url: tmp.appendingPathComponent("notified.json"))
+        )
     }
 
     private func item(_ id: String, status: String, sender: String = "agent_alice", body: String = "hello") throws -> InboxItem {
@@ -43,6 +65,21 @@ final class InboxStoreFilterTests: XCTestCase {
         XCTAssertEqual(store.filteredItems.map(\.id), ["d2"])
         store.filter = .all
         XCTAssertEqual(store.filteredItems.count, 3)
+    }
+
+    func testUnknownStatusOnlyAppearsUnderAll() throws {
+        // The hub may grow states this build doesn't know; they must not be
+        // mistaken for any known state, but "All" still shows them.
+        let store = makeStore()
+        store.items = [
+            try item("d1", status: "delivered"),
+            try item("d2", status: "quarantined"),
+        ]
+
+        XCTAssertEqual(store.filteredItems.map(\.id), ["d1"])
+        XCTAssertEqual(store.awaitingCount, 1)
+        store.filter = .all
+        XCTAssertEqual(store.filteredItems.count, 2)
     }
 
     func testSearchMatchesSenderAndBodyCaseInsensitively() throws {

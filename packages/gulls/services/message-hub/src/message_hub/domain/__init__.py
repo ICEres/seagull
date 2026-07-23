@@ -56,6 +56,9 @@ from message_hub.domain.models import (
 )
 from message_hub.domain.service import (
     AGENT_TOKEN_SCOPES,
+    GUEST_HANDLE_PREFIX,
+    INBOX_POSTURES,
+    RESERVED_PUBLIC_AGENT_NAMES,
     DuplicateAgentHandleError,
     AgentTokenVerificationError,
     ForbiddenDeliveryError,
@@ -67,8 +70,15 @@ from message_hub.domain.service import (
     MessageHubService,
     NotFoundError,
     PayloadUnavailableError,
+    PostureNotOpenError,
+    guest_callback_domain,
+    normalize_guest_callback_url,
 )
-from message_hub.domain.safety import LocalSafetyEvaluator, SafetyBlockedError
+from message_hub.domain.safety import (
+    GuestSafetyEvaluator,
+    LocalSafetyEvaluator,
+    SafetyBlockedError,
+)
 
 __all__ = [
     "Agent",
@@ -87,6 +97,9 @@ __all__ = [
     "DuplicateAgentHandleError",
     "ForbiddenDeliveryError",
     "ForbiddenPayloadError",
+    "GUEST_HANDLE_PREFIX",
+    "GuestSafetyEvaluator",
+    "INBOX_POSTURES",
     "InboxItem",
     "InvalidMessageError",
     "InvalidTaskTransitionError",
@@ -102,6 +115,8 @@ __all__ = [
     "PayloadRecord",
     "PayloadRetentionWorkerResult",
     "PayloadUnavailableError",
+    "PostureNotOpenError",
+    "RESERVED_PUBLIC_AGENT_NAMES",
     "RoutingRule",
     "RoutingRuleMode",
     "SafetyBlockedError",
@@ -132,6 +147,8 @@ __all__ = [
     "WorkflowTraceEntry",
     "AGENT_TOKEN_SCOPES",
     "delivery_created_event",
+    "guest_callback_domain",
+    "normalize_guest_callback_url",
     "sign_webhook_body",
     "task_lifecycle_allows",
     "task_lifecycle_next_states",

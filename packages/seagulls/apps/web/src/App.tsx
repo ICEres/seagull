@@ -1,152 +1,88 @@
-import {
-  Activity,
-  Bell,
-  DoorOpen,
-  Flag,
-  GitBranch,
-  Home,
-  Inbox,
-  LayoutDashboard,
-  LogIn,
-  LogOut,
-  MessageCircle,
-  MessagesSquare,
-  RefreshCw,
-  Route as RouteIcon,
-  Settings,
-  Trash2,
-  UserRound,
-  WandSparkles,
-} from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
-import { AdminPage } from "./components/admin-pages";
-import { DashboardPage } from "./components/dashboard-page";
-import { AgentLifecycleInboxPage, RoutingRulesPage } from "./components/message-lifecycle-pages";
-import {
-  ChatPage,
-  FeedPage,
-  InboxPage,
-  ProfilePage,
-  RoomPage,
-  ThreadPage,
-} from "./components/social-pages";
-import {
-  NavItem,
-  NoticeBanner,
-  ProtectedRoute,
-  StatusPill,
-  type Notice,
-} from "./components/shared";
-import { SocialApiClient, SocialApiError, trimBaseUrl } from "./lib/api";
+import { ChatPage } from "./components/chat-page";
+import { FlockPage } from "./components/flock-page";
+import { Wing, YOUR_WING } from "./components/gulls";
+import { ServerPage } from "./components/server-page";
+import { SkyPage } from "./components/sky-page";
+import { NoticeBanner, ProtectedRoute, identityName, type Notice } from "./components/shared";
+import { SocialApiClient, SocialApiError } from "./lib/api";
 import { configuredAiProviderApiUrl } from "./lib/ai-provider";
 import {
   clearAuthSession,
-  completeHostedCallback,
   configuredAuth,
-  hostedLogoutUrl,
   isSessionActive,
   loadAuthSession,
-  type AuthConfig,
   type AuthSession,
 } from "./lib/auth";
 import { createFirstLoop } from "./lib/demo";
 import { configuredMessageApiUrl, MessageHubClient } from "./lib/message-hub";
-import type {
-  AgentProfile,
-  HumanIdentity,
-  LoopState,
-  ModerationRecord,
-  Post,
-} from "./lib/social";
+import type { AgentProfile, HumanIdentity, LoopState, ModerationRecord, Post } from "./lib/social";
 import {
   clearLoopState,
   loadLoopState,
   mergePosts,
-  routeHandle,
   saveLoopState,
   touchLoopState,
 } from "./lib/state";
+import {
+  applyTheme,
+  loadThemePreference,
+  resolveTheme,
+  saveThemePreference,
+  type ThemePreference,
+} from "./lib/theme";
 
 type AppMutationError = Error | SocialApiError;
 
-function AuthCallbackPage({
-  authConfig,
-  postAuthPath,
-  onSession,
-  onNotice,
-}: {
-  authConfig: AuthConfig;
-  postAuthPath: string;
-  onSession: (session: AuthSession) => void;
-  onNotice: (notice: Notice) => void;
-}) {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (authConfig.mode !== "cognito") {
-      onNotice({ tone: "error", message: "Cognito auth is not configured." });
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    const callbackUrl = `${window.location.origin}${location.pathname}${location.search}`;
-    let cancelled = false;
-
-    void completeHostedCallback(authConfig, callbackUrl)
-      .then((session) => {
-        if (cancelled) {
-          return;
-        }
-        onSession(session);
-        onNotice({ tone: "ok", message: "Signed in." });
-        navigate(postAuthPath, { replace: true });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        clearAuthSession();
-        onNotice({ tone: "error", message: error instanceof Error ? error.message : "Sign in failed." });
-        navigate("/login", { replace: true });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authConfig, location.pathname, location.search, navigate, onNotice, onSession, postAuthPath]);
-
-  return (
-    <section className="grid min-h-40 place-items-center rounded-lg border border-line bg-surface px-[22px] py-8 shadow-panel">
-      <div className="inline-flex items-center gap-2 font-extrabold text-ink">
-        <LogIn size={18} />
-        Signing in
-      </div>
-    </section>
-  );
-}
+const NAV_ITEMS: Array<{ to: string; label: string }> = [
+  { to: "/sky", label: "Sky" },
+  { to: "/chat", label: "Chat" },
+  { to: "/flock", label: "Flock" },
+  { to: "/server", label: "Server" },
+];
 
 export default function App() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
   const authConfig = useMemo(() => configuredAuth(), []);
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuthSession());
   const [state, setState] = useState<LoopState>(() => loadLoopState());
-  const [apiDraft, setApiDraft] = useState(state.apiUrl);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const messageApiUrl = useMemo(() => configuredMessageApiUrl(), []);
   const aiProviderApiUrl = useMemo(() => configuredAiProviderApiUrl(), []);
   const adminDomainName = window.SEAGULL_CONFIG?.adminDomainName?.trim() ?? "";
   const defaultAuthenticatedPath =
-    adminDomainName && window.location.hostname === adminDomainName ? "/admin" : "/dashboard";
+    adminDomainName && window.location.hostname === adminDomainName ? "/server" : "/sky";
   const activeAuthSession =
     authConfig.mode === "cognito" && isSessionActive(authSession) ? authSession : null;
   const isAuthenticated =
     authConfig.mode === "local" ? Boolean(state.activeUser) : Boolean(activeAuthSession);
+  const resolvedTheme = resolveTheme(themePreference);
+  const resetAuthenticatedState = useCallback(() => {
+    clearAuthSession();
+    queryClient.clear();
+    setAuthSession(null);
+    setState(clearLoopState());
+  }, [queryClient]);
+
+  useEffect(() => {
+    applyTheme(themePreference);
+    if (themePreference !== "system" || !window.matchMedia) {
+      return;
+    }
+    // Follow OS theme changes while the preference is "system".
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme("system");
+    media.addEventListener?.("change", onChange);
+    return () => media.removeEventListener?.("change", onChange);
+  }, [themePreference]);
 
   useEffect(() => {
     saveLoopState(state);
@@ -154,11 +90,10 @@ export default function App() {
 
   useEffect(() => {
     if (authConfig.mode === "cognito" && authSession && !isSessionActive(authSession)) {
-      clearAuthSession();
-      setAuthSession(null);
+      resetAuthenticatedState();
       setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
     }
-  }, [authConfig.mode, authSession]);
+  }, [authConfig.mode, authSession, resetAuthenticatedState]);
 
   const api = useMemo(
     () => new SocialApiClient(state.apiUrl, activeAuthSession?.accessToken ?? null),
@@ -256,23 +191,18 @@ export default function App() {
     mutationFn: () => createFirstLoop(api),
     onSuccess: (nextState) => {
       setState(nextState);
-      setApiDraft(nextState.apiUrl);
       setNotice({ tone: "ok", message: "First social loop created." });
       void queryClient.invalidateQueries({ queryKey: ["social-feed"] });
       void queryClient.invalidateQueries({ queryKey: ["social-notifications"] });
       void queryClient.invalidateQueries({ queryKey: ["social-moderation"] });
-      if (nextState.selectedPostId) {
-        navigate(`/threads/${nextState.selectedPostId}`);
-      }
+      navigate("/sky");
     },
     onError: (error: AppMutationError) => {
       setNotice({ tone: "error", message: error.message });
     },
   });
 
-  function updateApiUrl(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextUrl = trimBaseUrl(apiDraft);
+  function applyApiUrl(nextUrl: string) {
     setState((current) => touchLoopState({ ...current, apiUrl: nextUrl }));
     setNotice({ tone: "ok", message: "API endpoint updated." });
     void queryClient.invalidateQueries();
@@ -281,7 +211,6 @@ export default function App() {
   function clearSession() {
     const nextState = clearLoopState();
     setState(nextState);
-    setApiDraft(nextState.apiUrl);
     setNotice({ tone: "warn", message: "Local browser state cleared." });
     navigate("/");
   }
@@ -337,29 +266,18 @@ export default function App() {
     // transient network error or a 5xx must not destroy a valid session.
     const isAuthError = error instanceof SocialApiError && (error.status === 401 || error.status === 403);
     if (isAuthError) {
-      clearAuthSession();
-      setAuthSession(null);
+      resetAuthenticatedState();
       setNotice({ tone: "error", message: "Your session expired. Please sign in again." });
       return;
     }
     setNotice({
       tone: "error",
-      message: error instanceof Error ? error.message : "Could not load your dashboard.",
+      message: error instanceof Error ? error.message : "Could not load your sky.",
     });
-  }, [authConfig.mode, dashboardQuery.error]);
+  }, [authConfig.mode, dashboardQuery.error, resetAuthenticatedState]);
 
   function signOut() {
-    clearAuthSession();
-    setAuthSession(null);
-    const nextState = clearLoopState();
-    setState(nextState);
-    setApiDraft(nextState.apiUrl);
-    if (authConfig.mode === "cognito") {
-      // Also end the Cognito Hosted UI session; otherwise the next sign-in
-      // silently re-authenticates the same user without a real login.
-      window.location.assign(hostedLogoutUrl(authConfig));
-      return;
-    }
+    resetAuthenticatedState();
     setNotice({ tone: "warn", message: "Signed out." });
     navigate("/login");
   }
@@ -374,8 +292,10 @@ export default function App() {
     );
   }
 
-  function rememberModeration(record: ModerationRecord) {
-    setState((current) => touchLoopState({ ...current, moderation: record }));
+  function toggleTheme() {
+    const next: ThemePreference = resolvedTheme === "dark" ? "light" : "dark";
+    setThemePreference(next);
+    saveThemePreference(next);
   }
 
   const notifications = [
@@ -388,27 +308,34 @@ export default function App() {
     ? mergePosts(dashboardSummary.feed.items, state.posts)
     : posts;
   const dashboardNotifications = dashboardSummary?.notifications.items ?? notifications;
-  const dashboardModerationRecords = dashboardSummary?.moderation.items ?? moderationQuery.data?.items ?? [];
-  const dashboardProfileCount = dashboardSummary?.profiles.count ?? dashboardProfiles.length;
-  const dashboardNotificationCount = dashboardSummary?.notifications.unread_count ?? notifications.length;
-  const dashboardModerationCount = dashboardSummary?.moderation.count ?? moderationQuery.data?.items.length ?? 0;
+  const moderationRecords: ModerationRecord[] =
+    dashboardSummary?.moderation.items ?? moderationQuery.data?.items ?? [];
+  const unreadMentions =
+    dashboardSummary?.notifications.unread_count ??
+    notifications.filter((notification) => !notification.read_at).length;
 
   if (!isAuthenticated) {
     return (
-      <main className="grid min-h-screen content-center justify-items-center px-5 py-8 [&>div]:w-[min(100%,480px)] [&>section]:w-[min(100%,480px)]">
-        {notice ? <NoticeBanner notice={notice} onClose={() => setNotice(null)} /> : null}
+      <main className="min-h-screen">
+        {notice ? (
+          <div className="fixed top-4 left-1/2 z-20 w-[min(480px,90vw)] -translate-x-1/2">
+            <NoticeBanner notice={notice} onClose={() => setNotice(null)} />
+          </div>
+        ) : null}
         <Routes>
           <Route index element={<Navigate to="/login" replace />} />
           <Route
             path="/login"
             element={
               <LoginPage
-                apiUrl={state.apiUrl}
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
+                resolvedTheme={resolvedTheme}
+                onToggleTheme={toggleTheme}
                 onLocalIdentity={(identity) => rememberUser(identity)}
+                onAuthSession={setAuthSession}
                 onNotice={setNotice}
               />
             }
@@ -417,242 +344,141 @@ export default function App() {
             path="/register"
             element={
               <RegisterPage
-                apiUrl={state.apiUrl}
                 api={api}
                 authConfig={authConfig}
                 isAuthenticated={isAuthenticated}
                 postAuthPath={defaultAuthenticatedPath}
+                resolvedTheme={resolvedTheme}
+                onToggleTheme={toggleTheme}
                 onLocalIdentity={(identity) => rememberUser(identity)}
+                onAuthSession={setAuthSession}
                 onNotice={setNotice}
               />
             }
           />
-          <Route
-            path="/auth/callback"
-            element={
-              <AuthCallbackPage
-                authConfig={authConfig}
-                postAuthPath={defaultAuthenticatedPath}
-                onSession={setAuthSession}
-                onNotice={setNotice}
-              />
-            }
-          />
+          <Route path="/auth/callback" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </main>
     );
   }
 
+  const skyCount = unreadMentions;
+
   return (
-    <div className="grid min-h-screen grid-cols-[256px_minmax(0,1fr)] max-[980px]:grid-cols-1">
-      <aside className="sticky top-0 flex h-screen flex-col border-r border-line bg-[#fbfcfa] px-4 py-[22px] max-[980px]:static max-[980px]:h-auto">
-        <div className="mb-7 flex min-h-11 items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-accent font-extrabold text-white" aria-hidden="true">
+    <div className="grid min-h-screen grid-cols-[208px_minmax(0,1fr)] max-[860px]:grid-cols-1">
+      <aside className="sticky top-0 box-border flex h-screen flex-col gap-8 border-r border-line px-3.5 pt-6 pb-5 max-[860px]:static max-[860px]:h-auto max-[860px]:flex-row max-[860px]:items-center max-[860px]:gap-4 max-[860px]:border-r-0 max-[860px]:border-b max-[860px]:py-3">
+        <div className="flex items-center gap-2.5 px-2.5">
+          <span className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-accent text-[0.85rem] font-black text-white">
             S
-          </div>
-          <div>
-            <strong className="block">seagulls</strong>
-            <span className="block text-[0.82rem] text-muted">Phase 4</span>
-          </div>
+          </span>
+          <strong className="font-extrabold tracking-[-0.01em] max-[860px]:hidden">seagulls</strong>
         </div>
 
-        <nav className="grid gap-1.5 max-[980px]:grid-cols-10" aria-label="Primary">
-          <NavItem to="/dashboard" icon={<LayoutDashboard size={18} />} label="Dashboard" />
-          <NavItem to="/feed" icon={<Home size={18} />} label="Feed" />
-          <NavItem
-            to={
-              state.activeProfile
-                ? `/profiles/${routeHandle(state.activeProfile.handle)}`
-                : "/profiles/none"
-            }
-            icon={<UserRound size={18} />}
-            label="Profile"
-          />
-          <NavItem to="/chat" icon={<MessageCircle size={18} />} label="Chat" />
-          <NavItem
-            to={state.selectedPostId ? `/threads/${state.selectedPostId}` : "/threads/none"}
-            icon={<MessagesSquare size={18} />}
-            label="Thread"
-          />
-          <NavItem
-            to={state.room ? `/rooms/${state.room.slug}` : "/rooms/none"}
-            icon={<DoorOpen size={18} />}
-            label="Room"
-          />
-          <NavItem to="/inbox" icon={<Inbox size={18} />} label="Inbox" />
-          <NavItem to="/agent-inbox" icon={<GitBranch size={18} />} label="Agent inbox" />
-          <NavItem to="/routing" icon={<RouteIcon size={18} />} label="Routing" />
-          <NavItem to="/admin" icon={<Settings size={18} />} label="Admin" />
+        <nav aria-label="Primary" className="grid gap-0.5 max-[860px]:flex max-[860px]:gap-1">
+          {NAV_ITEMS.map((item) => {
+            const current = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+            return (
+              <button
+                key={item.to}
+                type="button"
+                onClick={() => {
+                  navigate(item.to);
+                  window.scrollTo(0, 0);
+                }}
+                aria-current={current ? "page" : undefined}
+                className={`flex min-h-10 items-center gap-2 rounded-lg border-0 bg-transparent px-2.5 text-left text-[0.94rem] font-extrabold hover:text-accent-strong ${
+                  current ? "text-ink" : "text-muted"
+                }`}
+              >
+                <span aria-hidden="true" className="grid w-5 flex-none justify-items-center">
+                  {current ? <Wing path={YOUR_WING} size={16} strokeWidth={3.2} className="text-ink" /> : null}
+                </span>
+                <span className="flex-1">{item.label}</span>
+                {item.to === "/sky" && skyCount > 0 ? (
+                  <span className="grid min-w-5 place-items-center rounded-full bg-accent-soft px-1.5 py-0 text-[0.7rem] font-black text-accent-strong">
+                    {skyCount}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </nav>
 
-        <div className="mt-auto grid gap-2.5 max-[980px]:mt-[18px] max-[980px]:grid-cols-2">
-          {authConfig.mode === "local" ? (
-            <button
-              className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border-0 bg-accent px-3.5 font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58]"
-              type="button"
-              onClick={() => seedMutation.mutate()}
-              disabled={seedMutation.isPending}
-            >
-              <WandSparkles size={16} />
-              {seedMutation.isPending ? "Creating" : "Seed loop"}
-            </button>
+        <div className="mt-auto grid gap-3.5 max-[860px]:mt-0 max-[860px]:ml-auto max-[860px]:flex max-[860px]:items-center">
+          {state.activeUser ? (
+            <div className="flex items-center gap-2.5 px-2.5 max-[860px]:hidden">
+              <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
+                <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
+              </span>
+              <span className="min-w-0">
+                <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
+                  {identityName(state.activeUser)}
+                </strong>
+                <span className="block text-[0.74rem] font-bold text-faint">human · your gull</span>
+              </span>
+            </div>
           ) : null}
-          {isAuthenticated ? (
-            <button className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58]" type="button" onClick={signOut}>
-              <LogOut size={16} />
+          {authConfig.mode === "local" ? (
+            <div className="grid gap-1 px-1.5 max-[860px]:hidden">
+              <button
+                type="button"
+                onClick={() => seedMutation.mutate()}
+                disabled={seedMutation.isPending}
+                className="min-h-8 rounded-lg border-0 bg-transparent px-1.5 text-left text-[0.78rem] font-extrabold text-faint hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {seedMutation.isPending ? "Seeding…" : "Seed demo loop"}
+              </button>
+              <button
+                type="button"
+                onClick={clearSession}
+                className="min-h-8 rounded-lg border-0 bg-transparent px-1.5 text-left text-[0.78rem] font-extrabold text-faint hover:text-accent-strong"
+              >
+                Clear local state
+              </button>
+            </div>
+          ) : null}
+          <div className="flex items-center gap-1.5 px-1.5">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label="Toggle dark mode"
+              title="Toggle dark mode"
+              className="grid h-9 w-9 place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-accent-soft"
+            >
+              {resolvedTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+            <button
+              type="button"
+              onClick={signOut}
+              className="min-h-9 flex-1 rounded-lg border-0 bg-transparent px-1.5 text-left text-[0.84rem] font-extrabold text-muted hover:text-accent-strong max-[860px]:flex-none"
+            >
               Sign out
             </button>
-          ) : null}
-          <button className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-[0.58]" type="button" onClick={clearSession}>
-            <Trash2 size={16} />
-            Clear local
-          </button>
+          </div>
         </div>
       </aside>
 
-      <main className="min-w-0 p-6 max-[620px]:p-4">
-        <header className="mb-[18px] flex items-end justify-between gap-[18px] max-[980px]:grid max-[980px]:items-stretch">
-          <div>
-            <p className="m-0 mb-1.5 text-xs font-extrabold uppercase tracking-normal text-muted">Human SNS for agent loops</p>
-            <h1 className="m-0 text-[clamp(1.8rem,4vw,3rem)] leading-none tracking-normal">Social workspace</h1>
-          </div>
-
-          <form className="grid min-w-[min(100%,620px)] grid-cols-[auto_minmax(220px,440px)_40px] items-center gap-2 max-[620px]:min-w-0 max-[620px]:grid-cols-1" onSubmit={updateApiUrl}>
-            <label className="text-[0.83rem] font-extrabold text-muted" htmlFor="api-url">Social API</label>
-            <input
-              id="api-url"
-              value={apiDraft}
-              onChange={(event) => setApiDraft(event.target.value)}
-              spellCheck={false}
-            />
-            <button className="inline-flex min-h-10 w-10 items-center justify-center gap-2 rounded-lg border-0 bg-accent font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-[0.58] max-[620px]:w-full" type="submit" title="Apply endpoint" aria-label="Apply endpoint">
-              <RefreshCw size={18} />
-            </button>
-          </form>
-        </header>
-
-        <section className="mb-4 grid grid-cols-5 gap-2.5 max-[1100px]:grid-cols-3 max-[760px]:grid-cols-2 max-[620px]:grid-cols-1" aria-live="polite">
-          <StatusPill
-            icon={<Activity size={15} />}
-            label={healthQuery.data?.ok ? healthQuery.data.app : "Social API"}
-            value={healthQuery.data?.ok ? healthQuery.data.storage : healthQuery.isLoading ? "Checking" : "Offline"}
-            tone={healthQuery.data?.ok ? "ok" : "warn"}
-          />
-          <StatusPill
-            icon={<GitBranch size={15} />}
-            label={messageHealthQuery.data?.ok ? messageHealthQuery.data.app : "Message hub"}
-            value={messageHealthQuery.data?.ok ? messageHealthQuery.data.storage : messageHealthQuery.isLoading ? "Checking" : "Offline"}
-            tone={messageHealthQuery.data?.ok ? "ok" : "warn"}
-          />
-          <StatusPill
-            icon={<UserRound size={15} />}
-            label={state.activeProfile?.display_name ?? "Active agent"}
-            value={state.activeProfile?.handle ?? "Not set"}
-          />
-          <StatusPill
-            icon={<Bell size={15} />}
-            label="Notifications"
-            value={String(dashboardNotificationCount)}
-            tone={dashboardNotificationCount > 0 ? "warn" : "neutral"}
-          />
-          <StatusPill
-            icon={<Flag size={15} />}
-            label="Moderation"
-            value={String(dashboardModerationCount)}
-          />
-        </section>
-
+      <main className="box-border min-w-0 px-11 pt-9 pb-16 max-[860px]:px-4 max-[860px]:pt-5">
         {notice ? <NoticeBanner notice={notice} onClose={() => setNotice(null)} /> : null}
 
         <Routes>
+          <Route index element={<Navigate to={defaultAuthenticatedPath} replace />} />
+          <Route path="/login" element={<Navigate to={defaultAuthenticatedPath} replace />} />
+          <Route path="/register" element={<Navigate to={defaultAuthenticatedPath} replace />} />
+          <Route path="/auth/callback" element={<Navigate to={defaultAuthenticatedPath} replace />} />
           <Route
-            index
-            element={<Navigate to={isAuthenticated ? defaultAuthenticatedPath : "/login"} replace />}
-          />
-          <Route
-            path="/login"
-            element={
-              <LoginPage
-                apiUrl={state.apiUrl}
-                api={api}
-                authConfig={authConfig}
-                isAuthenticated={isAuthenticated}
-                postAuthPath={defaultAuthenticatedPath}
-                onLocalIdentity={(identity) => rememberUser(identity)}
-                onNotice={setNotice}
-              />
-            }
-          />
-          <Route
-            path="/register"
-            element={
-              <RegisterPage
-                apiUrl={state.apiUrl}
-                api={api}
-                authConfig={authConfig}
-                isAuthenticated={isAuthenticated}
-                postAuthPath={defaultAuthenticatedPath}
-                onLocalIdentity={(identity) => rememberUser(identity)}
-                onNotice={setNotice}
-              />
-            }
-          />
-          <Route
-            path="/auth/callback"
-            element={<Navigate to={defaultAuthenticatedPath} replace />}
-          />
-          <Route
-            path="/dashboard"
+            path="/sky"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <DashboardPage
+                <SkyPage
                   api={api}
+                  messageApi={messageApi}
                   state={state}
-                  summary={dashboardSummary}
-                  profiles={dashboardProfiles}
                   posts={dashboardPosts}
+                  profiles={dashboardProfiles}
                   notifications={dashboardNotifications}
-                  moderationRecords={dashboardModerationRecords}
-                  profileCount={dashboardProfileCount}
-                  notificationCount={dashboardNotificationCount}
-                  moderationCount={dashboardModerationCount}
-                  apiHealth={healthQuery.data}
-                  apiHealthLoading={healthQuery.isLoading}
-                  profilesLoading={profilesQuery.isFetching || dashboardQuery.isFetching}
-                  setState={setState}
-                  onNotice={setNotice}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/feed"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <FeedPage
-                  api={api}
-                  state={state}
-                  posts={posts}
-                  isLoading={feedQuery.isFetching}
                   rememberPost={rememberPost}
-                  onSelectPost={(postId) => {
-                    setState((current) => touchLoopState({ ...current, selectedPostId: postId }));
-                    navigate(`/threads/${postId}`);
-                  }}
-                  onError={(message) => setNotice({ tone: "error", message })}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/profiles/:handle"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ProfilePage
-                  api={api}
-                  state={state}
-                  setState={setState}
                   onNotice={setNotice}
                 />
               </ProtectedRoute>
@@ -662,12 +488,7 @@ export default function App() {
             path="/chat"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ChatPage
-                  api={api}
-                  state={state}
-                  profiles={dashboardProfiles}
-                  onNotice={setNotice}
-                />
+                <ChatPage api={api} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
               </ProtectedRoute>
             }
           />
@@ -675,83 +496,18 @@ export default function App() {
             path="/chat/:chatId"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ChatPage
-                  api={api}
-                  state={state}
-                  profiles={dashboardProfiles}
-                  onNotice={setNotice}
-                />
+                <ChatPage api={api} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
               </ProtectedRoute>
             }
           />
           <Route
-            path="/threads/:postId"
+            path="/flock"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ThreadPage
-                  api={api}
-                  state={state}
-                  posts={posts}
-                  rememberPost={rememberPost}
-                  onNotice={setNotice}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/rooms/:slug"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <RoomPage
+                <FlockPage
                   api={api}
                   state={state}
                   setState={setState}
-                  posts={posts}
-                  rememberPost={rememberPost}
-                  onNotice={setNotice}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/inbox"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <InboxPage
-                  api={api}
-                  state={state}
-                  posts={posts}
-                  notifications={notifications}
-                  moderationRecords={moderationQuery.data?.items ?? []}
-                  moderationLoading={moderationQuery.isFetching}
-                  rememberModeration={rememberModeration}
-                  onNotice={setNotice}
-                  refetchModeration={() => {
-                    void moderationQuery.refetch();
-                  }}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/agent-inbox"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <AgentLifecycleInboxPage
-                  messageApi={messageApi}
-                  profiles={dashboardProfiles}
-                  activeProfile={state.activeProfile}
-                  onNotice={setNotice}
-                />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/routing"
-            element={
-              <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <RoutingRulesPage
-                  messageApi={messageApi}
                   profiles={dashboardProfiles}
                   onNotice={setNotice}
                 />
@@ -759,17 +515,36 @@ export default function App() {
             }
           />
           <Route
-            path="/admin"
+            path="/server"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <AdminPage
+                <ServerPage
                   aiProviderApiUrl={aiProviderApiUrl}
                   authToken={activeAuthSession?.accessToken ?? null}
+                  messageApi={messageApi}
+                  profiles={dashboardProfiles}
+                  moderationRecords={moderationRecords}
+                  socialHealth={healthQuery.data}
+                  messageHealth={messageHealthQuery.data}
+                  apiUrl={state.apiUrl}
+                  onApplyApiUrl={applyApiUrl}
                   onNotice={setNotice}
                 />
               </ProtectedRoute>
             }
           />
+
+          {/* Legacy routes from the previous design */}
+          <Route path="/dashboard" element={<Navigate to="/sky" replace />} />
+          <Route path="/feed" element={<Navigate to="/sky" replace />} />
+          <Route path="/inbox" element={<Navigate to="/sky" replace />} />
+          <Route path="/agent-inbox" element={<Navigate to="/sky" replace />} />
+          <Route path="/threads/:postId" element={<Navigate to="/sky" replace />} />
+          <Route path="/rooms/:slug" element={<Navigate to="/sky" replace />} />
+          <Route path="/profiles/:handle" element={<Navigate to="/flock" replace />} />
+          <Route path="/routing" element={<Navigate to="/server" replace />} />
+          <Route path="/admin" element={<Navigate to="/server" replace />} />
+          <Route path="*" element={<Navigate to={defaultAuthenticatedPath} replace />} />
         </Routes>
       </main>
     </div>

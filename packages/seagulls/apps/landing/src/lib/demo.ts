@@ -13,6 +13,16 @@ type DemoRunPayload = {
   output_text?: string;
 };
 
+export class DemoProviderError extends Error {
+  readonly serverMessage?: string;
+
+  constructor(serverMessage?: string) {
+    super(serverMessage || "provider error");
+    this.name = "DemoProviderError";
+    this.serverMessage = serverMessage;
+  }
+}
+
 export async function landingDemoProviderResponse(text: string): Promise<string> {
   const result = await fetch(aiProviderApiUrl() + "/demo/landing/ai-run", {
     method: "POST",
@@ -21,7 +31,7 @@ export async function landingDemoProviderResponse(text: string): Promise<string>
   });
   const payload: DemoRunPayload = await result.json().catch(() => ({}));
   if (!result.ok) {
-    throw new Error(payload.message || "Provider delivery is unavailable for this demo run.");
+    throw new DemoProviderError(payload.message);
   }
   return payload.output_text || "Provider completed the demo run.";
 }

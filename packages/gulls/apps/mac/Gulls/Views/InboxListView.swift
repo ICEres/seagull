@@ -65,7 +65,7 @@ private struct InboxRow: View {
     }
 
     static func displayDate(_ raw: String) -> String {
-        guard let date = ISO8601DateFormatter().date(from: raw) else { return raw }
+        guard let date = GullsDates.parse(raw) else { return raw }
         return date.formatted(.relative(presentation: .named))
     }
 }
@@ -83,13 +83,13 @@ struct StatusBadge: View {
     }
 
     private var color: Color {
-        switch status {
-        case "delivered": return .blue
-        case "replied": return .green
-        case "acked": return .teal
-        case "ignored": return .gray
-        case "failed": return .red
-        default: return .secondary
+        switch status.flatMap(DeliveryStatus.init(rawValue:)) {
+        case .delivered?: return .blue
+        case .replied?: return .green
+        case .acked?: return .teal
+        case .ignored?: return .gray
+        case .failed?: return .red
+        case nil: return .secondary
         }
     }
 }

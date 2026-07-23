@@ -152,6 +152,32 @@ Scope write and tag actions to the dev alarm prefix:
 arn:aws:cloudwatch:<region>:<account-id>:alarm:seagull-dev-*
 ```
 
+The web module resolves the AWS-managed `Managed-AllViewerExceptHostHeader`
+origin request policy by name. The CloudFront statement therefore needs:
+
+```text
+cloudfront:ListOriginRequestPolicies
+cloudfront:GetOriginRequestPolicy
+```
+
+The passwordless social auth deployment verifies the root domain with Amazon
+SES and enables Easy DKIM. The legacy SES identity APIs require these actions;
+use `Resource: "*"` because they don't support identity-level resource scoping:
+
+```text
+ses:VerifyDomainIdentity
+ses:GetIdentityVerificationAttributes
+ses:DeleteIdentity
+ses:VerifyDomainDkim
+ses:GetIdentityDkimAttributes
+ses:SetIdentityDkimEnabled
+```
+
+SES production access is regional. Before deploying email-code authentication,
+confirm that production access is enabled in the same region as the Cognito
+user pool so codes can reach recipients whose addresses aren't separately
+verified.
+
 ## S3 Policy Repair
 
 Use this when Terraform state contains a bucket but `Deploy dev` fails during

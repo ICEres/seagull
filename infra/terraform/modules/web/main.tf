@@ -22,7 +22,11 @@ locals {
   domain_aliases = distinct(compact([var.domain_name, var.admin_domain_name]))
   landing_files  = var.landing_dist_dir == "" ? toset([]) : setsubtract(fileset(var.landing_dist_dir, "**"), ["config.js"])
   origin_id      = "${var.name_prefix}-s3-origin"
-  dist_files     = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
+  api_origin_id  = "${var.name_prefix}-message-api-origin"
+  # Public agent URLs on the apex (M3.1): behaviors exist only when the API
+  # origin is configured AND the landing distribution exists.
+  landing_api_paths = var.message_api_origin_domain == "" ? [] : ["/agents/*", "/.well-known/*"]
+  dist_files        = setsubtract(fileset(var.dist_dir, "**"), ["config.js"])
   runtime_config = "window.SEAGULL_CONFIG = ${jsonencode({
     socialApiUrl     = var.social_api_url
     messageApiUrl    = var.message_api_url
@@ -191,6 +195,73 @@ resource "aws_cloudfront_cache_policy" "assets" {
   }
 }
 
+# Forwards everything except Host (the API origin must see its own custom
+# domain) for the public agent URL behaviors.
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  count = var.message_api_origin_domain == "" ? 0 : 1
+
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
+resource "aws_cloudfront_cache_policy" "public_agents" {
+  count = var.message_api_origin_domain == "" ? 0 : 1
+
+  name        = "${var.name_prefix}-public-agents"
+  comment     = "Origin-driven caching for public agent URLs: cards/discovery send public,max-age=60; everything else no-store."
+  default_ttl = 0
+  max_ttl     = 300
+  min_ttl     = 0
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    cookies_config {
+      cookie_behavior = "none"
+    }
+
+    # Accept selects the HTML vs JSON card; query strings carry the signed
+    # guest status/invite tokens and the discovery resource.
+    headers_config {
+      header_behavior = "whitelist"
+      headers {
+        items = ["Accept"]
+      }
+    }
+
+    query_strings_config {
+      query_string_behavior = "all"
+    }
+
+    enable_accept_encoding_brotli = true
+    enable_accept_encoding_gzip   = true
+  }
+}
+
+# With the API behaviors on the landing distribution, its distribution-wide
+# 403/404 -> landing rewrites would mask API error responses, so SPA-style
+# fallback moves to this viewer-request function on the default behavior
+# (API paths never reach it: their ordered behaviors match first).
+resource "aws_cloudfront_function" "landing_router" {
+  count = var.landing_domain_name == "" || var.message_api_origin_domain == "" ? 0 : 1
+
+  name    = "${var.name_prefix}-landing-router"
+  runtime = "cloudfront-js-2.0"
+  comment = "Rewrite extensionless landing paths to the landing shell."
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri.startsWith('/agents') || uri.startsWith('/.well-known')) {
+        return request;
+      }
+      if (uri.includes('.')) {
+        return request;
+      }
+      request.uri = '/landing/index.html';
+      return request;
+    }
+  EOT
+}
+
 resource "aws_cloudfront_distribution" "web" {
   aliases             = local.domain_aliases
   enabled             = true
@@ -269,6 +340,22 @@ resource "aws_cloudfront_distribution" "landing" {
     origin_id                = local.origin_id
   }
 
+  dynamic "origin" {
+    for_each = var.message_api_origin_domain == "" ? [] : [var.message_api_origin_domain]
+
+    content {
+      domain_name = origin.value
+      origin_id   = local.api_origin_id
+
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "https-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
+  }
+
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
@@ -276,20 +363,47 @@ resource "aws_cloudfront_distribution" "landing" {
     compress               = true
     target_origin_id       = local.origin_id
     viewer_protocol_policy = "redirect-to-https"
+
+    dynamic "function_association" {
+      for_each = aws_cloudfront_function.landing_router
+
+      content {
+        event_type   = "viewer-request"
+        function_arn = function_association.value.arn
+      }
+    }
   }
 
-  custom_error_response {
-    error_caching_min_ttl = 0
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/landing/index.html"
+  # POST needs the full method set (CloudFront offers no smaller one that
+  # includes it); cards and discovery are the only cacheable responses and
+  # only for the 60s max-age the origin sends.
+  dynamic "ordered_cache_behavior" {
+    for_each = local.landing_api_paths
+
+    content {
+      path_pattern             = ordered_cache_behavior.value
+      allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods           = ["GET", "HEAD"]
+      cache_policy_id          = aws_cloudfront_cache_policy.public_agents[0].id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host[0].id
+      compress                 = true
+      target_origin_id         = local.api_origin_id
+      viewer_protocol_policy   = "redirect-to-https"
+    }
   }
 
-  custom_error_response {
-    error_caching_min_ttl = 0
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/landing/index.html"
+  # Without the API origin the landing keeps its historical SPA fallback;
+  # with it, these distribution-wide rewrites would mask API 403/404 JSON,
+  # so the landing_router function takes over.
+  dynamic "custom_error_response" {
+    for_each = var.message_api_origin_domain == "" ? [403, 404] : []
+
+    content {
+      error_caching_min_ttl = 0
+      error_code            = custom_error_response.value
+      response_code         = 200
+      response_page_path    = "/landing/index.html"
+    }
   }
 
   restrictions {

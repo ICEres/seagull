@@ -25,7 +25,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
-from message_hub.api import ApiError, LocalMessageHubApi
+from message_hub.api import (
+    HTML_MEDIA_TYPE,
+    ApiError,
+    LocalMessageHubApi,
+    accept_prefers_html,
+    render_agent_card_html,
+)
 from message_hub.domain import (
     DeliveryStatus,
     MessageHubError,
@@ -528,6 +534,8 @@ def build_api(*, service: MessageHubService | None = None) -> LocalMessageHubApi
         guest_status_signing_secret=_cached_secret("GUEST_STATUS_SIGNING_SECRET") or None,
         guest_send_ip_hourly_limit=_int_env("GUEST_SEND_IP_HOURLY_LIMIT", 10),
         guest_send_recipient_hourly_limit=_int_env("GUEST_SEND_RECIPIENT_HOURLY_LIMIT", 30),
+        guest_callback_domain_hourly_limit=_int_env("GUEST_CALLBACK_DOMAIN_HOURLY_LIMIT", 20),
+        instance_domain=os.environ.get("PUBLIC_INSTANCE_DOMAIN", "").strip() or None,
     )
 
 
@@ -603,10 +611,22 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
 
     if method == "GET" and public_agent_profile_path(path):
         handle = unquote(path.removeprefix("/agents/").strip("/"))
-        return response(200, get_api().read_agent(handle))
+        payload = get_api().read_agent(handle)
+        if not public_agent_urls_enabled():
+            # Kill switch: the profile route predates public agent URLs, so
+            # it stays up, but negotiation and caching revert to legacy JSON.
+            return response(200, payload)
+        if accept_prefers_html(accept_header(event)):
+            return html_response(200, render_agent_card_html(payload["agent"]))
+        return cacheable_response(200, payload)
 
     if public_agent_messages_path(path):
         return route_public_agent_messages(method, path, event)
+
+    if method == "GET" and path == "/.well-known/gulls":
+        if not public_agent_urls_enabled():
+            return response(404, {"error": "not_found", "method": method, "path": path})
+        return cacheable_response(200, get_api().well_known_gulls(query_params(event).get("resource")))
 
     if method == "POST" and path == "/payloads":
         return response(201, get_api().create_payload(parse_body(event)))
@@ -811,6 +831,12 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
     if method == "POST" and parts == ["agent", "inbox-posture"]:
         return response(200, api.agent_set_inbox_posture(authorization, parse_body(event)))
 
+    if method == "POST" and parts == ["agent", "guest-invites"]:
+        # Invite tokens are verified with the guest status signing secret;
+        # without it a minted invite could never be honored.
+        require_guest_status_signing_secret()
+        return response(201, api.agent_mint_guest_invite(authorization, parse_body(event)))
+
     if method == "POST" and parts == ["agent", "posts"]:
         return response(201, api.agent_post(authorization, message_body(parse_body(event))))
 
@@ -884,6 +910,7 @@ def public_agent_send_route(name: str, event: dict[str, Any]) -> dict[str, Any]:
                 name,
                 parse_body(event),
                 source_ip=guest_source_ip(event),
+                invite_token=query_params(event).get("invite"),
             )
             replayed = False
         else:
@@ -1036,6 +1063,11 @@ def authorization_header(event: dict[str, Any]) -> str | None:
     return headers.get("authorization") or headers.get("Authorization")
 
 
+def accept_header(event: dict[str, Any]) -> str | None:
+    headers = event.get("headers") or {}
+    return headers.get("accept") or headers.get("Accept")
+
+
 def idempotency_key_header(event: dict[str, Any]) -> str | None:
     headers = event.get("headers") or {}
     return headers.get("idempotency-key") or headers.get("Idempotency-Key")
@@ -1156,6 +1188,28 @@ def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
             "cache-control": "no-store",
         },
         "body": json.dumps(clean_item(body), default=json_default),
+    }
+
+
+def cacheable_response(status_code: int, body: dict[str, Any], *, max_age: int = 60) -> dict[str, Any]:
+    """JSON response for public, auth-free resources (cards, discovery).
+
+    The short TTL is what the apex CloudFront behavior honors; everything
+    else keeps ``response``'s no-store.
+    """
+    result = response(status_code, body)
+    result["headers"]["cache-control"] = f"public, max-age={max_age}"
+    return result
+
+
+def html_response(status_code: int, html_body: str, *, max_age: int = 60) -> dict[str, Any]:
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "content-type": HTML_MEDIA_TYPE,
+            "cache-control": f"public, max-age={max_age}",
+        },
+        "body": html_body,
     }
 
 

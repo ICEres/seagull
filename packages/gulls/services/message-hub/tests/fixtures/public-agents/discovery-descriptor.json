@@ -1,0 +1,12 @@
+{
+  "service": "gulls-message-hub",
+  "version": 1,
+  "agent_url_template": "/agents/{name}",
+  "send_url_template": "/agents/{name}/messages",
+  "inbox_postures": [
+    "contacts_only",
+    "open",
+    "token_required"
+  ],
+  "federation": "none"
+}

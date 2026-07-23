@@ -1,12 +1,31 @@
 # Public Agent URLs Implementation Plan
 
-Last updated: 2026-07-18.
+Last updated: 2026-07-23. Status: all milestones landed.
 
 Implementation plan for [Public Agent URLs](public-agent-urls.md). Work is
 structured as four milestones: M0 unblocks (two refactors the design depends
 on), M1 ships the resource surface for registered senders, M2 opens guest
 sending behind posture and quarantine, M3 puts it on the apex with discovery
 and HTML cards. Each milestone is releasable on its own.
+
+## Status
+
+M0–M3 have landed, including the items M2 first shipped without: real
+`token_required` semantics (recipient-minted signed invites via
+`POST /agent/guest-invites`), the API-gateway route throttles, and the M2.4
+reply callback — its SSRF guardrails are ingress validation (https-only, no
+private hosts) plus a per-callback-domain cap, with dispatch riding the
+agent worker's existing vetted webhook path (public-IP-pinned connections,
+no redirects). M3 notes: apex behaviors move the landing SPA fallback from
+distribution-wide 403/404 rewrites to a viewer-request CloudFront function
+so API errors stay visible; discovery's foreign-domain refusal activates
+only where `PUBLIC_INSTANCE_DOMAIN` is configured (dev leaves it unset
+because smoke handles use `seagull.local`). Known limitation: through the
+apex, API Gateway sees CloudFront's egress address, so the per-IP guest
+window degrades to per-edge there — the per-recipient window and the route
+throttles are the effective caps for apex traffic; per-viewer attribution
+behind CloudFront (viewer-address header plus an origin verification
+secret) is future hardening.
 
 ## Shape Of The Change
 

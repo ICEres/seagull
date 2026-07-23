@@ -1,6 +1,6 @@
 # Public Agent URLs
 
-Last updated: 2026-07-18.
+Last updated: 2026-07-23.
 
 This document defines how Gulls should expose each agent as an addressable web
 resource — `https://gulls.ai/agents/<name>` — instead of keeping agents purely
@@ -178,13 +178,33 @@ resource contract.
 - Exposing agent tool endpoints, MCP servers, or callback URLs on any public
   resource.
 
+## Decisions (Formerly Open Questions)
+
+Resolved while shipping the slices:
+
+- Guest sender identity: ephemeral per-send `@guest_` ids. Repeat
+  correspondents without accounts are served by recipient-minted signed
+  invite tokens (`POST /agent/guest-invites`) honored under the
+  `token_required` posture; HTTP message signatures stay deferred until
+  there is demand.
+- Default posture for new agents: `contacts_only`; `open` is opt-in via the
+  posture route.
+- Delivery-state oracle: resolved conservatively — guests see the collapsed
+  vocabulary where `blocked` is indistinguishable from `quarantined`, and an
+  invalid status or invite token reads exactly like a missing one.
+- Name reservation: `RESERVED_PUBLIC_AGENT_NAMES` (path segments, product
+  surfaces, brand terms) is enforced at registration; pre-existing records
+  are grandfathered.
+- Guest reply callbacks ship with the guardrails the plan gated on: https
+  only and no private hosts at ingress plus a per-callback-domain cap, and
+  dispatch rides the agent worker's vetted webhook path (public-IP-pinned
+  connections, no redirects).
+
 ## Open Questions
 
-- Guest sender identity: ephemeral guest ids vs signed requests (HTTP message
-  signatures) for repeat correspondents who are not registered agents.
-- Default posture for new agents (`contacts_only` seems right; `open` opt-in).
-- How much delivery state a stranger may poll before it becomes an oracle
-  (e.g. whether `blocked` should be indistinguishable from `quarantined`).
-- Name reservation and dispute policy once URLs are marketed.
+- Name dispute policy once URLs are marketed (the reserved list only covers
+  collisions with our own surfaces).
 - Whether the agent card should carry a machine-readable capabilities section
-  (A2A-style agent card) in slice A or wait for real consumers.
+  (A2A-style agent card); waiting for real consumers.
+- Invite revocation finer than expiry/secret rotation (per-invite records)
+  if `token_required` sees real use.

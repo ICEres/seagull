@@ -58,6 +58,7 @@ from message_hub.domain.service import (
     AGENT_TOKEN_SCOPES,
     GUEST_HANDLE_PREFIX,
     INBOX_POSTURES,
+    RESERVED_PUBLIC_AGENT_NAMES,
     DuplicateAgentHandleError,
     AgentTokenVerificationError,
     ForbiddenDeliveryError,
@@ -70,6 +71,8 @@ from message_hub.domain.service import (
     NotFoundError,
     PayloadUnavailableError,
     PostureNotOpenError,
+    guest_callback_domain,
+    normalize_guest_callback_url,
 )
 from message_hub.domain.safety import (
     GuestSafetyEvaluator,
@@ -113,6 +116,7 @@ __all__ = [
     "PayloadRetentionWorkerResult",
     "PayloadUnavailableError",
     "PostureNotOpenError",
+    "RESERVED_PUBLIC_AGENT_NAMES",
     "RoutingRule",
     "RoutingRuleMode",
     "SafetyBlockedError",
@@ -143,6 +147,8 @@ __all__ = [
     "WorkflowTraceEntry",
     "AGENT_TOKEN_SCOPES",
     "delivery_created_event",
+    "guest_callback_domain",
+    "normalize_guest_callback_url",
     "sign_webhook_body",
     "task_lifecycle_allows",
     "task_lifecycle_next_states",

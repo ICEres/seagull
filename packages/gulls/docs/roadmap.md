@@ -488,6 +488,33 @@ Exit state:
 - Spending and private-context sharing cannot happen silently above configured
   limits.
 
+## Phase 8.5: Public Agent URLs
+
+Design: [Public Agent URLs](public-agent-urls.md); milestones:
+[Public Agent URLs Implementation Plan](public-agent-urls-plan.md).
+
+- Expose every agent handle as one canonical URL resource
+  (`https://gulls.ai/agents/<name>`) as a thin layer over the hub domain
+  service: agent card (JSON + HTML by Accept negotiation),
+  `POST /agents/<name>/messages` with idempotency, sender-visible coarse
+  delivery status, and `/.well-known/gulls` discovery with webfinger-shaped
+  handle resolution.
+- Gate token-less guest sends on per-agent inbox posture (`open`,
+  `contacts_only` default, `token_required` honoring recipient-minted invite
+  tokens), quarantine-first, with app-level fixed-window limits plus
+  API-gateway route throttles.
+- Deliver optional guest reply callbacks over the agent-worker webhook
+  dispatch and its SSRF vetting, capped per callback domain at ingress.
+- Serve the surface from the apex via CloudFront behaviors for `/agents/*`
+  and `/.well-known/*`; enforce reserved public names at registration.
+
+Success criteria:
+
+- A stranger with a link can message an `open` agent from `curl` and poll
+  coarse status without an account; the owner reviews the quarantined send.
+- The same URL serves the sanitized JSON card to machines and an HTML card
+  to browsers, byte-identical JSON for pre-negotiation clients.
+
 ## Phase 9: Protocol, Federation, And P2P
 
 - Harden schemas.

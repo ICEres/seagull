@@ -29,11 +29,11 @@ locals {
   # over the domain service and imports them at runtime).
   message_hub_api_package = "${path.module}/.terraform/build/message-hub-api/package"
   agent_worker_src        = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
-  router_bootstrap       = "${path.module}/.terraform/build/message-router/bootstrap"
-  mcp_connector_package  = "${path.module}/.terraform/build/mcp-connector/package"
-  ai_provider_package    = "${path.module}/.terraform/build/ai-provider/package"
-  safety_gateway_package = "${path.module}/.terraform/build/safety-gateway/package"
-  social_api_package     = "${path.module}/.terraform/build/social-api/package"
+  router_bootstrap        = "${path.module}/.terraform/build/message-router/bootstrap"
+  mcp_connector_package   = "${path.module}/.terraform/build/mcp-connector/package"
+  ai_provider_package     = "${path.module}/.terraform/build/ai-provider/package"
+  safety_gateway_package  = "${path.module}/.terraform/build/safety-gateway/package"
+  social_api_package      = "${path.module}/.terraform/build/social-api/package"
   message_hub_tags = {
     Project     = var.project
     Environment = var.environment
@@ -44,6 +44,7 @@ locals {
   )
   message_hub_api_secret_arns = [
     aws_secretsmanager_secret.safety_gateway_admin.arn,
+    aws_secretsmanager_secret.guest_status_signing.arn,
   ]
   agent_worker_secret_arns = [
     aws_secretsmanager_secret.agent_webhook_signing.arn,
@@ -72,6 +73,19 @@ resource "aws_secretsmanager_secret" "agent_webhook_signing" {
 resource "aws_secretsmanager_secret_version" "agent_webhook_signing" {
   secret_id     = aws_secretsmanager_secret.agent_webhook_signing.id
   secret_string = var.agent_webhook_signing_secret
+}
+
+resource "aws_secretsmanager_secret" "guest_status_signing" {
+  name = "${local.message_hub_prefix}/runtime/guest-status-signing-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "message-hub-api"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "guest_status_signing" {
+  secret_id     = aws_secretsmanager_secret.guest_status_signing.id
+  secret_string = var.guest_status_signing_secret
 }
 
 resource "aws_secretsmanager_secret" "safety_gateway_admin" {
@@ -275,6 +289,7 @@ resource "aws_lambda_function" "message_hub_api" {
       AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
       APP_NAME                        = local.message_hub_prefix
       DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
+      GUEST_STATUS_SIGNING_SECRET_ARN = aws_secretsmanager_secret.guest_status_signing.arn
       IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
       MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
       PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
@@ -909,6 +924,22 @@ resource "aws_apigatewayv2_route" "default" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+# Explicit routes for the guest-reachable public agent URL paths: stage-level
+# route_settings only throttle named routes, never $default, so these exist
+# purely to hang the tighter guest throttles on. Same integration, same
+# lambda dispatch.
+resource "aws_apigatewayv2_route" "public_agent_send" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "POST /agents/{name}/messages"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "public_agent_message_status" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "GET /agents/{name}/messages/{deliveryId}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
@@ -917,6 +948,18 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.public_agent_send.route_key
+    throttling_burst_limit = var.public_agent_send_throttling_burst_limit
+    throttling_rate_limit  = var.public_agent_send_throttling_rate_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.public_agent_message_status.route_key
+    throttling_burst_limit = var.public_agent_status_throttling_burst_limit
+    throttling_rate_limit  = var.public_agent_status_throttling_rate_limit
   }
 
   tags = {
@@ -1160,14 +1203,18 @@ module "web" {
   landing_dist_dir    = local.landing_dist_dir
   hosted_zone_id      = data.aws_route53_zone.root.zone_id
   message_api_url     = "https://${var.message_api_domain}"
-  social_api_url      = module.social_api.api_endpoint
-  ai_provider_api_url = module.ai_provider.api_endpoint
-  auth_mode           = "cognito"
-  auth_issuer         = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
-  auth_hosted_domain  = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
-  auth_client_id      = aws_cognito_user_pool_client.social_web.id
-  auth_redirect_uri   = "https://${var.web_domain_name}/auth/callback"
-  auth_logout_uri     = "https://${var.web_domain_name}/register"
+
+  # Apex public agent URLs (M3.1): route /agents/* and /.well-known/* on the
+  # landing distribution to the message API origin.
+  message_api_origin_domain = var.message_api_domain
+  social_api_url            = module.social_api.api_endpoint
+  ai_provider_api_url       = module.ai_provider.api_endpoint
+  auth_mode                 = "cognito"
+  auth_issuer               = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
+  auth_hosted_domain        = "${aws_cognito_user_pool_domain.social_web.domain}.auth.${var.aws_region}.amazoncognito.com"
+  auth_client_id            = aws_cognito_user_pool_client.social_web.id
+  auth_redirect_uri         = "https://${var.web_domain_name}/auth/callback"
+  auth_logout_uri           = "https://${var.web_domain_name}/register"
 
   tags = local.message_hub_tags
 }

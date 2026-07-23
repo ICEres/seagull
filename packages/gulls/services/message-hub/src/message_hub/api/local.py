@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, NoReturn
 
 from message_hub._compat import dataclass
@@ -52,22 +52,39 @@ from message_hub.domain import (
     ThreadRecord,
     WorkflowTraceEntry,
 )
+from message_hub.api.html_card import render_agent_card_html
 from message_hub.domain.cards import (
     agent_card,
+    agent_public_path,
     guest_visible_status,
     message_status_path,
     sender_visible_status,
     thread_path,
 )
-from message_hub.domain.service import GUEST_HANDLE_PREFIX, normalize_handle
+from message_hub.domain.service import (
+    GUEST_HANDLE_PREFIX,
+    INBOX_POSTURES,
+    guest_callback_domain,
+    normalize_guest_callback_url,
+    normalize_handle,
+)
 from message_hub.storage import InMemoryMessageHubRepository
 
 # Guest-ingress defaults (fixed one-hour windows, app-level fixed-window
 # counters in the repository). The deployed adapter overrides the limits from
-# GUEST_SEND_IP_HOURLY_LIMIT / GUEST_SEND_RECIPIENT_HOURLY_LIMIT.
+# GUEST_SEND_IP_HOURLY_LIMIT / GUEST_SEND_RECIPIENT_HOURLY_LIMIT /
+# GUEST_CALLBACK_DOMAIN_HOURLY_LIMIT.
 GUEST_SEND_WINDOW_SECONDS = 3600
 DEFAULT_GUEST_SEND_IP_HOURLY_LIMIT = 10
 DEFAULT_GUEST_SEND_RECIPIENT_HOURLY_LIMIT = 30
+DEFAULT_GUEST_CALLBACK_DOMAIN_HOURLY_LIMIT = 20
+
+# Guest invite tokens (posture ``token_required``): signed capabilities with
+# no server-side record; revocation is by expiry or rotating the signing
+# secret.
+GUEST_INVITE_DEFAULT_TTL_SECONDS = 7 * 24 * 3600
+GUEST_INVITE_MAX_TTL_SECONDS = 30 * 24 * 3600
+GUEST_INVITE_MIN_TTL_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +128,8 @@ class LocalMessageHubApi:
         guest_status_signing_secret: str | None = None,
         guest_send_ip_hourly_limit: int = DEFAULT_GUEST_SEND_IP_HOURLY_LIMIT,
         guest_send_recipient_hourly_limit: int = DEFAULT_GUEST_SEND_RECIPIENT_HOURLY_LIMIT,
+        guest_callback_domain_hourly_limit: int = DEFAULT_GUEST_CALLBACK_DOMAIN_HOURLY_LIMIT,
+        instance_domain: str | None = None,
     ) -> None:
         self._service = service
         # Per-instance random default: locally minted guest status URLs then
@@ -119,6 +138,11 @@ class LocalMessageHubApi:
         self._guest_status_signing_secret = guest_status_signing_secret or secrets.token_hex(32)
         self._guest_send_ip_hourly_limit = guest_send_ip_hourly_limit
         self._guest_send_recipient_hourly_limit = guest_send_recipient_hourly_limit
+        self._guest_callback_domain_hourly_limit = guest_callback_domain_hourly_limit
+        # When unset, /.well-known/gulls resolution skips the foreign-domain
+        # refusal and only answers from the local registry (single-instance
+        # dev). Deployments set it to the apex domain the URLs live on.
+        self._instance_domain = (instance_domain or "").strip().lower() or None
 
     @classmethod
     def in_memory(cls) -> LocalMessageHubApi:
@@ -394,6 +418,41 @@ class LocalMessageHubApi:
 
         return {"agent": agent_to_dict(agent)}
 
+    def agent_mint_guest_invite(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /agent/guest-invites``: mint a guest invite for the token's agent.
+
+        The invite is a signed capability with no server-side record: any
+        guest presenting it may send to this agent while its inbox posture is
+        ``token_required``. Posture ``open`` needs no invite and
+        ``contacts_only`` ignores invites, so minting is allowed regardless of
+        the current posture. Revocation is by expiry or rotating the signing
+        secret.
+        """
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        expires_in = optional_int(body, "expires_in_seconds")
+        if expires_in is None:
+            expires_in = GUEST_INVITE_DEFAULT_TTL_SECONDS
+        if not GUEST_INVITE_MIN_TTL_SECONDS <= expires_in <= GUEST_INVITE_MAX_TTL_SECONDS:
+            raise ApiError(
+                400,
+                "bad_request",
+                "expires_in_seconds must be between "
+                f"{GUEST_INVITE_MIN_TTL_SECONDS} and {GUEST_INVITE_MAX_TTL_SECONDS}",
+            )
+        expires_epoch = int(time.time()) + expires_in
+        token = guest_invite_token(
+            self._guest_status_signing_secret,
+            principal.agent_handle,
+            expires_epoch,
+        )
+        return {
+            "invite_token": token,
+            "expires_at": datetime_to_string(datetime.fromtimestamp(expires_epoch, tz=timezone.utc)),
+            # The invite token is hex digits and a dot, so it needs no URL
+            # encoding in the query string.
+            "send_url": f"{agent_public_path(principal.agent_handle)}/messages?invite={token}",
+        }
+
     def agent_post(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:post")
         wrapped = {**body, "sender_handle": principal.agent_handle}
@@ -507,6 +566,7 @@ class LocalMessageHubApi:
         *,
         idempotency_key: str | None = None,
         source_ip: str | None = None,
+        invite_token: str | None = None,
     ) -> dict[str, Any]:
         """``POST /agents/{name}/messages``: message the path agent's public URL.
 
@@ -527,7 +587,12 @@ class LocalMessageHubApi:
         200 (idempotent replay); the flag is not part of the wire envelope.
         """
         if authorization is None:
-            return self.public_agent_guest_send(name, body, source_ip=source_ip)
+            return self.public_agent_guest_send(
+                name,
+                body,
+                source_ip=source_ip,
+                invite_token=invite_token,
+            )
 
         principal = self._require_agent_token(authorization, required_scope="agent:post")
         key = (idempotency_key or "").strip() or optional_string(body, "idempotency_key")
@@ -629,27 +694,49 @@ class LocalMessageHubApi:
         body: dict[str, Any],
         *,
         source_ip: str | None = None,
+        invite_token: str | None = None,
     ) -> dict[str, Any]:
         """Token-less ``POST /agents/{name}/messages``: guest ingress.
 
         Order matters: recipient lookup (404), posture gate (403
-        ``posture_not_open`` unless the recipient's ``inbox_posture`` is
-        ``open``), then rate limits (429 ``rate_limited``) — all BEFORE any
-        guest registration or message persistence. The domain helper then
-        mints the ephemeral ``@guest_`` sender and quarantines the send.
+        ``posture_not_open`` unless the recipient's posture is ``open`` or a
+        valid invite token satisfies ``token_required``), rate limits (429
+        ``rate_limited``), then callback validation — all BEFORE any guest
+        registration or message persistence. The domain helper then mints the
+        ephemeral ``@guest_`` sender and quarantines the send.
+
+        ``invite_token`` (the ``invite`` query parameter, with the body field
+        as fallback) is verified against this recipient; an invalid invite is
+        indistinguishable from a missing one. An optional ``callback_url``
+        (https, publicly resolvable) becomes the guest's reply webhook and is
+        capped per callback domain.
 
         The guest envelope is ``{"delivery_id", "status_url"}`` ONLY — no
         message/thread ids, which guests cannot use — where ``status_url``
         carries the signed polling token. ``source_ip`` of ``None`` skips the
         per-IP window (local callers without transport-level addressing).
         """
+        provided_invite = (invite_token or "").strip() or optional_string(body, "invite_token")
         try:
             recipient = self._service.get_agent(public_agent_handle(name))
-            self._service.require_guest_ingress_open(recipient)
+            invite_valid = bool(provided_invite) and verify_guest_invite_token(
+                self._guest_status_signing_secret,
+                recipient.handle,
+                provided_invite,
+                now_epoch=int(time.time()),
+            )
+            self._service.require_guest_ingress_open(recipient, guest_invite_valid=invite_valid)
         except MessageHubError as exc:
             raise_api_error(exc)
 
         self._enforce_guest_rate_limits(recipient.handle, source_ip)
+
+        try:
+            callback_url = normalize_guest_callback_url(optional_string(body, "callback_url"))
+        except MessageHubError as exc:
+            raise_api_error(exc)
+        if callback_url is not None:
+            self._enforce_guest_callback_domain_limit(guest_callback_domain(callback_url))
 
         try:
             _, result = self._service.send_guest_message(
@@ -658,6 +745,8 @@ class LocalMessageHubApi:
                 content_ref=optional_string(body, "content_ref"),
                 refs=refs_list(body.get("refs", ()), "refs"),
                 intent=optional_string(body, "intent") or "message",
+                callback_url=callback_url,
+                guest_invite_valid=invite_valid,
             )
         except (MessageHubError, SafetyBlockedError) as exc:
             raise_api_error(exc)
@@ -716,6 +805,66 @@ class LocalMessageHubApi:
             "status": guest_visible_status(delivery.status),
         }
 
+    def well_known_gulls(self, resource: str | None = None) -> dict[str, Any]:
+        """``GET /.well-known/gulls``: instance descriptor and handle resolution.
+
+        Without ``resource``, returns the instance descriptor. With
+        ``resource`` (canonical handle, ``@``-less, or webfinger
+        ``acct:name@host`` form), returns a webfinger-shaped document linking
+        the handle to its public URL resources. Handles on a foreign domain
+        are refused with ``not_federated`` (V1 is single-instance; the URL
+        scheme is the seam federation will later use); when no instance
+        domain is configured the refusal is skipped and resolution answers
+        from the local registry only.
+        """
+        if resource is None:
+            descriptor = {
+                "service": "gulls-message-hub",
+                "version": 1,
+                "agent_url_template": "/agents/{name}",
+                "send_url_template": "/agents/{name}/messages",
+                "inbox_postures": sorted(INBOX_POSTURES),
+                "federation": "none",
+            }
+            if self._instance_domain is not None:
+                descriptor["instance"] = self._instance_domain
+            return descriptor
+
+        try:
+            handle = discovery_resource_handle(resource)
+        except MessageHubError as exc:
+            raise_api_error(exc)
+        host = handle.partition(":")[2]
+        if host and self._instance_domain and host != self._instance_domain:
+            raise ApiError(400, "not_federated", f"handle is not on this instance: {handle}")
+        try:
+            agent = self._service.get_agent(handle)
+        except MessageHubError as exc:
+            raise_api_error(exc)
+
+        return {
+            "subject": agent.handle,
+            "links": [
+                {
+                    "rel": "self",
+                    "type": "application/json",
+                    "href": agent_public_path(agent.handle),
+                },
+                {
+                    "rel": "https://gulls.ai/rel/send",
+                    "href": f"{agent_public_path(agent.handle)}/messages",
+                },
+            ],
+        }
+
+    def read_agent_card_html(self, handle: str) -> str:
+        """The agent card rendered as HTML: same data, second representation.
+
+        Content negotiation is a transport concern; HTTP adapters call this
+        when the request prefers ``text/html`` and ``read_agent`` otherwise.
+        """
+        return render_agent_card_html(self.read_agent(handle)["agent"])
+
     def _enforce_guest_rate_limits(self, recipient_handle: str, source_ip: str | None) -> None:
         """Fixed one-hour windows via the repository counter; 429 on excess.
 
@@ -723,27 +872,37 @@ class LocalMessageHubApi:
         None), then the per-recipient window. Runs before any guest
         registration or message persistence.
         """
-        now = int(time.time())
-        window_start = now - (now % GUEST_SEND_WINDOW_SECONDS)
-        ttl_epoch = window_start + 2 * GUEST_SEND_WINDOW_SECONDS
-        repository = self._service._repository  # noqa: SLF001
-
         if source_ip is not None:
-            ip_count = repository.increment_guest_send_count(
-                f"guest-ip:{source_ip}",
-                window_start,
-                ttl_epoch=ttl_epoch,
-            )
+            ip_count = self._bump_guest_counter(f"guest-ip:{source_ip}")
             if ip_count > self._guest_send_ip_hourly_limit:
                 raise ApiError(429, "rate_limited", "guest send rate limit exceeded for this source")
 
-        recipient_count = repository.increment_guest_send_count(
-            f"guest-recipient:{recipient_handle}",
+        recipient_count = self._bump_guest_counter(f"guest-recipient:{recipient_handle}")
+        if recipient_count > self._guest_send_recipient_hourly_limit:
+            raise ApiError(429, "rate_limited", "guest send rate limit exceeded for this recipient")
+
+    def _enforce_guest_callback_domain_limit(self, domain: str) -> None:
+        """Cap how many guest sends may register a callback on one domain.
+
+        This is the ingress half of the callback rate cap: it bounds how many
+        reply webhooks can be pointed at a single host per window, so guests
+        cannot enlist the hub as a POST cannon against a victim domain.
+        Dispatch volume is further bounded by replies being recipient
+        actions.
+        """
+        count = self._bump_guest_counter(f"guest-callback-domain:{domain}")
+        if count > self._guest_callback_domain_hourly_limit:
+            raise ApiError(429, "rate_limited", "guest callback rate limit exceeded for this domain")
+
+    def _bump_guest_counter(self, scope_key: str) -> int:
+        now = int(time.time())
+        window_start = now - (now % GUEST_SEND_WINDOW_SECONDS)
+        ttl_epoch = window_start + 2 * GUEST_SEND_WINDOW_SECONDS
+        return self._service._repository.increment_guest_send_count(  # noqa: SLF001
+            scope_key,
             window_start,
             ttl_epoch=ttl_epoch,
         )
-        if recipient_count > self._guest_send_recipient_hourly_limit:
-            raise ApiError(429, "rate_limited", "guest send rate limit exceeded for this recipient")
 
     def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
         try:
@@ -1509,6 +1668,62 @@ def guest_status_token(secret: str, delivery_id: str) -> str:
         delivery_id.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+
+
+def guest_invite_token(secret: str, recipient_handle: str, expires_epoch: int) -> str:
+    """``<expiry>.<hex HMAC-SHA256>``: the ``token_required`` send capability.
+
+    The MAC covers a domain-separation label, the recipient handle, and the
+    expiry, so invite tokens can never collide with guest status tokens
+    (which MAC a bare delivery id with the same secret) and an invite for one
+    agent is worthless for another.
+    """
+    payload = f"guest-invite\n{recipient_handle}\n{expires_epoch}".encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return f"{expires_epoch}.{digest}"
+
+
+def verify_guest_invite_token(
+    secret: str,
+    recipient_handle: str,
+    token: str,
+    *,
+    now_epoch: int,
+) -> bool:
+    value = (token or "").strip()
+    expires_raw, separator, digest = value.partition(".")
+    if not separator or not digest:
+        return False
+    try:
+        expires_epoch = int(expires_raw)
+    except ValueError:
+        return False
+    if expires_epoch < now_epoch:
+        return False
+    expected = guest_invite_token(secret, recipient_handle, expires_epoch)
+    return hmac.compare_digest(expected, value)
+
+
+def discovery_resource_handle(resource: str) -> str:
+    """Resolve a ``/.well-known/gulls`` resource parameter to a handle.
+
+    Accepts the canonical handle form (leading ``@`` optional, as on the
+    public URL path) plus the webfinger ``acct:name@host`` shape. Guests are
+    never discoverable, matching the public-URL namespace rule.
+    """
+    candidate = (resource or "").strip()
+    if candidate.lower().startswith("acct:"):
+        rest = candidate[5:].lstrip("@")
+        name, separator, host = rest.partition("@")
+        candidate = f"@{name}:{host}" if separator and host else f"@{name}"
+    if candidate and not candidate.startswith("@"):
+        candidate = f"@{candidate}"
+    normalized = normalize_handle(candidate)
+    if normalized.startswith(GUEST_HANDLE_PREFIX):
+        raise InvalidMessageError(
+            f"the {GUEST_HANDLE_PREFIX} namespace is reserved and is not discoverable"
+        )
+    return normalized
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:

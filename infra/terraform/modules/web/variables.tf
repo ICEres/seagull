@@ -51,6 +51,12 @@ variable "message_api_url" {
   description = "Runtime Message API URL written to config.js."
 }
 
+variable "message_api_origin_domain" {
+  type        = string
+  description = "Message API hostname to serve /agents/* and /.well-known/* from on the landing (apex) distribution. Empty keeps the landing static-only."
+  default     = ""
+}
+
 variable "ai_provider_api_url" {
   type        = string
   description = "Runtime AI provider API URL written to config.js."

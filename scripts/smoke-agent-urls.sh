@@ -52,6 +52,7 @@ echo
 echo
 
 SENDER_TOKEN="$(python3 -c 'import json; print(json.load(open(".local/agent-urls-smoke-sender.json"))["token"])')"
+RECIPIENT_TOKEN="$(python3 -c 'import json; print(json.load(open(".local/agent-urls-smoke-recipient.json"))["token"])')"
 RECIPIENT_PATH="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RECIPIENT_HANDLE")"
 
 echo "Public agent card:"
@@ -60,6 +61,28 @@ echo
 echo
 
 RECIPIENT_HANDLE="$RECIPIENT_HANDLE" python3 -c 'import json, os; agent=json.load(open(".local/agent-urls-smoke-card.json"))["agent"]; assert agent["handle"] == os.environ["RECIPIENT_HANDLE"]; assert "webhook_url" not in agent'
+
+echo "HTML card via Accept negotiation:"
+curl -fsS -H "accept: text/html" "$API_URL/agents/$RECIPIENT_PATH" > .local/agent-urls-smoke-card.html
+RECIPIENT_HANDLE="$RECIPIENT_HANDLE" python3 -c 'import os; page=open(".local/agent-urls-smoke-card.html").read(); assert page.startswith("<!doctype html>"), page[:80]; assert os.environ["RECIPIENT_HANDLE"] in page'
+echo "ok"
+echo
+
+echo "Discovery descriptor and handle resolution:"
+curl -fsS "$API_URL/.well-known/gulls" | tee .local/agent-urls-smoke-discovery.json
+echo
+curl -fsS "$API_URL/.well-known/gulls?resource=$RECIPIENT_PATH" | tee .local/agent-urls-smoke-resolution.json
+echo
+RECIPIENT_HANDLE="$RECIPIENT_HANDLE" python3 <<'PY'
+import json, os
+descriptor = json.load(open(".local/agent-urls-smoke-discovery.json"))
+assert descriptor["service"] == "gulls-message-hub", descriptor
+assert descriptor["agent_url_template"] == "/agents/{name}", descriptor
+resolution = json.load(open(".local/agent-urls-smoke-resolution.json"))
+assert resolution["subject"] == os.environ["RECIPIENT_HANDLE"], resolution
+assert any(link["rel"] == "self" for link in resolution["links"]), resolution
+PY
+echo
 
 echo "Post message to the public agent URL:"
 curl -fsS \
@@ -110,5 +133,68 @@ if [ "$STATUS" != "delivered" ] && [ "$STATUS" != "accepted" ] && [ "$STATUS" !=
   echo "delivery never reached delivered/accepted (last status: $STATUS)" >&2
   exit 1
 fi
+
+echo "Guest send is refused under the default contacts_only posture:"
+GUEST_REFUSED_CODE="$(curl -sS -o .local/agent-urls-smoke-guest-refused.json -w '%{http_code}' \
+  -X POST "$API_URL/agents/$RECIPIENT_PATH/messages" \
+  -H "content-type: application/json" \
+  -d '{"content": "Guest knock."}')"
+if [ "$GUEST_REFUSED_CODE" != "403" ]; then
+  echo "expected 403 for a guest send under contacts_only, got $GUEST_REFUSED_CODE" >&2
+  cat .local/agent-urls-smoke-guest-refused.json >&2
+  exit 1
+fi
+echo "ok (403)"
+echo
+
+echo "Open the inbox posture and send as a guest:"
+curl -fsS \
+  -X POST "$API_URL/agent/inbox-posture" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" \
+  -d '{"inbox_posture": "open"}' > /dev/null
+curl -fsS \
+  -X POST "$API_URL/agents/$RECIPIENT_PATH/messages" \
+  -H "content-type: application/json" \
+  -d '{"content": "Hello from an anonymous guest."}' | tee .local/agent-urls-smoke-guest-send.json
+echo
+echo
+
+GUEST_STATUS_URL="$(python3 -c 'import json; data=json.load(open(".local/agent-urls-smoke-guest-send.json")); assert set(data) == {"delivery_id", "status_url"}, data; assert "?token=" in data["status_url"]; print(data["status_url"])')"
+
+echo "Poll the signed guest status URL (no Authorization):"
+curl -fsS "$API_URL$GUEST_STATUS_URL" | tee .local/agent-urls-smoke-guest-status.json
+echo
+python3 -c 'import json; data=json.load(open(".local/agent-urls-smoke-guest-status.json")); assert data["status"] in {"accepted", "quarantined"}, data'
+echo
+
+echo "token_required posture: refused without an invite, accepted with one:"
+curl -fsS \
+  -X POST "$API_URL/agent/inbox-posture" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" \
+  -d '{"inbox_posture": "token_required"}' > /dev/null
+INVITE_REFUSED_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST "$API_URL/agents/$RECIPIENT_PATH/messages" \
+  -H "content-type: application/json" \
+  -d '{"content": "Guest without invite."}')"
+if [ "$INVITE_REFUSED_CODE" != "403" ]; then
+  echo "expected 403 for a guest send under token_required, got $INVITE_REFUSED_CODE" >&2
+  exit 1
+fi
+curl -fsS \
+  -X POST "$API_URL/agent/guest-invites" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $RECIPIENT_TOKEN" \
+  -d '{}' | tee .local/agent-urls-smoke-invite.json
+echo
+INVITE_TOKEN="$(python3 -c 'import json; print(json.load(open(".local/agent-urls-smoke-invite.json"))["invite_token"])')"
+curl -fsS \
+  -X POST "$API_URL/agents/$RECIPIENT_PATH/messages?invite=$INVITE_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"content": "Guest with invite."}' | tee .local/agent-urls-smoke-invite-send.json
+echo
+python3 -c 'import json; data=json.load(open(".local/agent-urls-smoke-invite-send.json")); assert set(data) == {"delivery_id", "status_url"}, data'
+echo
 
 echo "PASS: public agent URL smoke for $API_URL (final status: $STATUS)"

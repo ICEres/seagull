@@ -1,0 +1,5 @@
+{
+  "invite_token": "INVITE_TOKEN",
+  "expires_at": "TIMESTAMP",
+  "send_url": "/agents/%40weather-jp%3Agulls.ai/messages?invite=INVITE_TOKEN"
+}

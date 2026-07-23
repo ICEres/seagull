@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import ipaddress
 import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from message_hub.domain.events import delivery_created_event
@@ -143,11 +145,11 @@ PAYLOAD_RETENTION_STATES = {
     PAYLOAD_RETENTION_DELETED,
 }
 AGENT_TOKEN_PREFIX = "sga"
-# Inbox postures gate ONLY the token-less guest path in this slice: "open"
-# admits guests, everything else refuses them with posture_not_open.
-# Registered-sender behavior is unchanged by posture. "token_required" is
-# reserved for later semantics (per-sender guest tokens) and currently
-# behaves exactly like "contacts_only".
+# Inbox postures gate ONLY the token-less guest path: "open" admits any
+# guest, "token_required" admits guests presenting a valid recipient-minted
+# invite token (the api layer verifies the signature and passes the verdict
+# down), and "contacts_only" refuses all guests. Registered-sender behavior
+# is unchanged by posture.
 INBOX_POSTURES = frozenset({"open", "contacts_only", "token_required"})
 DEFAULT_INBOX_POSTURE = "contacts_only"
 # Reserved handle namespace for server-minted guest senders. Guests are real
@@ -156,6 +158,55 @@ DEFAULT_INBOX_POSTURE = "contacts_only"
 GUEST_HANDLE_PREFIX = "@guest_"
 GUEST_DISPLAY_NAME = "Guest sender"
 GUEST_AGENT_STATUS = "guest"
+# Local names that may never be registered: each is (or may become) a path
+# segment or product surface in the public URL namespace
+# (gulls.ai/agents/<name> and sibling routes). Enforced at registration so
+# the namespace is clean BEFORE the apex CloudFront behaviors land; records
+# predating the list are grandfathered.
+RESERVED_PUBLIC_AGENT_NAMES = frozenset(
+    {
+        "abuse",
+        "admin",
+        "administrator",
+        "agent",
+        "agents",
+        "api",
+        "contact",
+        "guest",
+        "guests",
+        "gulls",
+        "health",
+        "help",
+        "info",
+        "landing",
+        "mail",
+        "messages",
+        "moderation",
+        "owner",
+        "payloads",
+        "postmaster",
+        "root",
+        "seagull",
+        "seagulls",
+        "security",
+        "status",
+        "support",
+        "system",
+        "tasks",
+        "team",
+        "threads",
+        "webmaster",
+        "well-known",
+        "www",
+    }
+)
+# Guest reply callbacks are attacker-controlled URLs, so ingress validation
+# is stricter than registered-agent webhooks: https only, no credentials, no
+# loopback/private/link-local literals, and no single-label intranet hosts.
+# DNS-time guardrails (public-IP-only resolution pinned to the vetted
+# address, no redirects) live in the agent worker's webhook dispatch, which
+# guest callbacks ride unchanged.
+GUEST_CALLBACK_MAX_URL_LENGTH = 2048
 AGENT_TOKEN_SCOPES = frozenset(
     {
         "agent:read",
@@ -224,6 +275,10 @@ class MessageHubService:
                 f"agent handles starting with {GUEST_HANDLE_PREFIX} are reserved "
                 "for server-minted guest senders"
             )
+        if not _allow_reserved_guest_handle and agent_local_name(normalized_handle) in RESERVED_PUBLIC_AGENT_NAMES:
+            raise InvalidMessageError(
+                f"agent name is reserved: {agent_local_name(normalized_handle)}"
+            )
         if self._repository.get_agent_by_handle(normalized_handle) is not None:
             raise DuplicateAgentHandleError(f"agent handle already exists: {normalized_handle}")
 
@@ -251,17 +306,26 @@ class MessageHubService:
         self._repository.add_agent(agent)
         return agent
 
-    def register_guest_sender(self) -> Agent:
+    def register_guest_sender(self, *, callback_url: str | None = None) -> Agent:
         """Mint the ephemeral per-send guest identity in the reserved namespace.
 
         Guests are real agent records so guest ingress reuses the single
         ``send_message`` write path. A fresh identity is minted per send and
         never reused; ``register_agent`` rejects the ``@guest_`` namespace for
         everyone else.
+
+        A validated ``callback_url`` is stored as the guest's webhook: replies
+        to the guest then ride the existing delivery-event -> agent-worker
+        webhook dispatch, whose SSRF vetting (public-IP-pinned https, no
+        redirects) applies unchanged. The card sanitizer never exposes
+        webhook URLs, so the callback cannot leak from the record.
         """
+        normalized_callback_url = normalize_guest_callback_url(callback_url)
         agent = self.register_agent(
             f"{GUEST_HANDLE_PREFIX}{secrets.token_hex(8)}",
             display_name=GUEST_DISPLAY_NAME,
+            trigger_mode="manual" if normalized_callback_url is None else "webhook",
+            webhook_url=normalized_callback_url,
             _allow_reserved_guest_handle=True,
         )
         guest = replace(agent, status=GUEST_AGENT_STATUS)
@@ -275,17 +339,27 @@ class MessageHubService:
         self._repository.update_agent(updated)
         return updated
 
-    def require_guest_ingress_open(self, recipient: Agent) -> None:
+    def require_guest_ingress_open(self, recipient: Agent, *, guest_invite_valid: bool = False) -> None:
         """Posture gate for the token-less guest path (and only that path).
 
-        Only ``open`` admits guests; ``contacts_only`` and ``token_required``
-        (reserved for later semantics) both refuse them. Registered senders
-        are never gated by posture.
+        ``open`` admits any guest; ``token_required`` admits only guests whose
+        invite token the api layer already verified for this recipient
+        (``guest_invite_valid``); ``contacts_only`` refuses all guests — an
+        invite does not override it. Registered senders are never gated by
+        posture. Missing and invalid invites raise the same error so the gate
+        is not an invite-validity oracle beyond what a send would reveal.
         """
-        if recipient.inbox_posture != "open":
+        if recipient.inbox_posture == "open":
+            return
+        if recipient.inbox_posture == "token_required":
+            if guest_invite_valid:
+                return
             raise PostureNotOpenError(
-                f"agent does not accept guest messages: {recipient.handle}"
+                f"agent requires a guest invite token: {recipient.handle}"
             )
+        raise PostureNotOpenError(
+            f"agent does not accept guest messages: {recipient.handle}"
+        )
 
     def send_guest_message(
         self,
@@ -295,6 +369,8 @@ class MessageHubService:
         content_ref: str | None = None,
         refs: Sequence[MessageRef | dict[str, str | None]] = (),
         intent: str = "message",
+        callback_url: str | None = None,
+        guest_invite_valid: bool = False,
     ) -> tuple[Agent, SendMessageResult]:
         """Quarantine-first guest ingress through the single send path.
 
@@ -307,15 +383,16 @@ class MessageHubService:
         act on them, and no agent-worker event is published for them.
         """
         recipient = self._require_agent_by_handle(recipient_handle)
-        self.require_guest_ingress_open(recipient)
+        self.require_guest_ingress_open(recipient, guest_invite_valid=guest_invite_valid)
         normalized_refs = tuple(normalize_message_ref(ref) for ref in refs)
+        normalized_callback_url = normalize_guest_callback_url(callback_url)
         if content is None and normalized_optional_string(content_ref) is None and not normalized_refs:
             # Validate before minting the guest identity so an empty send
             # leaves no orphan agent record behind.
             raise InvalidMessageError("message content, content_ref, or refs are required")
 
         guest_evaluator = GuestSafetyEvaluator(self._safety_evaluator)
-        guest = self.register_guest_sender()
+        guest = self.register_guest_sender(callback_url=normalized_callback_url)
         result = self.send_message(
             sender_handle=guest.handle,
             recipient_handles=[recipient.handle],
@@ -3401,3 +3478,52 @@ def normalize_webhook_url(webhook_url: str | None) -> str | None:
     if not (normalized.startswith("http://") or normalized.startswith("https://")):
         raise InvalidMessageError("webhook_url must start with http:// or https://")
     return normalized
+
+
+def agent_local_name(handle: str) -> str:
+    """Local part of a normalized handle: ``@name:host`` -> ``name``."""
+    return handle[1:].partition(":")[0]
+
+
+def normalize_guest_callback_url(callback_url: str | None) -> str | None:
+    """Validate a guest reply-callback URL at ingress.
+
+    Syntactic guardrails only — https scheme, no credentials, no
+    loopback/private/link-local IP literals, no single-label intranet hosts.
+    Resolution-time guardrails (public-IP-only DNS pinned to the vetted
+    address, no redirects) belong to the agent worker that performs the
+    outbound POST.
+    """
+    if callback_url is None:
+        return None
+    normalized = callback_url.strip()
+    if not normalized:
+        return None
+    if len(normalized) > GUEST_CALLBACK_MAX_URL_LENGTH:
+        raise InvalidMessageError("callback_url is too long")
+    parsed = urlsplit(normalized)
+    if parsed.scheme != "https":
+        raise InvalidMessageError("callback_url must use https")
+    if parsed.username or parsed.password:
+        raise InvalidMessageError("callback_url must not include credentials")
+    host = parsed.hostname
+    if not host:
+        raise InvalidMessageError("callback_url host is required")
+    try:
+        parsed.port
+    except ValueError:
+        raise InvalidMessageError("callback_url port is invalid") from None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if "." not in host:
+            raise InvalidMessageError("callback_url host must be a public hostname") from None
+    else:
+        if not ip.is_global:
+            raise InvalidMessageError("callback_url host must be a public address")
+    return normalized
+
+
+def guest_callback_domain(callback_url: str) -> str:
+    """Lowercased host of a validated callback URL (rate-cap scope key)."""
+    return (urlsplit(callback_url).hostname or "").lower()

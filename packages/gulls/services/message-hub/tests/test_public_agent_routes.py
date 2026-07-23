@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import time
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -28,7 +29,8 @@ from unittest import TestCase
 from unittest.mock import patch
 from urllib.parse import quote
 
-from message_hub.api import ApiError, LocalMessageHubApi
+from message_hub.api import HTML_MEDIA_TYPE, ApiError, LocalMessageHubApi
+from message_hub.api.local import guest_invite_token
 from message_hub.domain import (
     DeliveryStatus,
     LocalSafetyEvaluator,
@@ -66,6 +68,8 @@ VOLATILE_ID_PATTERN = re.compile(r"(agent|delivery|message|thread)_[0-9a-f]{32}"
 TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
 # The signed guest status token (hex HMAC-SHA256) is volatile per secret.
 GUEST_TOKEN_PATTERN = re.compile(r"token=[0-9a-f]{64}")
+# The signed guest invite token (expiry.hex HMAC-SHA256) is volatile too.
+INVITE_TOKEN_PATTERN = re.compile(r"\d+\.[0-9a-f]{64}")
 
 
 def canonicalize(value: object) -> object:
@@ -76,6 +80,7 @@ def canonicalize(value: object) -> object:
         return [canonicalize(item) for item in value]
     if isinstance(value, str):
         canonical = GUEST_TOKEN_PATTERN.sub("token=SIGNED_TOKEN", value)
+        canonical = INVITE_TOKEN_PATTERN.sub("INVITE_TOKEN", canonical)
         return TIMESTAMP_PATTERN.sub("TIMESTAMP", VOLATILE_ID_PATTERN.sub(r"\1_ID", canonical))
     return value
 
@@ -354,8 +359,8 @@ class PublicAgentRouteContractMixin:
                 set(envelope),
             )
 
-        # token_required is reserved for later semantics: guests are refused
-        # exactly like contacts_only this slice.
+        # Without a valid invite, token_required refuses guests exactly like
+        # contacts_only; the guest-invite tests cover the admit path.
         self.set_posture(self.recipient_token, "token_required")
         status_code, body = self.guest_send(RECIPIENT_HANDLE, {"content": "Hi"})
         self.assertEqual(403, status_code)
@@ -555,6 +560,229 @@ class PublicAgentRouteContractMixin:
         self.assertEqual(200, status_code)
         self.assertEqual("quarantined", body["status"])
 
+    # -- guest invites (token_required semantics)
+
+    def mint_invite_ok(self, token: str, body: dict[str, object] | None = None) -> dict[str, object]:
+        status_code, invite = self.mint_invite(token, body or {})
+        assert status_code == 201, invite
+        return invite
+
+    def test_mint_invite_requires_auth_scope_and_sane_ttl(self) -> None:
+        status_code, _ = self.mint_invite(None, {})
+        self.assertEqual(401, status_code)
+
+        reader_token = self.register({"handle": "@invite-reader:gulls.ai", "scopes": ["agent:read"]})
+        status_code, _ = self.mint_invite(reader_token, {})
+        self.assertEqual(403, status_code)
+
+        for expires_in in (10, 90 * 24 * 3600):
+            status_code, body = self.mint_invite(self.recipient_token, {"expires_in_seconds": expires_in})
+            self.assertEqual(400, status_code, expires_in)
+            self.assertEqual("bad_request", body["error"])
+
+        invite = self.mint_invite_ok(self.recipient_token)
+        self.assertEqual(fixture("guest-invite-201.json"), canonicalize(invite))
+        # send_url embeds the exact minted token; it is hex plus a dot, so it
+        # needs no URL encoding.
+        self.assertEqual(
+            f"/agents/{quote(RECIPIENT_HANDLE, safe='')}/messages?invite={invite['invite_token']}",
+            invite["send_url"],
+        )
+
+    def test_token_required_admits_a_valid_invite_and_still_quarantines(self) -> None:
+        self.set_posture(self.recipient_token, "token_required")
+        invite = self.mint_invite_ok(self.recipient_token)
+
+        status_code, body = self.guest_send(RECIPIENT_HANDLE, {"content": "Hi"})
+        self.assertEqual(403, status_code)
+        self.assertEqual("posture_not_open", body["error"])
+
+        status_code, envelope = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi"}, invite=str(invite["invite_token"])
+        )
+        self.assertEqual(202, status_code, envelope)
+        # The guest envelope is unchanged by the invite path...
+        self.assertEqual({"delivery_id", "status_url"}, set(envelope))
+        # ...and an invite admits the send but never bypasses quarantine.
+        delivery = self.repository.get_delivery(str(envelope["delivery_id"]))
+        self.assertEqual(DeliveryStatus.NEEDS_REVIEW, delivery.status)
+
+        # The body field is the fallback for the invite query parameter.
+        status_code, _ = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi", "invite_token": invite["invite_token"]}
+        )
+        self.assertEqual(202, status_code)
+
+    def test_invalid_invites_read_exactly_like_missing_ones(self) -> None:
+        self.set_posture(self.recipient_token, "token_required")
+        foreign_invite = str(self.mint_invite_ok(self.bystander_token)["invite_token"])
+        expired = guest_invite_token(GUEST_SIGNING_SECRET, RECIPIENT_HANDLE, int(time.time()) - 60)
+        valid = str(self.mint_invite_ok(self.recipient_token)["invite_token"])
+        tampered = valid[:-1] + ("0" if valid[-1] != "0" else "1")
+
+        for bad in (foreign_invite, expired, tampered, "not-an-invite", ""):
+            status_code, body = self.guest_send(RECIPIENT_HANDLE, {"content": "Hi"}, invite=bad)
+            self.assertEqual(403, status_code, bad)
+            self.assertEqual("posture_not_open", body["error"])
+        self.assertEqual([], self.guest_handles())
+
+    def test_contacts_only_ignores_invites(self) -> None:
+        # An invite is a token_required capability, not a posture override.
+        invite = self.mint_invite_ok(self.recipient_token)
+        status_code, body = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi"}, invite=str(invite["invite_token"])
+        )
+        self.assertEqual(403, status_code)
+        self.assertEqual("posture_not_open", body["error"])
+
+    # -- guest reply callbacks (M2.4)
+
+    def test_guest_callback_becomes_the_guest_reply_webhook(self) -> None:
+        self.set_posture(self.recipient_token, "open")
+        status_code, envelope = self.guest_send(
+            RECIPIENT_HANDLE,
+            {"content": "Hi", "callback_url": "https://example.com/hooks/reply"},
+        )
+        self.assertEqual(202, status_code, envelope)
+        # The guest envelope is unchanged: callbacks are fire-and-forget.
+        self.assertEqual({"delivery_id", "status_url"}, set(envelope))
+
+        # The callback is stored as the ephemeral guest's webhook, so replies
+        # ride the existing delivery-event -> agent-worker dispatch (and its
+        # SSRF vetting) unchanged.
+        delivery = self.repository.get_delivery(str(envelope["delivery_id"]))
+        guest = self.repository.get_agent(delivery.sender_agent_id)
+        self.assertEqual("webhook", guest.trigger_mode)
+        self.assertEqual("https://example.com/hooks/reply", guest.webhook_url)
+
+        # Callback-less guests stay manual.
+        _, plain = self.guest_send(RECIPIENT_HANDLE, {"content": "Hi"})
+        plain_delivery = self.repository.get_delivery(str(plain["delivery_id"]))
+        plain_guest = self.repository.get_agent(plain_delivery.sender_agent_id)
+        self.assertEqual("manual", plain_guest.trigger_mode)
+        self.assertIsNone(plain_guest.webhook_url)
+
+    def test_guest_callback_url_ingress_guardrails(self) -> None:
+        self.set_posture(self.recipient_token, "open")
+        for bad in (
+            "http://example.com/hook",  # https only
+            "https://user:secret@example.com/hook",  # no credentials
+            "https://10.0.0.8/hook",  # private literal
+            "https://127.0.0.1/hook",  # loopback literal
+            "https://[::1]/hook",
+            "https://169.254.169.254/latest/meta-data",  # link-local literal
+            "https://localhost/hook",  # single-label intranet name
+            "https://intranet/hook",
+            "https://example.com:notaport/hook",
+            "https://example.com/" + "a" * 2100,  # over the length cap
+        ):
+            status_code, body = self.guest_send(
+                RECIPIENT_HANDLE, {"content": "Hi", "callback_url": bad}
+            )
+            self.assertEqual(400, status_code, bad)
+            self.assertEqual("bad_request", body["error"])
+        # No guest identity was minted for any refused callback.
+        self.assertEqual([], self.guest_handles())
+
+    def test_guest_callback_domain_rate_limit(self) -> None:
+        self.set_posture(self.recipient_token, "open")
+        self.configure_callback_domain_limit(2)
+
+        for _ in range(2):
+            status_code, _ = self.guest_send(
+                RECIPIENT_HANDLE, {"content": "Hi", "callback_url": "https://example.com/hook"}
+            )
+            self.assertEqual(202, status_code)
+
+        minted_before = self.guest_handles()
+        status_code, body = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi", "callback_url": "https://example.com/other"}
+        )
+        self.assertEqual(429, status_code)
+        self.assertEqual("rate_limited", body["error"])
+        self.assertEqual(minted_before, self.guest_handles())
+
+        # The cap is per callback host, not global.
+        status_code, _ = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi", "callback_url": "https://other.example.net/hook"}
+        )
+        self.assertEqual(202, status_code)
+
+    # -- reserved public names (M3.3)
+
+    def test_reserved_public_names_are_rejected_at_registration(self) -> None:
+        for handle in ("@admin", "@api:gulls.ai", "@well-known:gulls.ai", "@Gulls:gulls.ai"):
+            status_code, body = self.try_register({"handle": handle})
+            self.assertEqual(400, status_code, handle)
+            self.assertIn("reserved", body["message"])
+        # Only exact local-name matches are reserved.
+        self.register({"handle": "@administrator-fan:gulls.ai", "scopes": ["agent:read"]})
+
+    # -- /.well-known/gulls discovery (M3.2)
+
+    def test_discovery_descriptor_matches_fixture(self) -> None:
+        status_code, body = self.discovery()
+        self.assertEqual(200, status_code)
+        self.assertEqual(fixture("discovery-descriptor.json"), body)
+
+    def test_discovery_resolves_local_handles(self) -> None:
+        expected = fixture("discovery-resolution.json")
+        # Canonical, @-less, and webfinger acct: forms all resolve.
+        for resource in (RECIPIENT_HANDLE, RECIPIENT_HANDLE.removeprefix("@"), "acct:weather-jp@gulls.ai"):
+            status_code, body = self.discovery(resource)
+            self.assertEqual(200, status_code, resource)
+            self.assertEqual(expected, body, resource)
+
+    def test_discovery_unknown_handles_and_guests(self) -> None:
+        status_code, body = self.discovery("@nobody:gulls.ai")
+        self.assertEqual(404, status_code)
+        self.assertEqual("not_found", body["error"])
+        # Guests are never discoverable, matching the public-URL rule.
+        status_code, _ = self.discovery("@guest_0123456789abcdef")
+        self.assertEqual(400, status_code)
+
+    def test_discovery_refuses_foreign_domains_when_instance_domain_is_set(self) -> None:
+        self.configure_instance_domain("gulls.ai")
+
+        status_code, body = self.discovery("@somebody:elsewhere.tld")
+        self.assertEqual(400, status_code)
+        self.assertEqual("not_federated", body["error"])
+
+        # Local handles keep resolving, and the descriptor advertises the
+        # instance domain.
+        status_code, body = self.discovery(RECIPIENT_HANDLE)
+        self.assertEqual(200, status_code)
+        self.assertEqual(RECIPIENT_HANDLE, body["subject"])
+        _, descriptor = self.discovery()
+        self.assertEqual("gulls.ai", descriptor["instance"])
+
+    # -- HTML agent card (M3.3)
+
+    def test_html_card_renders_the_sanitized_card(self) -> None:
+        status_code, content_type, page = self.card_html(RECIPIENT_HANDLE)
+        self.assertEqual(200, status_code)
+        self.assertTrue(content_type.startswith("text/html"), content_type)
+        self.assertIn("Weather JP", page)
+        self.assertIn("@weather-jp:gulls.ai", page)
+        self.assertIn("weather.forecast", page)
+        self.assertIn("contacts_only", page)
+        # The single sanitizer's exclusions hold in the HTML view too.
+        self.assertNotIn("mcp://", page)
+        self.assertNotIn("api_key", page)
+
+    def test_html_card_escapes_markup(self) -> None:
+        self.register(
+            {
+                "handle": "@markup:gulls.ai",
+                "display_name": "<script>alert(1)</script>",
+                "scopes": ["agent:read"],
+            }
+        )
+        status_code, _, page = self.card_html("@markup:gulls.ai")
+        self.assertEqual(200, status_code)
+        self.assertNotIn("<script>", page)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
+
 
 class LocalApiPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
     """Drives LocalMessageHubApi directly (no HTTP transport, no kill switch)."""
@@ -585,6 +813,12 @@ class LocalApiPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
             guest_send_ip_hourly_limit=ip_limit,
             guest_send_recipient_hourly_limit=recipient_limit,
         )
+
+    def configure_callback_domain_limit(self, limit: int) -> None:
+        self.make_api(guest_callback_domain_hourly_limit=limit)
+
+    def configure_instance_domain(self, domain: str) -> None:
+        self.make_api(instance_domain=domain)
 
     def configure_safety_evaluator(self, evaluator: object) -> None:
         self.make_api(safety_evaluator=evaluator)
@@ -625,11 +859,31 @@ class LocalApiPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
         body: dict[str, object],
         *,
         source_ip: str | None = None,
+        invite: str | None = None,
     ) -> tuple[int, dict[str, object]]:
         def invoke() -> tuple[int, dict[str, object]]:
-            return 202, self.api.public_agent_send(None, name, body, source_ip=source_ip)
+            return 202, self.api.public_agent_send(
+                None, name, body, source_ip=source_ip, invite_token=invite
+            )
 
         return self.call(invoke)
+
+    def mint_invite(self, token: str | None, body: dict[str, object]) -> tuple[int, dict[str, object]]:
+        return self.call(
+            lambda: (201, self.api.agent_mint_guest_invite(self.authorization(token), body))
+        )
+
+    def discovery(self, resource: str | None = None) -> tuple[int, dict[str, object]]:
+        return self.call(lambda: self.api.well_known_gulls(resource))
+
+    def card_html(self, name: str, accept: str = "text/html") -> tuple[int, str, str]:
+        # The local api has no transport negotiation; ``accept`` exists for
+        # transport parity and the HTML representation is requested directly.
+        try:
+            page = self.api.read_agent_card_html(name)
+        except ApiError as exc:
+            return exc.status_code, "application/json", exc.message
+        return 200, HTML_MEDIA_TYPE, page
 
     def get_status(self, token: str | None, name: str, delivery_id: str) -> tuple[int, dict[str, object]]:
         return self.call(
@@ -671,6 +925,48 @@ class LocalApiPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
         self.assertEqual("bad_request", body["error"])
         self.assertEqual([], self.guest_handles())
 
+    def test_reply_to_a_callback_guest_publishes_one_webhook_event(self) -> None:
+        # Replies to callback guests must ride the delivery-event pipeline the
+        # agent worker consumes; callback-less guests must not.
+        events: list[dict[str, object]] = []
+        self.api = LocalMessageHubApi(
+            MessageHubService(
+                self.repository,
+                safety_evaluator=LocalSafetyEvaluator(),
+                delivery_event_publisher=events.append,
+            ),
+            guest_status_signing_secret=GUEST_SIGNING_SECRET,
+        )
+        self.set_posture(self.recipient_token, "open")
+
+        _, envelope = self.guest_send(
+            RECIPIENT_HANDLE, {"content": "Hi", "callback_url": "https://example.com/hook"}
+        )
+        # The inbound guest send publishes nothing: the recipient is a
+        # manual-mode agent and the delivery is held for review anyway.
+        self.assertEqual([], events)
+
+        delivery_id = str(envelope["delivery_id"])
+        self.force_delivery_status(delivery_id, DeliveryStatus.DELIVERED)
+        self.decide_reply(self.recipient_token, delivery_id, "Hello, guest.")
+
+        self.assertEqual(1, len(events))
+        data = events[0]["data"]
+        guest = self.repository.get_agent(
+            self.repository.get_delivery(delivery_id).sender_agent_id
+        )
+        self.assertEqual(guest.handle, data["recipient_handle"])
+        self.assertEqual(RECIPIENT_HANDLE, data["sender_handle"])
+        self.assertEqual("Hello, guest.", data["content_inline"])
+
+        # A callback-less guest reply publishes nothing.
+        events.clear()
+        _, plain = self.guest_send(RECIPIENT_HANDLE, {"content": "Hi again"})
+        plain_id = str(plain["delivery_id"])
+        self.force_delivery_status(plain_id, DeliveryStatus.DELIVERED)
+        self.decide_reply(self.recipient_token, plain_id, "Hello again.")
+        self.assertEqual([], events)
+
     @staticmethod
     def call(invoke):
         try:
@@ -711,13 +1007,19 @@ class LambdaPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
 
     def configure_guest_limits(self, *, ip_limit: int, recipient_limit: int) -> None:
         # Lambda api: limits come from the environment.
-        env = patch.dict(
-            os.environ,
-            {
-                "GUEST_SEND_IP_HOURLY_LIMIT": str(ip_limit),
-                "GUEST_SEND_RECIPIENT_HOURLY_LIMIT": str(recipient_limit),
-            },
+        self._configure_env(
+            GUEST_SEND_IP_HOURLY_LIMIT=str(ip_limit),
+            GUEST_SEND_RECIPIENT_HOURLY_LIMIT=str(recipient_limit),
         )
+
+    def configure_callback_domain_limit(self, limit: int) -> None:
+        self._configure_env(GUEST_CALLBACK_DOMAIN_HOURLY_LIMIT=str(limit))
+
+    def configure_instance_domain(self, domain: str) -> None:
+        self._configure_env(PUBLIC_INSTANCE_DOMAIN=domain)
+
+    def _configure_env(self, **variables: str) -> None:
+        env = patch.dict(os.environ, variables)
         env.start()
         self.addCleanup(env.stop)
         self.install_api()
@@ -789,13 +1091,38 @@ class LambdaPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
         body: dict[str, object],
         *,
         source_ip: str | None = None,
+        invite: str | None = None,
     ) -> tuple[int, dict[str, object]]:
         return self.handle(
             "POST",
             f"/agents/{quote(name, safe='')}/messages",
             body,
             source_ip=source_ip,
+            query=None if invite is None else {"invite": invite},
         )
+
+    def mint_invite(self, token: str | None, body: dict[str, object]) -> tuple[int, dict[str, object]]:
+        headers = None if token is None else {"authorization": f"Bearer {token}"}
+        return self.handle("POST", "/agent/guest-invites", body, headers=headers)
+
+    def discovery(self, resource: str | None = None) -> tuple[int, dict[str, object]]:
+        return self.handle(
+            "GET",
+            "/.well-known/gulls",
+            query=None if resource is None else {"resource": resource},
+        )
+
+    def card_html(self, name: str, accept: str = "text/html") -> tuple[int, str, str]:
+        path = f"/agents/{quote(name, safe='')}"
+        raw = LAMBDA.handler(
+            {
+                "rawPath": path,
+                "requestContext": {"http": {"method": "GET", "path": path}},
+                "headers": {"accept": accept},
+            },
+            None,
+        )
+        return int(raw["statusCode"]), str(raw["headers"].get("content-type", "")), str(raw["body"])
 
     def get_status(self, token: str | None, name: str, delivery_id: str) -> tuple[int, dict[str, object]]:
         headers = None if token is None else {"authorization": f"Bearer {token}"}
@@ -928,6 +1255,43 @@ class LambdaPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
         self.assertEqual("contacts_only", logs[0]["posture"])
         self.assertIsNone(logs[0]["delivery_id"])
 
+    def test_card_accept_negotiation(self) -> None:
+        browser_accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        status_code, content_type, page = self.card_html(RECIPIENT_HANDLE, accept=browser_accept)
+        self.assertEqual(200, status_code)
+        self.assertTrue(content_type.startswith("text/html"), content_type)
+        self.assertIn("<!doctype html>", page)
+
+        # Anything that does not rank text/html above application/json keeps
+        # the JSON envelope byte-for-byte (curl, API clients, ties).
+        json_body = LAMBDA.response(200, self.api.read_agent(RECIPIENT_HANDLE))["body"]
+        for accept in ("*/*", "application/json", "text/html;q=0.5,application/json"):
+            status_code, content_type, body = self.card_html(RECIPIENT_HANDLE, accept=accept)
+            self.assertEqual(200, status_code)
+            self.assertTrue(content_type.startswith("application/json"), (accept, content_type))
+            self.assertEqual(json_body, body, accept)
+
+    def test_card_and_discovery_are_cacheable_but_errors_are_not(self) -> None:
+        path = f"/agents/{quote(RECIPIENT_HANDLE, safe='')}"
+        raw = LAMBDA.handler(
+            {"rawPath": path, "requestContext": {"http": {"method": "GET", "path": path}}},
+            None,
+        )
+        self.assertEqual("public, max-age=60", raw["headers"]["cache-control"])
+
+        raw = LAMBDA.handler(
+            {"rawPath": "/.well-known/gulls", "requestContext": {"http": {"method": "GET", "path": "/.well-known/gulls"}}},
+            None,
+        )
+        self.assertEqual("public, max-age=60", raw["headers"]["cache-control"])
+
+        # Authenticated and error responses keep no-store.
+        status_raw = LAMBDA.handler(
+            {"rawPath": "/agents/@nobody:gulls.ai/messages/x", "requestContext": {"http": {"method": "GET", "path": "/agents/@nobody:gulls.ai/messages/x"}}},
+            None,
+        )
+        self.assertEqual("no-store", status_raw["headers"]["cache-control"])
+
     def test_kill_switch_disables_only_the_new_routes(self) -> None:
         self.set_posture(self.recipient_token, "open")
         envelope = self.send_hello()
@@ -951,10 +1315,17 @@ class LambdaPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
                 status_code, body = self.guest_status(RECIPIENT_HANDLE, guest_delivery_id, guest_token)
                 self.assertEqual(404, status_code)
                 self.assertEqual("not_found", body["error"])
+                # Discovery is part of the same surface.
+                status_code, body = self.discovery()
+                self.assertEqual(404, status_code)
+                self.assertEqual("not_found", body["error"])
 
-                # Existing routes keep working while the switch is off.
+                # Existing routes keep working while the switch is off, and
+                # the card reverts to legacy JSON even for HTML requests.
                 status_code, _ = self.get_card(RECIPIENT_HANDLE)
                 self.assertEqual(200, status_code)
+                _, content_type, _ = self.card_html(RECIPIENT_HANDLE)
+                self.assertTrue(content_type.startswith("application/json"), content_type)
                 status_code, _ = self.handle(
                     "GET", "/agent/me", headers={"authorization": f"Bearer {self.sender_token}"}
                 )
@@ -965,4 +1336,6 @@ class LambdaPublicAgentRoutesTest(PublicAgentRouteContractMixin, TestCase):
                 status_code, _ = self.get_status(self.sender_token, RECIPIENT_HANDLE, delivery_id)
                 self.assertEqual(200, status_code)
                 status_code, _ = self.guest_status(RECIPIENT_HANDLE, guest_delivery_id, guest_token)
+                self.assertEqual(200, status_code)
+                status_code, _ = self.discovery()
                 self.assertEqual(200, status_code)

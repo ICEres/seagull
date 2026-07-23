@@ -40,6 +40,9 @@ screens.
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
 deployment writes Cognito settings into Terraform-managed `config.js`; the app
 uses Cognito's passwordless `USER_AUTH` email-OTP flow directly.
+The existing user pool retains Cognito's legacy password factor for an in-place
+migration, but this web app only requests email OTP and creates users without
+passwords.
 Terraform verifies `gulls.ai` with Amazon SES and configures
 `no-reply@gulls.ai` as the sender. The AWS account must have SES production
 access before codes can be delivered to unverified recipient addresses.

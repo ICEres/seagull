@@ -426,7 +426,7 @@ jobs:
             --output text)"
 
           test "$USER_POOL_TIER" = "ESSENTIALS"
-          test "$AUTH_FACTORS" = "EMAIL_OTP"
+          test "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" = "1"
           test "$EMAIL_SENDER" = "DEVELOPER"
           test "$CLIENT_FLOWS" = "ALLOW_USER_AUTH"
 

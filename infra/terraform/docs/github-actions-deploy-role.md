@@ -152,6 +152,13 @@ Scope write and tag actions to the dev alarm prefix:
 arn:aws:cloudwatch:<region>:<account-id>:alarm:seagull-dev-*
 ```
 
+The web module resolves the AWS-managed `Managed-AllViewerExceptHostHeader`
+origin request policy by name. The CloudFront statement therefore needs:
+
+```text
+cloudfront:ListOriginRequestPolicies
+```
+
 ## S3 Policy Repair
 
 Use this when Terraform state contains a bucket but `Deploy dev` fails during

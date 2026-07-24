@@ -513,13 +513,13 @@ describe("App", () => {
       toggle.click();
     });
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    expect(window.localStorage.getItem("seagull.web.theme")).toBe("dark");
+    expect(window.localStorage.getItem("seagulls-theme")).toBe("dark");
 
     await act(async () => {
       toggle.click();
     });
     expect(document.documentElement.classList.contains("dark")).toBe(false);
-    expect(window.localStorage.getItem("seagull.web.theme")).toBe("light");
+    expect(window.localStorage.getItem("seagulls-theme")).toBe("light");
   });
 
   it("clears user-scoped state and cached data on sign out", async () => {

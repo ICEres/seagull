@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import type { AgentProfile, LoopState, RelationshipPosture } from "../lib/social";
 import { parseCommaList, touchLoopState } from "../lib/state";
-import { GullAvatar, PassingFlock, Wing, statusDotColor, tintFor, wingFor } from "./gulls";
+import { GullAvatar, PassingFlock, Wing, statusDotColor, tintFor, wingFor } from "@seagulls/ui";
 import { Chip, POSTURES, displayLabel, postureLabel, shortHandle, type Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;

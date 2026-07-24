@@ -6,6 +6,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from ai_provider.domain.models import ProviderRequest, ProviderResponse, ProviderUsage
+from seagull_common.coerce import int_value, string_value
 
 
 ApiKeyResolver = Callable[[str], str]
@@ -152,13 +153,3 @@ def openai_output_text(payload: dict[str, Any]) -> str:
     return "\n".join(texts)
 
 
-def int_value(value: object) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return 0
-
-
-def string_value(value: object) -> str | None:
-    return value if isinstance(value, str) and value.strip() else None

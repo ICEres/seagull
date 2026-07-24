@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from seagull_common.coerce import without_none
+
 from message_hub.domain.models import (
     ActionRequest,
     Agent,
@@ -137,10 +139,6 @@ def _clean(value: Any) -> Any:
     if isinstance(value, Decimal):
         return int(value) if value % 1 == 0 else float(value)
     return value
-
-
-def without_none(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if value is not None}
 
 
 def _refs_to_items(refs: tuple[MessageRef, ...]) -> list[dict[str, Any]]:

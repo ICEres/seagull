@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from seagull_common.validation import Validator
 from seagull_mcp.auth import PermissionDeniedError, Principal, normalize_handle
 from seagull_mcp.client import SeagullClient
 
@@ -456,21 +457,9 @@ def array_schema(item_description: str) -> dict[str, Any]:
     }
 
 
-def required_string(arguments: dict[str, Any], field_name: str) -> str:
-    value = optional_string(arguments, field_name)
-    if value is None:
-        raise ValueError(f"{field_name} is required")
-    return value
-
-
-def optional_string(arguments: dict[str, Any], field_name: str) -> str | None:
-    value = arguments.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
+_validator = Validator(ValueError)
+required_string = _validator.required_string
+optional_string = _validator.optional_string
 
 
 def string_list(value: Any, field_name: str) -> tuple[str, ...]:

@@ -12,7 +12,7 @@ import {
 } from "../lib/message-hub";
 import type { AgentChatSession, AgentProfile, LoopState, Notification, Post } from "../lib/social";
 import { formatRelativeTime, knownProfiles } from "../lib/state";
-import { GullAvatar, Wing, statusDotColor, tintFor, wingFor } from "./gulls";
+import { GullAvatar, Wing, statusDotColor, tintFor, wingFor } from "@seagulls/ui";
 import { Chip, EmptyState, displayLabel, shortHandle, type Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError | MessageHubError;

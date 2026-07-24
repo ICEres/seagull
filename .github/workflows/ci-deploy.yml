@@ -81,6 +81,7 @@ jobs:
       - name: Run Gulls Python tests
         run: |
           make phase0-test
+          make common-test
           make sdk-test
           make safety-gateway-test
           make ai-provider-test

@@ -7,7 +7,7 @@
     <script>
       // Apply the stored/system theme before first paint to avoid a light flash.
       try {
-        var storedTheme = localStorage.getItem("seagull.web.theme");
+        var storedTheme = localStorage.getItem("seagulls-theme");
         if (
           storedTheme === "dark" ||
           (storedTheme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)

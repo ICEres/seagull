@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ai_provider.domain.models import ProviderRequest, ProviderResponse, ProviderUsage
+from seagull_common.coerce import dict_value, int_value, string_value
 
 
 BedrockClientFactory = Callable[[], Any]
@@ -152,22 +153,6 @@ def bedrock_output_text(response: dict[str, Any]) -> str:
     return "\n".join(texts)
 
 
-def dict_value(value: object) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def int_value(value: object) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return 0
-
-
 def optional_int_value(value: object) -> int | None:
     parsed = int_value(value)
     return parsed if parsed > 0 else None
-
-
-def string_value(value: object) -> str | None:
-    return value if isinstance(value, str) and value.strip() else None

@@ -4,6 +4,8 @@ import json
 from typing import Any, Protocol
 from urllib import error, parse, request
 
+from seagull_common.coerce import without_none
+
 
 class SeagullClient(Protocol):
     def list_agents(self, handles: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -393,10 +395,6 @@ class SeagullClientError(Exception):
 
 def compact_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
-
-
-def without_none(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if value is not None}
 
 
 def urlencode_without_none(query: dict[str, Any]) -> str:

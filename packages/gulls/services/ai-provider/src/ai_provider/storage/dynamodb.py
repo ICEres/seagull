@@ -21,6 +21,7 @@ from ai_provider.domain.models import (
     UserCreditLedgerEntryType,
 )
 from ai_provider.storage.repository import InsufficientCreditBalanceError
+from seagull_common.coerce import without_none
 
 
 SERVER_BALANCE_ENTRY_ID = "balance#server"
@@ -589,7 +590,3 @@ def is_conditional_check_failed(exc: Exception) -> bool:
         return True
     reasons = response.get("CancellationReasons", [])
     return any(reason.get("Code") == "ConditionalCheckFailed" for reason in reasons)
-
-
-def without_none(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if value is not None}

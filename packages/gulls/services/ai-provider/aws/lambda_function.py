@@ -26,45 +26,19 @@ from ai_provider.api.local import (
 from ai_provider.domain import AiProviderService, AiRunState, BudgetLimit, InvalidAiRunError, ModelPolicy
 from ai_provider.providers import BedrockConverseProviderAdapter, FakeProviderAdapter, OpenAIProviderAdapter
 from ai_provider.storage.dynamodb import DynamoDbAiProviderRepository
-
-
-def secret_env(name: str) -> str:
-    direct = os.environ.get(name, "").strip()
-    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
-    if direct or not secret_arn:
-        return direct
-    try:
-        result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
-    except Exception as exc:
-        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
-        return ""
-    secret = result.get("SecretString")
-    if isinstance(secret, str):
-        return secret.strip()
-    encoded = result.get("SecretBinary")
-    if isinstance(encoded, (bytes, bytearray)):
-        return base64.b64decode(encoded).decode("utf-8").strip()
-    if isinstance(encoded, str):
-        return base64.b64decode(encoded).decode("utf-8").strip()
-    return ""
-
-
-def env_bool(name: str, *, default: bool) -> bool:
-    raw = os.environ.get(name, "").strip().casefold()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
-
-
-def env_int(name: str, *, default: int, minimum: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return default
-    return max(minimum, value)
+from seagull_common.lambda_runtime import (
+    cors_headers as common_cors_headers,
+    env_bool,
+    env_int,
+    jwt_claims,
+    parse_body as common_parse_body,
+    path_param as common_path_param,
+    redacted_event,
+    response as common_response,
+    secret_env,
+)
+from seagull_common.logging import log
+from seagull_common.validation import Validator
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-ai-provider")
@@ -132,7 +106,7 @@ def secret_ref_value(secret_ref: str) -> str:
     try:
         result = secretsmanager_client().get_secret_value(SecretId=ref)
     except Exception as exc:
-        print(json.dumps({"level": "warning", "message": f"could not load provider secret {ref}: {exc}"}))
+        log("warning", f"could not load provider secret {ref}: {exc}")
         return ""
     return secret_string(result).strip()
 
@@ -385,7 +359,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except InvalidAiRunError as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
+        log("error", str(exc), event=redacted_event(event))
         return response(500, {"error": "internal_error"})
 
 
@@ -522,18 +496,7 @@ def ensure_public_demo_credits() -> None:
 
 
 def parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    raw_body = event.get("body")
-    if raw_body is None:
-        return {}
-    if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body).decode("utf-8")
-    try:
-        body = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise BadRequest("body must be valid JSON") from exc
-    if not isinstance(body, dict):
-        raise BadRequest("body must be a JSON object")
-    return body
+    return common_parse_body(event, error=BadRequest)
 
 
 def ai_run_request_kwargs(body: dict[str, Any], *, owner_user_id: str) -> dict[str, Any]:
@@ -623,27 +586,11 @@ def message_hub_callback(body: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "rawPath": event.get("rawPath"),
-        "requestContext": event.get("requestContext"),
-        "queryStringParameters": event.get("queryStringParameters"),
-        "headers": "[redacted]",
-        "body": "[redacted]" if event.get("body") is not None else None,
-    }
+CORS_HEADERS = common_cors_headers(allow_headers="authorization,content-type,x-seagull-admin-secret")
 
 
 def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-headers": "authorization,content-type,x-seagull-admin-secret",
-            "access-control-allow-methods": "GET,POST,OPTIONS",
-        },
-        "body": json.dumps(body, separators=(",", ":"), default=str),
-    }
+    return common_response(status_code, body, headers=CORS_HEADERS)
 
 
 def cors_response() -> dict[str, Any]:
@@ -695,13 +642,6 @@ def owner_user_id_from_claims(claims: dict[str, Any]) -> str | None:
     return optional_claim(claims, "sub")
 
 
-def jwt_claims(event: dict[str, Any]) -> dict[str, Any] | None:
-    authorizer = event.get("requestContext", {}).get("authorizer", {})
-    jwt = authorizer.get("jwt", {}) if isinstance(authorizer, dict) else {}
-    claims = jwt.get("claims", {}) if isinstance(jwt, dict) else {}
-    return claims if isinstance(claims, dict) else None
-
-
 def optional_claim(claims: dict[str, Any], name: str) -> str | None:
     value = claims.get(name)
     if not isinstance(value, str):
@@ -750,76 +690,16 @@ def provider_messages(value: Any) -> tuple[dict[str, str], ...]:
     return tuple(messages)
 
 
-def required_string(body: dict[str, Any], field_name: str) -> str:
-    value = optional_string(body, field_name)
-    if value is None:
-        raise BadRequest(f"{field_name} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], field_name: str) -> str | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise BadRequest(f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
-
-
-def string_list(value: Any, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise BadRequest(f"{field_name} must be a list")
-    if not all(isinstance(item, str) for item in value):
-        raise BadRequest(f"{field_name} must contain only strings")
-    return tuple(item.strip() for item in value if item.strip())
-
-
-def required_int(body: dict[str, Any], field_name: str) -> int:
-    value = optional_nullable_int(body, field_name)
-    if value is None:
-        raise BadRequest(f"{field_name} is required")
-    return value
-
-
-def optional_int(body: dict[str, Any], field_name: str, *, default: int) -> int:
-    value = optional_nullable_int(body, field_name)
-    return default if value is None else value
-
-
-def optional_nullable_int(body: dict[str, Any], field_name: str) -> int | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, int):
-        raise BadRequest(f"{field_name} must be an integer")
-    return value
-
-
-def optional_float(body: dict[str, Any], field_name: str, *, default: float) -> float:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, (int, float)):
-        raise BadRequest(f"{field_name} must be a number")
-    return float(value)
-
-
-def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise BadRequest(f"{field_name} must be a boolean")
-    return value
+_validator = Validator(BadRequest)
+required_string = _validator.required_string
+optional_string = _validator.optional_string
+string_list = _validator.string_list
+required_int = _validator.required_int
+optional_int = _validator.optional_int_with_default
+optional_nullable_int = _validator.optional_int
+optional_float = _validator.optional_float
+optional_bool = _validator.optional_bool
 
 
 def path_param(path: str, prefix: str, suffix: str) -> str:
-    if not path.startswith(prefix) or not path.endswith(suffix):
-        raise BadRequest("invalid path")
-    value = path.removeprefix(prefix).removesuffix(suffix).strip("/")
-    if not value:
-        raise BadRequest("path parameter is required")
-    return unquote(value)
+    return common_path_param(path, prefix, suffix, error=BadRequest)

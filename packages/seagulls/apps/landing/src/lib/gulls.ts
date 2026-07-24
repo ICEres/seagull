@@ -1,15 +1,7 @@
-const GULL_STYLE = "classic"; // your wings — each agent has its own fixed silhouette
+import { WINGS, WING_NAMES, YOUR_WING, seededRandom, type WingName } from "@seagulls/ui";
 
-export const GULL_PATHS: Record<string, string> = {
-  classic: "M1 12 Q8 2 16 11 Q24 2 31 12",
-  glide: "M1 11 Q9 1 16 9 Q23 4 31 8",
-  loop: "M1 11 Q9 3 14.5 9 A2.4 2.4 0 1 0 17.5 9 Q23 3 31 11",
-  dip: "M1 12 Q8 2 15 10 L16 11 L17 10 Q24 2 31 12",
-};
-
-export const gullPath = GULL_PATHS[GULL_STYLE] ?? GULL_PATHS.classic;
-
-const PATH_KEYS = Object.keys(GULL_PATHS);
+// your wings — each agent has its own fixed silhouette
+export const gullPath = YOUR_WING;
 
 export type AgentStatus = "online" | "busy" | "away";
 
@@ -17,7 +9,7 @@ export type AgentSpec = {
   handle: string;
   name: string;
   id: string;
-  path: string;
+  path: WingName;
   status: AgentStatus;
   size: number;
   dur: string;
@@ -31,15 +23,10 @@ export const AGENTS: AgentSpec[] = [
   { handle: "@reviewer:gulls.ai", name: "@reviewer", id: "gull-reviewer", path: "loop", status: "online", size: 34, dur: "3.8s", delay: "0.3s" },
 ];
 
-export function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
-  return x - Math.floor(x);
-}
-
 export type AmbientGullSpec = {
   key: number;
   edge: boolean;
-  path: string;
+  path: WingName;
   size: number;
   left: string;
   top: string;
@@ -49,6 +36,8 @@ export type AmbientGullSpec = {
   delay: string;
 };
 
+// Landing-local ambient layout: the hero sky needs the band-plus-edges
+// distribution, which differs from the generic @seagulls/ui ambientGulls().
 export const AMBIENT_GULLS: AmbientGullSpec[] = Array.from({ length: 18 }, (_, i) => {
   const isSkyBand = i < 13;
   const edgeLeft = seededRandom(i * 7 + 2) < 0.5;
@@ -64,7 +53,7 @@ export const AMBIENT_GULLS: AmbientGullSpec[] = Array.from({ length: 18 }, (_, i
   return {
     key: i,
     edge: !isSkyBand,
-    path: PATH_KEYS[Math.floor(seededRandom(i * 17 + 9) * PATH_KEYS.length)],
+    path: WING_NAMES[Math.floor(seededRandom(i * 17 + 9) * WING_NAMES.length)],
     size: Math.round(12 + seededRandom(i * 3 + 3) * 14),
     left: x.toFixed(1) + "%",
     top: y.toFixed(1) + "%",
@@ -74,3 +63,5 @@ export const AMBIENT_GULLS: AmbientGullSpec[] = Array.from({ length: 18 }, (_, i
     delay: (seededRandom(i * 5 + 5) * 2.4).toFixed(1) + "s",
   };
 });
+
+export { WINGS };

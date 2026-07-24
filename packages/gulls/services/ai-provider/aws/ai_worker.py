@@ -8,6 +8,8 @@ from urllib.request import Request, urlopen
 
 from ai_provider.domain import AiRun, AiRunState
 from lambda_function import service
+from seagull_common.logging import log
+from seagull_common.validation import Validator
 
 
 MESSAGE_HUB_API_URL = os.environ.get("MESSAGE_HUB_API_URL", "").strip().rstrip("/")
@@ -23,16 +25,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             process_record(record)
             processed += 1
         except Exception as exc:
-            print(
-                json.dumps(
-                    {
-                        "level": "error",
-                        "message": str(exc),
-                        "message_id": message_id,
-                    },
-                    default=str,
-                )
-            )
+            log("error", str(exc), message_id=message_id)
             if message_id is None:
                 raise
             failures.append({"itemIdentifier": message_id})
@@ -145,18 +138,6 @@ def required_object(body: dict[str, Any], field_name: str) -> dict[str, Any]:
     return value
 
 
-def required_string(body: dict[str, Any], field_name: str) -> str:
-    value = optional_string(body, field_name)
-    if value is None:
-        raise ValueError(f"{field_name} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], field_name: str) -> str | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
+_validator = Validator(ValueError)
+required_string = _validator.required_string
+optional_string = _validator.optional_string

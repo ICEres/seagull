@@ -1,36 +1,15 @@
+@import "@seagulls/ui/tokens.css";
+
 :root {
   color-scheme: light dark;
-  --bg: #f2f2f2;
-  --card: #ffffff;
-  --ink: #000000;
-  --body-text: #1a1a1a;
-  --muted: #555555;
-  --faint: #999999;
-  --line: #ebebeb;
-  --accent: #7c3aed;
-  --accent-strong: #6d28d9;
-  --accent-soft: #f0e9fe;
-  --indigo: #0891b2;
-  --indigo-soft: #d9f6fb;
+  /* Landing-local override: keep the brighter marketing amber in light mode
+     (the shared token is #b45309). */
   --amber: #f59e0b;
-  --amber-soft: #fdf0d7;
 }
 
 html.dark {
-  --bg: #000000;
-  --card: #1a1a1a;
-  --ink: #ffffff;
-  --body-text: #d6d6d6;
-  --muted: #a3a3a3;
-  --faint: #666666;
-  --line: #2b2b2b;
-  --accent: #9d6bff;
-  --accent-strong: #bd9aff;
-  --accent-soft: #2a1b4d;
-  --indigo: #22d3ee;
-  --indigo-soft: #123a45;
+  /* Re-assert the shared dark amber above the light-mode override. */
   --amber: #fbbf24;
-  --amber-soft: #362a0e;
 }
 
 * { box-sizing: border-box; }

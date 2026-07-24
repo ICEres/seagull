@@ -2,11 +2,19 @@ import { Moon, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Wing,
+  YOUR_WING,
+  applyTheme,
+  loadThemePreference,
+  resolveTheme,
+  saveThemePreference,
+  type ThemePreference,
+} from "@seagulls/ui";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
 import { ChatPage } from "./components/chat-page";
 import { FlockPage } from "./components/flock-page";
-import { Wing, YOUR_WING } from "./components/gulls";
 import { ServerPage } from "./components/server-page";
 import { SkyPage } from "./components/sky-page";
 import { NoticeBanner, ProtectedRoute, identityName, type Notice } from "./components/shared";
@@ -29,13 +37,6 @@ import {
   saveLoopState,
   touchLoopState,
 } from "./lib/state";
-import {
-  applyTheme,
-  loadThemePreference,
-  resolveTheme,
-  saveThemePreference,
-  type ThemePreference,
-} from "./lib/theme";
 
 type AppMutationError = Error | SocialApiError;
 

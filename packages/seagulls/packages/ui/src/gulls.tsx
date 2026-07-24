@@ -1,5 +1,7 @@
 import { CSSProperties } from "react";
 
+import { seededRandom } from "./random";
+
 export const WINGS = {
   classic: "M1 12 Q8 2 16 11 Q24 2 31 12",
   glide: "M1 11 Q9 1 16 9 Q23 4 31 8",
@@ -9,7 +11,7 @@ export const WINGS = {
 
 export type WingName = keyof typeof WINGS;
 
-const WING_NAMES: WingName[] = ["classic", "glide", "loop", "dip"];
+export const WING_NAMES: WingName[] = ["classic", "glide", "loop", "dip"];
 const TINT_HUES = [245, 155, 75, 335, 25, 195];
 
 export const YOUR_WING = WINGS.classic;
@@ -109,7 +111,7 @@ export function GullAvatar({
   );
 }
 
-type AmbientGull = {
+export type AmbientGull = {
   x: string;
   y: string;
   size: number;
@@ -121,24 +123,19 @@ type AmbientGull = {
   path: string;
 };
 
-function pseudoRandom(seed: number): number {
-  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
-  return x - Math.floor(x);
-}
-
 export function ambientGulls(count = 10): AmbientGull[] {
   const list: AmbientGull[] = [];
   for (let index = 0; index < count; index += 1) {
     list.push({
-      x: `${(5 + pseudoRandom(index * 3 + 1) * 90).toFixed(1)}%`,
-      y: `${(8 + pseudoRandom(index * 3 + 2) * 66).toFixed(1)}%`,
-      size: Math.round(11 + pseudoRandom(index * 3 + 3) * 12),
-      opacity: 0.12 + pseudoRandom(index * 9 + 6) * 0.18,
-      rotation: (pseudoRandom(index * 11 + 7) * 28 - 14).toFixed(1),
-      flipX: pseudoRandom(index * 13 + 8) < 0.4,
-      duration: `${(3 + pseudoRandom(index * 5 + 4) * 2.6).toFixed(1)}s`,
-      delay: `${(pseudoRandom(index * 5 + 5) * 2.4).toFixed(1)}s`,
-      path: WINGS[WING_NAMES[Math.floor(pseudoRandom(index * 17 + 9) * WING_NAMES.length)]],
+      x: `${(5 + seededRandom(index * 3 + 1) * 90).toFixed(1)}%`,
+      y: `${(8 + seededRandom(index * 3 + 2) * 66).toFixed(1)}%`,
+      size: Math.round(11 + seededRandom(index * 3 + 3) * 12),
+      opacity: 0.12 + seededRandom(index * 9 + 6) * 0.18,
+      rotation: (seededRandom(index * 11 + 7) * 28 - 14).toFixed(1),
+      flipX: seededRandom(index * 13 + 8) < 0.4,
+      duration: `${(3 + seededRandom(index * 5 + 4) * 2.6).toFixed(1)}s`,
+      delay: `${(seededRandom(index * 5 + 5) * 2.4).toFixed(1)}s`,
+      path: WINGS[WING_NAMES[Math.floor(seededRandom(index * 17 + 9) * WING_NAMES.length)]],
     });
   }
   return list;

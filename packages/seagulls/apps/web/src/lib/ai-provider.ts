@@ -1,13 +1,6 @@
+import { ApiError, JsonApiClient, trimBaseUrl } from "./http";
+
 export const DEFAULT_AI_PROVIDER_API_URL = "http://localhost:8400";
-
-type RequestInitJson = Omit<RequestInit, "body"> & {
-  body?: unknown;
-};
-
-type ErrorPayload = {
-  error?: string;
-  message?: string;
-};
 
 export type AiProviderHealth = {
   ok: boolean;
@@ -52,33 +45,36 @@ export type AdminAuditEvent = {
   created_at: string | null;
 };
 
-export class AiProviderApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-
+export class AiProviderApiError extends ApiError {
   constructor(status: number, code: string, message: string) {
-    super(message);
+    super(status, code, message, "ai-provider");
     this.name = "AiProviderApiError";
-    this.status = status;
-    this.code = code;
   }
 }
 
-export class AiProviderClient {
-  readonly baseUrl: string;
+export class AiProviderClient extends JsonApiClient {
   readonly authToken: string;
 
   constructor(baseUrl: string, authToken = "") {
-    this.baseUrl = trimBaseUrl(baseUrl);
-    this.authToken = authToken.trim();
+    const normalizedToken = authToken.trim();
+    super(baseUrl, () => normalizedToken);
+    this.authToken = normalizedToken;
+  }
+
+  protected override get serviceLabel(): string {
+    return "AI provider";
+  }
+
+  protected override createError(status: number, code: string, message: string): ApiError {
+    return new AiProviderApiError(status, code, message);
   }
 
   health(): Promise<AiProviderHealth> {
-    return this.request<AiProviderHealth>("/health");
+    return this.request<AiProviderHealth>("GET", "/health");
   }
 
   listProviderConfigs(): Promise<{ provider_configs: ProviderConfig[] }> {
-    return this.request("/admin/ai-providers");
+    return this.request("GET", "/admin/ai-providers");
   }
 
   saveProviderConfig(
@@ -93,18 +89,15 @@ export class AiProviderClient {
       reason?: string;
     },
   ): Promise<{ provider_config: ProviderConfig }> {
-    return this.request(`/admin/ai-providers/${encodeURIComponent(provider)}`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/admin/ai-providers/${encodeURIComponent(provider)}`, body);
   }
 
   getServerCreditBalance(): Promise<{ balance: ServerCreditBalance }> {
-    return this.request("/admin/ai-credits/server-balance");
+    return this.request("GET", "/admin/ai-credits/server-balance");
   }
 
   listServerCreditLedger(): Promise<{ entries: ServerCreditLedgerEntry[] }> {
-    return this.request("/admin/ai-credits/server-ledger");
+    return this.request("GET", "/admin/ai-credits/server-ledger");
   }
 
   grantServerCredits(body: {
@@ -112,46 +105,11 @@ export class AiProviderClient {
     credit_amount: number;
     reason: string;
   }): Promise<{ entry: ServerCreditLedgerEntry }> {
-    return this.request("/admin/ai-credits/server-grants", {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", "/admin/ai-credits/server-grants", body);
   }
 
   listAdminAuditEvents(): Promise<{ events: AdminAuditEvent[] }> {
-    return this.request("/admin/ai-audit-events");
-  }
-
-  private async request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
-    const { body, ...fetchInit } = init;
-    const headers = new Headers(init.headers);
-    const requestInit: RequestInit = {
-      ...fetchInit,
-      headers,
-    };
-
-    if (body !== undefined) {
-      headers.set("content-type", "application/json");
-      requestInit.body = JSON.stringify(body);
-    }
-    if (this.authToken) {
-      headers.set("authorization", `Bearer ${this.authToken}`);
-    }
-
-    const response = await fetch(`${this.baseUrl}${path}`, requestInit);
-    const text = await response.text();
-    const payload = text ? parseJson(text, response.status) : {};
-
-    if (!response.ok) {
-      const errorPayload = payload as ErrorPayload;
-      throw new AiProviderApiError(
-        response.status,
-        errorPayload.error ?? "request_failed",
-        errorPayload.message ?? `AI provider request failed with ${response.status}`,
-      );
-    }
-
-    return payload as T;
+    return this.request("GET", "/admin/ai-audit-events");
   }
 }
 
@@ -159,16 +117,4 @@ export function configuredAiProviderApiUrl(): string {
   const envUrl = import.meta.env.VITE_AI_PROVIDER_API_URL;
   const runtimeUrl = window.SEAGULL_CONFIG?.aiProviderApiUrl;
   return trimBaseUrl(envUrl || runtimeUrl || DEFAULT_AI_PROVIDER_API_URL);
-}
-
-export function trimBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
-function parseJson(text: string, status: number): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new AiProviderApiError(status, "invalid_json", "AI provider returned invalid JSON.");
-  }
 }

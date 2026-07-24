@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from dataclasses import dataclass
@@ -22,6 +21,8 @@ from ai_provider.domain import (
 )
 from ai_provider.providers import FakeProviderAdapter
 from ai_provider.storage import InMemoryAiProviderRepository
+from seagull_common.coerce import datetime_to_string
+from seagull_common.validation import Validator
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,73 +340,12 @@ def provider_messages(value: Any) -> tuple[ProviderMessage, ...]:
     return tuple(messages)
 
 
-def required_string(body: dict[str, Any], field_name: str) -> str:
-    value = optional_string(body, field_name)
-    if value is None:
-        raise ApiError(400, "bad_request", f"{field_name} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], field_name: str) -> str | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ApiError(400, "bad_request", f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
-
-
-def string_list(value: Any, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise ApiError(400, "bad_request", f"{field_name} must be a list")
-    if not all(isinstance(item, str) for item in value):
-        raise ApiError(400, "bad_request", f"{field_name} must contain only strings")
-    return tuple(item.strip() for item in value if item.strip())
-
-
-def required_int(body: dict[str, Any], field_name: str) -> int:
-    value = optional_nullable_int(body, field_name)
-    if value is None:
-        raise ApiError(400, "bad_request", f"{field_name} is required")
-    return value
-
-
-def optional_int(body: dict[str, Any], field_name: str, *, default: int) -> int:
-    value = optional_nullable_int(body, field_name)
-    return default if value is None else value
-
-
-def optional_nullable_int(body: dict[str, Any], field_name: str) -> int | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, int):
-        raise ApiError(400, "bad_request", f"{field_name} must be an integer")
-    return value
-
-
-def optional_float(body: dict[str, Any], field_name: str, *, default: float) -> float:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, (int, float)):
-        raise ApiError(400, "bad_request", f"{field_name} must be a number")
-    return float(value)
-
-
-def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"{field_name} must be a boolean")
-    return value
-
-
-def datetime_to_string(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()
+_validator = Validator(lambda message: ApiError(400, "bad_request", message))
+required_string = _validator.required_string
+optional_string = _validator.optional_string
+string_list = _validator.string_list
+required_int = _validator.required_int
+optional_int = _validator.optional_int_with_default
+optional_nullable_int = _validator.optional_int
+optional_float = _validator.optional_float
+optional_bool = _validator.optional_bool

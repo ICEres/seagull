@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from dataclasses import dataclass
+from seagull_common.coerce import datetime_to_string
+
 from safety_gateway.api.evaluation_request import evaluation_request_from_body
 
 from safety_gateway.domain import (
@@ -97,9 +98,3 @@ def flag_to_dict(flag: SafetyFlag) -> dict[str, Any]:
         "reason": flag.reason,
         "policy_id": flag.policy_id,
     }
-
-
-def datetime_to_string(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()

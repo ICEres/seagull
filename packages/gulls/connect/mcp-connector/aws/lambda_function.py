@@ -7,6 +7,7 @@ from typing import Any
 
 import boto3
 
+from seagull_common.lambda_runtime import csv_env
 from seagull_mcp.client import SeagullHttpClient
 from seagull_mcp.cognito import CognitoJwtVerifier, CognitoPrincipalResolver
 from seagull_mcp.oauth_proxy import CognitoOAuthProxy
@@ -16,10 +17,6 @@ from seagull_mcp.storage import DynamoDbConnectorTokenStore
 
 def bool_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def csv_env(name: str) -> tuple[str, ...]:
-    return tuple(value.strip() for value in os.environ.get(name, "").split(",") if value.strip())
 
 
 def secret_env(name: str) -> str | None:

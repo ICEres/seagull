@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from seagull_common.validation import Validator
 from seagull_policy import TrustLabel
 
 from safety_gateway.domain import SafetyEvaluationRequest
@@ -26,31 +27,11 @@ def evaluation_request_from_body(body: dict[str, Any]) -> SafetyEvaluationReques
     )
 
 
-def required_string(body: dict[str, Any], field_name: str) -> str:
-    value = optional_string(body, field_name)
-    if value is None:
-        raise ValueError(f"{field_name} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], field_name: str) -> str | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
-
-
-def string_list(value: Any, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise ValueError(f"{field_name} must be a list")
-    if not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field_name} must contain only strings")
-    return tuple(item.strip() for item in value if item.strip())
+_validator = Validator(ValueError)
+required_string = _validator.required_string
+optional_string = _validator.optional_string
+string_list = _validator.string_list
+optional_int = _validator.optional_int_with_default
 
 
 def string_map(value: Any, field_name: str) -> dict[str, str]:
@@ -61,15 +42,6 @@ def string_map(value: Any, field_name: str) -> dict[str, str]:
     if not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
         raise ValueError(f"{field_name} must contain string keys and values")
     return {key: item for key, item in value.items()}
-
-
-def optional_int(body: dict[str, Any], field_name: str, *, default: int) -> int:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, int):
-        raise ValueError(f"{field_name} must be an integer")
-    return value
 
 
 def trust_label(value: Any) -> TrustLabel:

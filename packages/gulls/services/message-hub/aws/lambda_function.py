@@ -45,6 +45,9 @@ from message_hub.storage import (
     DynamoDbMessageHubRepository,
     RepositoryTableNotConfiguredError,
 )
+from seagull_common.coerce import without_none
+from seagull_common.lambda_runtime import redacted_event
+from seagull_common.logging import log
 
 DEFAULT_APP_NAME = "seagull-message-hub"
 DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
@@ -565,19 +568,6 @@ def _cached_secret(name: str) -> str:
 # HTTP entrypoint
 
 
-def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
-    # Headers carry replayable secrets (Authorization bearer tokens,
-    # x-seagull-admin-secret, x-seagull-legacy-secret) and the body carries
-    # private message content; never write either to logs.
-    return {
-        "rawPath": event.get("rawPath"),
-        "requestContext": event.get("requestContext"),
-        "queryStringParameters": event.get("queryStringParameters"),
-        "headers": "[redacted]",
-        "body": "[redacted]" if event.get("body") is not None else None,
-    }
-
-
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     path = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "/")
@@ -591,7 +581,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except SafetyBlockedError as exc:
         return response(403, {"error": "blocked", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
+        log("error", str(exc), event=redacted_event(event))
         return response(500, {"error": "internal_error"})
 
 
@@ -1215,10 +1205,6 @@ def html_response(status_code: int, html_body: str, *, max_age: int = 60) -> dic
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def without_none(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if value is not None}
 
 
 def clean_item(value: Any) -> Any:

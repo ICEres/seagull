@@ -69,6 +69,8 @@ from message_hub.domain.service import (
     normalize_handle,
 )
 from message_hub.storage import InMemoryMessageHubRepository
+from seagull_common.coerce import datetime_to_string
+from seagull_common.validation import Validator
 
 # Guest-ingress defaults (fixed one-hour windows, app-level fixed-window
 # counters in the repository). The deployed adapter overrides the limits from
@@ -2191,56 +2193,17 @@ def reject_private_task_fields(body: dict[str, Any]) -> None:
         )
 
 
-def required_string(body: dict[str, Any], field_name: str) -> str:
-    value = optional_string(body, field_name)
-    if value is None:
-        raise ApiError(400, "bad_request", f"{field_name} is required")
-    return value
-
-
-def optional_string(body: dict[str, Any], field_name: str) -> str | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ApiError(400, "bad_request", f"{field_name} must be a string")
-    stripped = value.strip()
-    return stripped or None
-
-
-def string_list(value: Any, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise ApiError(400, "bad_request", f"{field_name} must be a list")
-    if not all(isinstance(item, str) for item in value):
-        raise ApiError(400, "bad_request", f"{field_name} must contain only strings")
-    return tuple(value)
-
-
-def optional_int(body: dict[str, Any], field_name: str) -> int | None:
-    value = body.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"{field_name} must be an integer")
-    return value
-
-
-def required_int(body: dict[str, Any], field_name: str) -> int:
-    value = optional_int(body, field_name)
-    if value is None:
-        raise ApiError(400, "bad_request", f"{field_name} is required")
-    return value
-
-
-def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"{field_name} must be a boolean")
-    return value
+_validator = Validator(
+    lambda message: ApiError(400, "bad_request", message),
+    reject_bool_ints=True,
+    strip_list_items=False,
+)
+required_string = _validator.required_string
+optional_string = _validator.optional_string
+string_list = _validator.string_list
+optional_int = _validator.optional_int
+required_int = _validator.required_int
+optional_bool = _validator.optional_bool
 
 
 def response_rules_object(value: Any) -> dict[str, Any] | None:
@@ -2309,9 +2272,3 @@ def optional_datetime(body: dict[str, Any], field_name: str) -> datetime | None:
         return datetime.fromisoformat(normalized)
     except ValueError as exc:
         raise ApiError(400, "bad_request", f"{field_name} must be an ISO datetime") from exc
-
-
-def datetime_to_string(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()

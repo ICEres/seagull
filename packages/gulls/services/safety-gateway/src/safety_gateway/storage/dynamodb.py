@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
+from seagull_common.coerce import without_none
 from seagull_policy import ReviewState, RiskLabel, SafetyAction
 
 from safety_gateway.domain.models import SafetyAuditRecord, SafetyFlag
@@ -119,7 +120,3 @@ def item_to_flag(item: dict[str, str]) -> SafetyFlag:
         reason=item["reason"],
         policy_id=item["policy_id"],
     )
-
-
-def without_none(item: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in item.items() if value is not None}

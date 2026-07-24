@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import hmac
-import json
 import os
 from typing import Any
 
@@ -12,34 +10,17 @@ from safety_gateway.api.evaluation_request import evaluation_request_from_body
 from safety_gateway.api.local import audit_record_to_dict, evaluation_result_to_dict
 from safety_gateway.domain import SafetyGatewayPolicy, SafetyGatewayService
 from safety_gateway.storage.dynamodb import DynamoDbSafetyAuditRepository
-
-
-def secret_env(name: str) -> str:
-    direct = os.environ.get(name, "").strip()
-    secret_arn = os.environ.get(f"{name}_ARN", "").strip()
-    if direct or not secret_arn:
-        return direct
-    try:
-        result = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
-    except Exception as exc:
-        print(json.dumps({"level": "warning", "message": f"could not load secret {name}: {exc}"}))
-        return ""
-    secret = result.get("SecretString")
-    if isinstance(secret, str):
-        return secret.strip()
-    encoded = result.get("SecretBinary")
-    if isinstance(encoded, (bytes, bytearray)):
-        return base64.b64decode(encoded).decode("utf-8").strip()
-    if isinstance(encoded, str):
-        return base64.b64decode(encoded).decode("utf-8").strip()
-    return ""
-
-
-def csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return tuple(item.strip() for item in value.split(",") if item.strip())
+from seagull_common.lambda_runtime import (
+    cors_headers as common_cors_headers,
+    cors_response as common_cors_response,
+    csv_env,
+    jwt_claims,
+    parse_body as common_parse_body,
+    redacted_event,
+    response as common_response,
+    secret_env,
+)
+from seagull_common.logging import log
 
 
 APP_NAME = os.environ.get("APP_NAME", "seagull-safety-gateway")
@@ -72,18 +53,6 @@ class BadRequest(ValueError):
 
 class Unauthorized(ValueError):
     pass
-
-
-def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
-    # Headers carry the shared x-seagull-safety-secret admin credential and any
-    # bearer token; the body carries evaluation content. Keep both out of logs.
-    return {
-        "rawPath": event.get("rawPath"),
-        "requestContext": event.get("requestContext"),
-        "queryStringParameters": event.get("queryStringParameters"),
-        "headers": "[redacted]",
-        "body": "[redacted]" if event.get("body") is not None else None,
-    }
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -126,51 +95,27 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except ValueError as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
     except Exception as exc:
-        print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
+        log("error", str(exc), event=redacted_event(event))
         return response(500, {"error": "internal_error"})
 
 
 def parse_body(event: dict[str, Any]) -> dict[str, Any]:
-    raw_body = event.get("body")
-    if raw_body is None:
-        return {}
-    if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body).decode("utf-8")
-    try:
-        body = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise BadRequest("body must be valid JSON") from exc
-    if not isinstance(body, dict):
-        raise BadRequest("body must be a JSON object")
-    return body
+    return common_parse_body(event, error=BadRequest)
 
 
 def response(status_code: int, body: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "content-type": "application/json",
-            **cors_headers(),
-        },
-        "body": json.dumps(body, separators=(",", ":"), default=str),
-    }
+    return common_response(status_code, body, headers=cors_headers())
 
 
 def cors_response() -> dict[str, Any]:
-    return {
-        "statusCode": 204,
-        "headers": cors_headers(),
-        "body": "",
-    }
+    return common_cors_response(headers=cors_headers())
 
 
 def cors_headers() -> dict[str, str]:
-    return {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,POST,OPTIONS",
-        "access-control-allow-headers": "authorization,content-type,x-seagull-safety-secret",
-        "access-control-max-age": "300",
-    }
+    return common_cors_headers(
+        allow_headers="authorization,content-type,x-seagull-safety-secret",
+        max_age=300,
+    )
 
 
 def require_authenticated_request(event: dict[str, Any]) -> None:
@@ -200,13 +145,6 @@ def admin_claims(claims: dict[str, Any] | None) -> bool:
     else:
         claim_groups = set()
     return bool(claim_groups.intersection(ADMIN_GROUPS))
-
-
-def jwt_claims(event: dict[str, Any]) -> dict[str, Any] | None:
-    authorizer = event.get("requestContext", {}).get("authorizer", {})
-    jwt = authorizer.get("jwt", {}) if isinstance(authorizer, dict) else {}
-    claims = jwt.get("claims", {}) if isinstance(jwt, dict) else {}
-    return claims if isinstance(claims, dict) else None
 
 
 def optional_query_string(query: dict[str, Any], field_name: str) -> str | None:

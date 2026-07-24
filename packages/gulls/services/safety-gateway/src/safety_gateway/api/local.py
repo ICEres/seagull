@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from safety_gateway._compat import dataclass
+from dataclasses import dataclass
 from safety_gateway.api.evaluation_request import evaluation_request_from_body
 
 from safety_gateway.domain import (

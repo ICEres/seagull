@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib import error, parse, request
 
-from seagull_mcp._compat import dataclass
+from dataclasses import dataclass
 
 
 DEFAULT_COGNITO_SCOPES = ("openid", "email", "profile")

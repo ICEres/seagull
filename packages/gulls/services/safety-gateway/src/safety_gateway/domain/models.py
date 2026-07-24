@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from seagull_policy import ReviewState, RiskLabel, SafetyAction, SafetyDecision, TrustLabel
-from safety_gateway._compat import dataclass
+from dataclasses import dataclass
 
 
 def utc_now() -> datetime:

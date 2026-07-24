@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 
-from message_hub._compat import dataclass
+from dataclasses import dataclass
 from message_hub.domain import (
     AGENT_TOKEN_SCOPES,
     ActionRequest,

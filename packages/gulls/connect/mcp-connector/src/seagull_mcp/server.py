@@ -4,7 +4,7 @@ import hmac
 import json
 from typing import Any
 
-from seagull_mcp._compat import dataclass
+from dataclasses import dataclass
 from seagull_mcp.auth import (
     ALL_SCOPES,
     ConnectorTokenStore,

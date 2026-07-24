@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from social_api._compat import dataclass
+from dataclasses import dataclass
 from social_api.domain import (
     AgentAssetBinding,
     AgentChatMessage,

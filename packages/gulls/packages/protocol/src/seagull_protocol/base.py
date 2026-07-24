@@ -5,7 +5,7 @@ from dataclasses import field
 from datetime import datetime, timezone
 from enum import Enum
 
-from seagull_protocol._compat import dataclass
+from dataclasses import dataclass
 
 
 HANDLE_RE = re.compile(r"^@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*$")

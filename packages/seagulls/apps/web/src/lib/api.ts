@@ -1,3 +1,4 @@
+import { ApiError, JsonApiClient, trimBaseUrl } from "./http";
 import type {
   AgentAssetBinding,
   AgentChatMessage,
@@ -19,48 +20,43 @@ import type {
   RoomMembership,
 } from "./social";
 
+export { trimBaseUrl };
+
 export const DEFAULT_SOCIAL_API_URL = "http://localhost:8300";
 
-type RequestInitJson = Omit<RequestInit, "body"> & {
-  body?: unknown;
-};
-
-type ErrorPayload = {
-  error?: string;
-  message?: string;
-};
-
-export class SocialApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-
+export class SocialApiError extends ApiError {
   constructor(status: number, code: string, message: string) {
-    super(message);
+    super(status, code, message, "social-api");
     this.name = "SocialApiError";
-    this.status = status;
-    this.code = code;
   }
 }
 
-export class SocialApiClient {
-  readonly baseUrl: string;
+export class SocialApiClient extends JsonApiClient {
   readonly authToken: string | null;
 
   constructor(baseUrl: string, authToken: string | null = null) {
-    this.baseUrl = trimBaseUrl(baseUrl);
+    super(baseUrl, () => authToken);
     this.authToken = authToken;
   }
 
+  protected override get serviceLabel(): string {
+    return "Social API";
+  }
+
+  protected override createError(status: number, code: string, message: string): ApiError {
+    return new SocialApiError(status, code, message);
+  }
+
   health(): Promise<Health> {
-    return this.request<Health>("/health");
+    return this.request<Health>("GET", "/health");
   }
 
   me(): Promise<{ identity: HumanIdentity }> {
-    return this.request("/me");
+    return this.request("GET", "/me");
   }
 
   getDashboard(): Promise<DashboardSummary> {
-    return this.request("/dashboard");
+    return this.request("GET", "/dashboard");
   }
 
   identifyHuman(body: {
@@ -69,14 +65,14 @@ export class SocialApiClient {
     email?: string;
     display_name?: string;
   }): Promise<{ identity: HumanIdentity }> {
-    return this.request("/identities", { method: "POST", body });
+    return this.request("POST", "/identities", body);
   }
 
   createNode(body: { owner_user_id?: string; node_type?: string } = {}): Promise<{
     created: boolean;
     node: NodeRecord;
   }> {
-    return this.request("/nodes", { method: "POST", body });
+    return this.request("POST", "/nodes", body);
   }
 
   getNodes(ownerUserId?: string): Promise<{ items: NodeRecord[] }> {
@@ -86,21 +82,18 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/nodes${suffix}`);
+    return this.request("GET", `/nodes${suffix}`);
   }
 
   getNode(nodeId: string): Promise<{ node: NodeRecord }> {
-    return this.request(`/nodes/${encodeURIComponent(nodeId)}`);
+    return this.request("GET", `/nodes/${encodeURIComponent(nodeId)}`);
   }
 
   createPairToken(
     nodeId: string,
     body: { owner_user_id?: string; ttl_seconds?: number } = {},
   ): Promise<{ pair_token: PairToken }> {
-    return this.request(`/nodes/${encodeURIComponent(nodeId)}/pair-tokens`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/nodes/${encodeURIComponent(nodeId)}/pair-tokens`, body);
   }
 
   registerAgent(body: {
@@ -116,7 +109,7 @@ export class SocialApiClient {
     protocols?: string[];
     delivery_mode?: string;
   }): Promise<{ created: boolean; profile: AgentProfile }> {
-    return this.request("/agent-registrations", { method: "POST", body });
+    return this.request("POST", "/agent-registrations", body);
   }
 
   getProfiles(
@@ -146,7 +139,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/profiles${suffix}`);
+    return this.request("GET", `/profiles${suffix}`);
   }
 
   createProfile(body: {
@@ -161,7 +154,7 @@ export class SocialApiClient {
     contact_explanation?: string;
     protocols?: string[];
   }): Promise<{ created: boolean; profile: AgentProfile }> {
-    return this.request("/profiles", { method: "POST", body });
+    return this.request("POST", "/profiles", body);
   }
 
   updateProfile(
@@ -177,10 +170,7 @@ export class SocialApiClient {
       contact_explanation?: string;
     },
   ): Promise<{ profile: AgentProfile }> {
-    return this.request(`/profiles/${encodeURIComponent(handle)}`, {
-      method: "PATCH",
-      body,
-    });
+    return this.request("PATCH", `/profiles/${encodeURIComponent(handle)}`, body);
   }
 
   createPersonalAgentAsset(body: {
@@ -193,7 +183,7 @@ export class SocialApiClient {
     tags?: string[];
     max_output_chars?: number;
   }): Promise<{ created: boolean; asset: PersonalAgentAsset }> {
-    return this.request("/personal-agent-assets", { method: "POST", body });
+    return this.request("POST", "/personal-agent-assets", body);
   }
 
   getPersonalAgentAssets(
@@ -209,7 +199,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/personal-agent-assets${suffix}`);
+    return this.request("GET", `/personal-agent-assets${suffix}`);
   }
 
   getPersonalAgentAsset(assetId: string, ownerUserId?: string): Promise<{ asset: PersonalAgentAsset }> {
@@ -219,7 +209,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/personal-agent-assets/${encodeURIComponent(assetId)}${suffix}`);
+    return this.request("GET", `/personal-agent-assets/${encodeURIComponent(assetId)}${suffix}`);
   }
 
   setAgentAssetBinding(
@@ -230,10 +220,7 @@ export class SocialApiClient {
       skill_asset_id?: string;
     },
   ): Promise<{ binding: AgentAssetBinding }> {
-    return this.request(`/profiles/${encodeURIComponent(handle)}/asset-binding`, {
-      method: "PUT",
-      body,
-    });
+    return this.request("PUT", `/profiles/${encodeURIComponent(handle)}/asset-binding`, body);
   }
 
   getAgentAssetBinding(handle: string, ownerUserId?: string): Promise<{ binding: AgentAssetBinding | null }> {
@@ -243,7 +230,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/profiles/${encodeURIComponent(handle)}/asset-binding${suffix}`);
+    return this.request("GET", `/profiles/${encodeURIComponent(handle)}/asset-binding${suffix}`);
   }
 
   createAgentChat(body: {
@@ -252,7 +239,7 @@ export class SocialApiClient {
     sender_handle?: string;
     title?: string;
   }): Promise<{ created: boolean; chat: AgentChatSession }> {
-    return this.request("/agent-chats", { method: "POST", body });
+    return this.request("POST", "/agent-chats", body);
   }
 
   getAgentChats(ownerUserId?: string): Promise<{ items: AgentChatSession[] }> {
@@ -262,7 +249,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/agent-chats${suffix}`);
+    return this.request("GET", `/agent-chats${suffix}`);
   }
 
   getAgentChat(chatId: string, ownerUserId?: string): Promise<{ chat: AgentChatSession }> {
@@ -272,17 +259,14 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/agent-chats/${encodeURIComponent(chatId)}${suffix}`);
+    return this.request("GET", `/agent-chats/${encodeURIComponent(chatId)}${suffix}`);
   }
 
   createAgentChatMessage(
     chatId: string,
     body: { owner_user_id: string; content: string },
   ): Promise<{ message: AgentChatMessage; reply: AgentChatMessage | null }> {
-    return this.request(`/agent-chats/${encodeURIComponent(chatId)}/messages`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/agent-chats/${encodeURIComponent(chatId)}/messages`, body);
   }
 
   getAgentChatMessages(chatId: string, ownerUserId?: string): Promise<{ items: AgentChatMessage[] }> {
@@ -292,7 +276,7 @@ export class SocialApiClient {
     }
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
-    return this.request(`/agent-chats/${encodeURIComponent(chatId)}/messages${suffix}`);
+    return this.request("GET", `/agent-chats/${encodeURIComponent(chatId)}/messages${suffix}`);
   }
 
   createRoom(body: {
@@ -302,17 +286,14 @@ export class SocialApiClient {
     description?: string;
     visibility?: string;
   }): Promise<{ created: boolean; room: Room }> {
-    return this.request("/rooms", { method: "POST", body });
+    return this.request("POST", "/rooms", body);
   }
 
   joinRoom(
     slug: string,
     body: { owner_user_id: string; agent_handle: string; role?: string },
   ): Promise<{ membership: RoomMembership }> {
-    return this.request(`/rooms/${encodeURIComponent(slug)}/memberships`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/rooms/${encodeURIComponent(slug)}/memberships`, body);
   }
 
   followAgent(body: {
@@ -320,7 +301,7 @@ export class SocialApiClient {
     follower_handle: string;
     followed_handle: string;
   }): Promise<{ follow: Follow }> {
-    return this.request("/follows", { method: "POST", body });
+    return this.request("POST", "/follows", body);
   }
 
   createPost(body: {
@@ -338,7 +319,7 @@ export class SocialApiClient {
     room_slug?: string;
     reply_to_post_id?: string;
   }): Promise<{ post: Post }> {
-    return this.request("/posts", { method: "POST", body });
+    return this.request("POST", "/posts", body);
   }
 
   getFeed(ownerUserId: string, limit = 50): Promise<{ items: Post[] }> {
@@ -346,7 +327,7 @@ export class SocialApiClient {
       owner_user_id: ownerUserId,
       limit: String(limit),
     });
-    return this.request(`/feed?${query.toString()}`);
+    return this.request("GET", `/feed?${query.toString()}`);
   }
 
   getNotifications(
@@ -359,6 +340,7 @@ export class SocialApiClient {
       limit: String(limit),
     });
     return this.request(
+      "GET",
       `/profiles/${encodeURIComponent(handle)}/notifications?${query.toString()}`,
     );
   }
@@ -370,44 +352,12 @@ export class SocialApiClient {
     action: string;
     reason: string;
   }): Promise<{ moderation: ModerationRecord }> {
-    return this.request("/moderation", { method: "POST", body });
+    return this.request("POST", "/moderation", body);
   }
 
   listModerationRecords(limit = 50): Promise<{ items: ModerationRecord[] }> {
     const query = new URLSearchParams({ limit: String(limit) });
-    return this.request(`/moderation?${query.toString()}`);
-  }
-
-  private async request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
-    const { body, ...fetchInit } = init;
-    const headers = new Headers(init.headers);
-    const requestInit: RequestInit = {
-      ...fetchInit,
-      headers,
-    };
-
-    if (body !== undefined) {
-      headers.set("content-type", "application/json");
-      requestInit.body = JSON.stringify(body);
-    }
-    if (this.authToken) {
-      headers.set("authorization", `Bearer ${this.authToken}`);
-    }
-
-    const response = await fetch(`${this.baseUrl}${path}`, requestInit);
-    const text = await response.text();
-    const payload = text ? parseJson(text, response.status) : {};
-
-    if (!response.ok) {
-      const errorPayload = payload as ErrorPayload;
-      throw new SocialApiError(
-        response.status,
-        errorPayload.error ?? "request_failed",
-        errorPayload.message ?? `Social API request failed with ${response.status}`,
-      );
-    }
-
-    return payload as T;
+    return this.request("GET", `/moderation?${query.toString()}`);
   }
 }
 
@@ -415,16 +365,4 @@ export function configuredApiUrl(): string {
   const envUrl = import.meta.env.VITE_SOCIAL_API_URL;
   const runtimeUrl = window.SEAGULL_CONFIG?.socialApiUrl;
   return trimBaseUrl(envUrl || runtimeUrl || DEFAULT_SOCIAL_API_URL);
-}
-
-export function trimBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
-function parseJson(text: string, status: number): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new SocialApiError(status, "invalid_json", "Social API returned invalid JSON.");
-  }
 }

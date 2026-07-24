@@ -15,7 +15,7 @@ import {
   type EmailOtpChallenge,
 } from "../lib/auth";
 import type { HumanIdentity } from "../lib/social";
-import { AmbientFlock, Wing, YOUR_WING } from "./gulls";
+import { AmbientFlock, Wing, YOUR_WING } from "@seagulls/ui";
 import type { Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;

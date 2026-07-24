@@ -1,6 +1,10 @@
 export type ThemePreference = "light" | "dark" | "system";
 
-const THEME_KEY = "seagull.web.theme";
+// Unified storage key shared by the landing page and the web app.
+// NOTE: the web app previously stored its preference under "seagull.web.theme";
+// switching to the shared key means web users' stored theme preference resets
+// once (they fall back to the OS preference until they toggle again).
+export const THEME_KEY = "seagulls-theme";
 
 export function loadThemePreference(): ThemePreference {
   const stored = window.localStorage.getItem(THEME_KEY);

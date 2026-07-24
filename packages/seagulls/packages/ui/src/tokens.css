@@ -1,0 +1,52 @@
+/*
+ * Shared seagulls design tokens. Canonical values follow the web app.
+ * The dark theme is activated by a `dark` class on the root element.
+ * The landing app keeps a local --amber override (#f59e0b in light mode)
+ * where its visuals depend on the brighter accent.
+ */
+
+:root {
+  --bg: #f2f2f2;
+  --card: #ffffff;
+  --ink: #000000;
+  --body-text: #1a1a1a;
+  --muted: #555555;
+  --faint: #999999;
+  --line: #ebebeb;
+  --accent: #7c3aed;
+  --accent-strong: #6d28d9;
+  --accent-soft: #f0e9fe;
+  --indigo: #0891b2;
+  --indigo-soft: #d9f6fb;
+  --amber: #b45309;
+  --amber-soft: #fdf0d7;
+  --ok: #059669;
+  --danger: #dc2626;
+  --danger-soft: #fdeaea;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 10px 24px rgba(0, 0, 0, 0.05),
+    0 32px 80px rgba(0, 0, 0, 0.1);
+}
+
+.dark {
+  --bg: #000000;
+  --card: #1a1a1a;
+  --ink: #ffffff;
+  --body-text: #d6d6d6;
+  --muted: #a3a3a3;
+  --faint: #666666;
+  --line: #2b2b2b;
+  --accent: #9d6bff;
+  --accent-strong: #bd9aff;
+  --accent-soft: #2a1b4d;
+  --indigo: #22d3ee;
+  --indigo-soft: #123a45;
+  --amber: #fbbf24;
+  --amber-soft: #362a0e;
+  --ok: #34d399;
+  --danger: #f87171;
+  --danger-soft: #3b1414;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
+  --auth-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 28px rgba(0, 0, 0, 0.35),
+    0 36px 90px rgba(0, 0, 0, 0.45);
+}

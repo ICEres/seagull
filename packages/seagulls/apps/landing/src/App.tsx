@@ -8,10 +8,10 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { DemoProviderError, landingDemoProviderResponse } from "./lib/demo";
-import { AGENTS, AMBIENT_GULLS, GULL_PATHS, gullPath, type AgentSpec } from "./lib/gulls";
+import { Wing, loadThemePreference, resolveTheme, saveThemePreference } from "@seagulls/ui";
 
-const THEME_KEY = "seagulls-theme";
+import { DemoProviderError, landingDemoProviderResponse } from "./lib/demo";
+import { AGENTS, AMBIENT_GULLS, WINGS, gullPath, type AgentSpec } from "./lib/gulls";
 
 const PAUSED_RESPONSE =
   "Provider delivery is paused for this run, so the message stays available for manual or connector handling with its asset snapshot attached.";
@@ -37,21 +37,7 @@ function agentByHandle(handle?: string): AgentSpec | undefined {
 
 function agentGullPath(handle?: string): string {
   const agent = agentByHandle(handle);
-  return (agent && GULL_PATHS[agent.path]) || gullPath;
-}
-
-function GullIcon({ size, strokeWidth, path = gullPath }: { size: number; strokeWidth: number; path?: string }) {
-  return (
-    <svg width={size} viewBox="0 0 32 14" fill="none">
-      <path
-        d={path}
-        stroke="currentColor"
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
+  return (agent && WINGS[agent.path]) || gullPath;
 }
 
 // The flight bird lives outside the React tree (appended to the sky and
@@ -73,11 +59,7 @@ function gullSvgElement(size: number, strokeWidth: string): SVGSVGElement {
 
 function initialDark(): boolean {
   try {
-    const saved = localStorage.getItem(THEME_KEY);
-    if (saved) {
-      return saved === "dark";
-    }
-    return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return resolveTheme(loadThemePreference()) === "dark";
   } catch {
     return document.documentElement.classList.contains("dark");
   }
@@ -145,7 +127,7 @@ export default function App() {
     const next = !dark;
     setDark(next);
     try {
-      localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+      saveThemePreference(next ? "dark" : "light");
     } catch {
       /* theme still applies for this visit */
     }
@@ -307,7 +289,7 @@ export default function App() {
               onClick={() => pickRecipient(agent.handle)}
             >
               <span className="bob">
-                <GullIcon size={agent.size} strokeWidth={2.6} path={GULL_PATHS[agent.path]} />
+                <Wing size={agent.size} strokeWidth={2.6} path={WINGS[agent.path]} />
               </span>
               <span className="idrow">
                 <span className="dot" />
@@ -333,7 +315,7 @@ export default function App() {
             }
           >
             <span className="bob">
-              <GullIcon size={gull.size} strokeWidth={2.6} path={GULL_PATHS[gull.path]} />
+              <Wing size={gull.size} strokeWidth={2.6} path={WINGS[gull.path]} />
             </span>
           </span>
         ))}
@@ -372,7 +354,7 @@ export default function App() {
                   {message.role === "system" ? (
                     "g"
                   ) : (
-                    <GullIcon
+                    <Wing
                       size={15}
                       strokeWidth={3.4}
                       path={message.role === "agent" ? agentGullPath(message.agentHandle) : gullPath}

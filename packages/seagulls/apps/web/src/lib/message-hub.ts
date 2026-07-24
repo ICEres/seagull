@@ -1,15 +1,6 @@
-import { trimBaseUrl } from "./api";
+import { ApiError, JsonApiClient, trimBaseUrl } from "./http";
 
 export const DEFAULT_MESSAGE_API_URL = "http://localhost:8200";
-
-type RequestInitJson = Omit<RequestInit, "body"> & {
-  body?: unknown;
-};
-
-type ErrorPayload = {
-  error?: string;
-  message?: string;
-};
 
 export type MessageHubHealth = {
   ok: boolean;
@@ -180,29 +171,32 @@ export type ContactExplanation = {
   created_at: string;
 };
 
-export class MessageHubError extends Error {
-  readonly status: number;
-  readonly code: string;
-
+export class MessageHubError extends ApiError {
   constructor(status: number, code: string, message: string) {
-    super(message);
+    super(status, code, message, "message-hub");
     this.name = "MessageHubError";
-    this.status = status;
-    this.code = code;
   }
 }
 
-export class MessageHubClient {
-  readonly baseUrl: string;
+export class MessageHubClient extends JsonApiClient {
   readonly authToken: string | null;
 
   constructor(baseUrl: string, authToken: string | null = null) {
-    this.baseUrl = trimBaseUrl(baseUrl);
-    this.authToken = authToken?.trim() || null;
+    const normalizedToken = authToken?.trim() || null;
+    super(baseUrl, () => normalizedToken);
+    this.authToken = normalizedToken;
+  }
+
+  protected override get serviceLabel(): string {
+    return "Message API";
+  }
+
+  protected override createError(status: number, code: string, message: string): ApiError {
+    return new MessageHubError(status, code, message);
   }
 
   health(): Promise<MessageHubHealth> {
-    return this.request("/health");
+    return this.request("GET", "/health");
   }
 
   registerAgent(body: {
@@ -210,12 +204,12 @@ export class MessageHubClient {
     display_name?: string;
     capabilities?: string[];
   }): Promise<{ created: boolean; agent: MessageHubAgent }> {
-    return this.request("/agents", { method: "POST", body });
+    return this.request("POST", "/agents", body);
   }
 
   getInbox(handle: string, limit = 20): Promise<{ agent: MessageHubAgent; items: InboxItem[] }> {
     const query = new URLSearchParams({ limit: String(limit) });
-    return this.request(`/agents/${encodeURIComponent(handle)}/inbox?${query.toString()}`);
+    return this.request("GET", `/agents/${encodeURIComponent(handle)}/inbox?${query.toString()}`);
   }
 
   createPayload(body: {
@@ -224,12 +218,12 @@ export class MessageHubClient {
     access_scope?: string;
     ttl_expires_at?: string;
   }): Promise<CreatePayloadResult> {
-    return this.request("/payloads", { method: "POST", body });
+    return this.request("POST", "/payloads", body);
   }
 
   readPayload(contentRef: string): Promise<ReadPayloadResult> {
     const query = new URLSearchParams({ content_ref: contentRef });
-    return this.request(`/payloads?${query.toString()}`);
+    return this.request("GET", `/payloads?${query.toString()}`);
   }
 
   createMessage(body: {
@@ -243,11 +237,11 @@ export class MessageHubClient {
     thread_id?: string;
     idempotency_key?: string;
   }): Promise<SendMessageResult> {
-    return this.request("/messages", { method: "POST", body });
+    return this.request("POST", "/messages", body);
   }
 
   listRoutingRules(): Promise<{ items: RoutingRule[] }> {
-    return this.request("/routing-rules");
+    return this.request("GET", "/routing-rules");
   }
 
   createRoutingRule(body: {
@@ -257,7 +251,7 @@ export class MessageHubClient {
     url_contains: string[];
     enabled?: boolean;
   }): Promise<{ created: boolean; routing_rule: RoutingRule }> {
-    return this.request("/routing-rules", { method: "POST", body });
+    return this.request("POST", "/routing-rules", body);
   }
 
   submitHookResult(
@@ -274,10 +268,7 @@ export class MessageHubClient {
       note?: string;
     },
   ): Promise<{ delivery: HubDelivery }> {
-    return this.request(`/deliveries/${encodeURIComponent(deliveryId)}/hook-results`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/deliveries/${encodeURIComponent(deliveryId)}/hook-results`, body);
   }
 
   submitDecision(
@@ -295,46 +286,11 @@ export class MessageHubClient {
       note?: string;
     },
   ): Promise<DecisionResult> {
-    return this.request(`/deliveries/${encodeURIComponent(deliveryId)}/decision`, {
-      method: "POST",
-      body,
-    });
+    return this.request("POST", `/deliveries/${encodeURIComponent(deliveryId)}/decision`, body);
   }
 
   explainContact(deliveryId: string): Promise<{ explanation: ContactExplanation }> {
-    return this.request(`/deliveries/${encodeURIComponent(deliveryId)}/contact-explanation`);
-  }
-
-  private async request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
-    const { body, ...fetchInit } = init;
-    const headers = new Headers(init.headers);
-    const requestInit: RequestInit = {
-      ...fetchInit,
-      headers,
-    };
-
-    if (body !== undefined) {
-      headers.set("content-type", "application/json");
-      requestInit.body = JSON.stringify(body);
-    }
-    if (this.authToken) {
-      headers.set("authorization", `Bearer ${this.authToken}`);
-    }
-
-    const response = await fetch(`${this.baseUrl}${path}`, requestInit);
-    const text = await response.text();
-    const payload = text ? parseJson(text, response.status) : {};
-
-    if (!response.ok) {
-      const errorPayload = payload as ErrorPayload;
-      throw new MessageHubError(
-        response.status,
-        errorPayload.error ?? "request_failed",
-        errorPayload.message ?? `Message API request failed with ${response.status}`,
-      );
-    }
-
-    return payload as T;
+    return this.request("GET", `/deliveries/${encodeURIComponent(deliveryId)}/contact-explanation`);
   }
 }
 
@@ -342,12 +298,4 @@ export function configuredMessageApiUrl(): string {
   const envUrl = import.meta.env.VITE_MESSAGE_API_URL;
   const runtimeUrl = window.SEAGULL_CONFIG?.messageApiUrl;
   return trimBaseUrl(envUrl || runtimeUrl || DEFAULT_MESSAGE_API_URL);
-}
-
-function parseJson(text: string, status: number): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new MessageHubError(status, "invalid_json", "Message API returned invalid JSON.");
-  }
 }

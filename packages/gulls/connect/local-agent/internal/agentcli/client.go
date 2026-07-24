@@ -23,6 +23,15 @@ type Client interface {
 	DecideDelivery(deliveryID string, agentHandle string, decision string, content string, note string) (map[string]any, error)
 }
 
+// statusError carries the HTTP status of a rejected request so callers can
+// classify failures (e.g. auth) without matching message text.
+type statusError struct {
+	code    int
+	message string
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("%d: %s", e.code, e.message) }
+
 type HTTPClient struct {
 	APIURL  string
 	Token   string
@@ -148,7 +157,7 @@ func (c *HTTPClient) request(method string, path string, body map[string]any) (m
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%d: %s", resp.StatusCode, string(payload))
+		return nil, &statusError{code: resp.StatusCode, message: string(payload)}
 	}
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return map[string]any{}, nil

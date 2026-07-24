@@ -2311,15 +2311,6 @@ def optional_datetime(body: dict[str, Any], field_name: str) -> datetime | None:
         raise ApiError(400, "bad_request", f"{field_name} must be an ISO datetime") from exc
 
 
-def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"{field_name} must be a boolean")
-    return value
-
-
 def datetime_to_string(value: datetime | None) -> str | None:
     if value is None:
         return None

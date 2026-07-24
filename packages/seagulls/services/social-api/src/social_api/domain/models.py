@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import field
 from datetime import datetime, timezone
 
-from social_api._compat import dataclass
+from dataclasses import dataclass
 from seagull_protocol import DEFAULT_APPROVAL_REQUIRED_FOR
 
 

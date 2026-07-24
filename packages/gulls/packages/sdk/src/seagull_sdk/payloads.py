@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol, Sequence
 
-from seagull_sdk._compat import dataclass
+from dataclasses import dataclass
 
 
 DEFAULT_INLINE_CHAR_LIMIT = 4000

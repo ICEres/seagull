@@ -4,7 +4,7 @@ from dataclasses import field
 from datetime import datetime
 from enum import Enum
 
-from seagull_protocol._compat import dataclass
+from dataclasses import dataclass
 from seagull_protocol.base import (
     ContentRef,
     Handle,

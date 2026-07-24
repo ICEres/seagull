@@ -4,7 +4,7 @@ from dataclasses import field
 from datetime import datetime, timezone
 from enum import Enum
 
-from seagull_policy._compat import dataclass
+from dataclasses import dataclass
 
 
 def utc_now() -> datetime:

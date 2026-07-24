@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from message_hub._compat import dataclass
+from dataclasses import dataclass
 
 
 def utc_now() -> datetime:

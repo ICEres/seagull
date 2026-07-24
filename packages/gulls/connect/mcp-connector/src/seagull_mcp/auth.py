@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import field
 from datetime import datetime, timedelta, timezone
 
-from seagull_mcp._compat import dataclass
+from dataclasses import dataclass
 
 
 TOKEN_PREFIX = "sgc"

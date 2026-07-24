@@ -1,0 +1,16 @@
+{
+  "name": "@seagull/connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal zero-dependency connector for OpenAI GPT and Anthropic Claude. Spec: docs/minimal-connector.md",
+  "exports": "./src/connector.ts",
+  "scripts": {
+    "test": "node --test test/connector.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^6.0.3"
+  }
+}

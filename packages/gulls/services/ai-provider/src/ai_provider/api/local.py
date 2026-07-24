@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ai_provider._compat import dataclass
+from dataclasses import dataclass
 from ai_provider.domain import (
     AdminAuditEvent,
     AiProviderService,

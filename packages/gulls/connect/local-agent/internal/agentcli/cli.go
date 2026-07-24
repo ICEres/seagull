@@ -47,7 +47,7 @@ func MainWithProgram(programName string, args []string, stdout io.Writer, stderr
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if strings.HasPrefix(err.Error(), "config error:") {
+	if errors.Is(err, errConfig) {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
@@ -56,6 +56,8 @@ func MainWithProgram(programName string, args []string, stdout io.Writer, stderr
 }
 
 var errUsage = errors.New("usage error")
+
+var errConfig = errors.New("config error")
 
 func run(programName string, args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) (int, error) {
 	global, remaining, err := parseGlobal(programName, args, stderr)
@@ -414,7 +416,7 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 			return 0, err
 		}
 		if config.StreamURL == "" {
-			return 0, fmt.Errorf("config error: missing required config: SEAGULL_STREAM_URL")
+			return 0, fmt.Errorf("%w: missing required config: SEAGULL_STREAM_URL", errConfig)
 		}
 		return 0, runStreamCommand(config, global.JSON, stdout)
 	default:
@@ -449,7 +451,7 @@ func loadRuntime(global globalOptions, env []string, client Client, interval *fl
 		PollIntervalSeconds: interval,
 	})
 	if err != nil {
-		return Config{}, nil, fmt.Errorf("config error: %w", err)
+		return Config{}, nil, fmt.Errorf("%w: %w", errConfig, err)
 	}
 	if client == nil {
 		client = NewHTTPClient(config.APIURL, config.Token)

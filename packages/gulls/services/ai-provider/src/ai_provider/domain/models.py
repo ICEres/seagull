@@ -6,7 +6,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
 
-from ai_provider._compat import dataclass
+from dataclasses import dataclass
 
 
 def utc_now() -> datetime:

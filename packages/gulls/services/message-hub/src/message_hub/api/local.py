@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 
-from message_hub._compat import dataclass
+from dataclasses import dataclass
 from message_hub.domain import (
     AGENT_TOKEN_SCOPES,
     ActionRequest,
@@ -2309,15 +2309,6 @@ def optional_datetime(body: dict[str, Any], field_name: str) -> datetime | None:
         return datetime.fromisoformat(normalized)
     except ValueError as exc:
         raise ApiError(400, "bad_request", f"{field_name} must be an ISO datetime") from exc
-
-
-def optional_bool(body: dict[str, Any], field_name: str, *, default: bool) -> bool:
-    value = body.get(field_name)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise ApiError(400, "bad_request", f"{field_name} must be a boolean")
-    return value
 
 
 def datetime_to_string(value: datetime | None) -> str | None:

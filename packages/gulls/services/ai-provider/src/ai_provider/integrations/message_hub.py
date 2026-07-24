@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai_provider._compat import dataclass
+from dataclasses import dataclass
 from ai_provider.domain import AiProviderService, AiRun, AiRunState
 
 from message_hub.domain import MessageHubService, TaskRecord, TaskResultRecord, TaskState

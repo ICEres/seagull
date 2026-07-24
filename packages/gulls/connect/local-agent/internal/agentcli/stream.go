@@ -89,9 +89,12 @@ func streamOnce(ctx context.Context, streamURL string, token string, callbacks S
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, streamHandshakeWait)
-	conn, _, err := websocket.Dial(dialCtx, streamURL, &websocket.DialOptions{HTTPHeader: header})
+	conn, resp, err := websocket.Dial(dialCtx, streamURL, &websocket.DialOptions{HTTPHeader: header})
 	cancel()
 	if err != nil {
+		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			return &statusError{code: resp.StatusCode, message: err.Error()}
+		}
 		return err
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
@@ -138,11 +141,9 @@ func ValidateStreamURL(streamURL string) error {
 }
 
 func isStreamAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.Contains(message, "401") || strings.Contains(message, "403")
+	var status *statusError
+	return errors.As(err, &status) &&
+		(status.code == http.StatusUnauthorized || status.code == http.StatusForbidden)
 }
 
 // NewWakeChannel returns a coalescing wake signal: sends collapse while a

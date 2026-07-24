@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from seagull_policy import ReviewState, RiskLabel, SafetyAction, SafetyDecision, TrustLabel
-from safety_gateway._compat import dataclass
+from dataclasses import dataclass
 
 from safety_gateway.domain.models import (
     SafetyAuditRecord,

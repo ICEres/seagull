@@ -58,6 +58,9 @@ message-hub-test:
 mcp-connector-test:
 	PYTHONPATH=packages/gulls/connect/mcp-connector/src python3 -m unittest discover -s packages/gulls/connect/mcp-connector/tests
 
+connector-test:
+	cd packages/connector && node --test test/connector.test.ts
+
 local-agent-test:
 	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...
 

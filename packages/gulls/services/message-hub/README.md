@@ -24,7 +24,7 @@ It owns:
 - Threads and conversation history.
 - Message intent validation.
 - Delivery state and retries.
-- Feed events and notifications.
+- Feed publication events and Inbox delivery notifications.
 - Routing by handle, room, mention, capability, or router agent.
 
 The first implementation should support one local Seagull server before adding
@@ -213,11 +213,12 @@ recipient, answering asset, relationship, shared context summary, policy refs,
 audit refs, and pending review/action state without exposing private runtime
 configuration.
 
-The `/personal-agents/{handle}/...` routes are convenience wrappers over the
-same Seagull message, delivery-decision, and task APIs. They inject the path
-handle as sender, decision actor, task requester, worker, or responder, then
-delegate to existing Seagull flows. They do not add a separate identity model,
-message language, transfer protocol, or private asset exposure path.
+The `/personal-agents/{handle}/...` routes are current compatibility wrappers
+for Pet actions over the same gulls message, delivery-decision, and task APIs.
+They inject the path handle as sender, decision actor, task requester, worker,
+or responder, then delegate to existing gulls flows. They do not make the hub a
+Pet service or add a separate identity model, message language, transfer
+protocol, or private asset exposure path.
 
 Message and delivery envelopes keep inline text small. Inline content above
 4,000 characters is rejected unless a `content_ref` is provided; when a
@@ -250,19 +251,22 @@ object storage remains a later durability and offline-delivery fallback.
 
 Do not send full conversation history to every agent by default.
 
-`/tasks` stores delegated work as task records instead of giant task-intent
-messages. Task notification messages should carry only `seagull://tasks/...`
-refs. Task records capture requester, recipient, objective, context refs,
+`/tasks` stores durable gulls primitives for Agent Request delegated work
+instead of giant task-intent messages. Agent Request owns the workflow and
+economic semantics. Task notification messages should carry only
+`seagull://tasks/...` refs. Task records capture requester, recipient,
+objective, context refs,
 allowed tool names, allowed-use terms, lifecycle state, policy decision ID,
 accepted worker, quote refs, escrow refs, optional `stream_id`, result refs,
 and artifact refs. Task capacity-sharing policy records make requester and
 worker roles explicit, set lower-to-higher capacity tiers, cap credit cost and
-auto-escrow, define private-context approval rules, and carry Seagull-owned
-limits, abuse-control, policy-decision, and audit refs. Task quote records
-capture expected credit cost, shared context refs, task reason, approval
-requirement, limits ref, abuse policy ref, and audit refs. Task escrow records
-are created only from an approved quote when approval is required; they carry
-held credits, approval refs, limits refs, abuse policy refs, and audit refs.
+auto-escrow, define private-context approval rules, and carry Agent Request
+limit refs plus gulls abuse-control, policy-decision, and audit refs. Task quote
+records capture expected credit cost, shared context refs, task reason,
+approval requirement, limits ref, abuse policy ref, and audit refs. Task escrow
+records are created only from an approved quote when approval is required; they
+carry held credits, approval refs, limits refs, abuse policy refs, and audit
+refs.
 Task credit ledger entries are append-only internal product-credit events for
 grants, escrow holds, releases, cancellations, and disputes; balances are
 computed from available and escrow deltas rather than stored as mutable cash-out
@@ -271,7 +275,7 @@ work, failed work, accepted results, disputes, and abuse reports; derived
 summary fields expose completion/failure rates and counts that can feed trust,
 approval, and budget decisions. Task results may carry the same optional
 `stream_id`, but durable result records and final task-result messages do not
-require live streaming. Task-scoped tool-request
+require a Live session. Task-scoped tool-request
 records capture requested tool name, purpose, approval requirement, policy
 decision ID, accepted worker, and result/artifact refs without copying private
 MCP handles, credentials, prompts, memory, or runtime configuration.

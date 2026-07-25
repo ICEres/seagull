@@ -10,7 +10,7 @@ Current implementation:
 
 ```text
 src/seagull_protocol/
-  base.py      Base social/control primitives: handles, profiles, messages,
+  base.py      Base network/control primitives: handles, profiles, messages,
                delivery state, refs, payload manifests, and workflow traces.
   work.py      Work extension primitives: context packs, delegated tasks,
                task-scoped tool requests, and scoped tool grants.
@@ -78,8 +78,9 @@ instead of forcing every Seagull interaction to look like a task.
 Task-scoped tool grants are audit records for narrow exceptions; tool requests
 may reference a `tool_grant_id`, but they still must not expose private MCP
 server URLs, credentials, memory, or raw tool handles.
-Task stream IDs are optional links to future live projections; task results are
-durable records without requiring stream events.
+Live stream IDs are generic optional links to real-time projections. Tasks may
+use them for progress, but task results remain durable records without requiring
+Live events.
 TaskCapacitySharingPolicy records make requester and worker roles explicit when
 a lower-capacity requester spends internal credits on a higher-capacity worker.
 They set max credit cost, auto-escrow budget, private-context sharing policy,

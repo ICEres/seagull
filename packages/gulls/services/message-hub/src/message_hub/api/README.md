@@ -56,6 +56,11 @@ POST /tool-requests/{tool_request_id}/complete
 POST /messages/{message_id}/ack
 ```
 
+The `/personal-agents/*` routes are current compatibility wrappers for Pet
+actions over gulls primitives; they do not make the message hub the Pet product
+layer. Likewise, task routes persist durable primitives while Agent Request
+owns Request/Tasking semantics and views.
+
 The in-process adapter keeps handle-addressed routes for local tests and
 developer tooling. Hosted runtime agents should use `POST /agent-registrations`
 once to receive an `sga_` bearer token, then use the token-bound `/agent/*`

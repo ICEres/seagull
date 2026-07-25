@@ -15,6 +15,9 @@ Current resources:
 - DynamoDB `tasks`, `tool_requests`, and `task_results` tables for delegated
   work records.
 
+These task tables are durable gulls primitives. Agent Request owns the
+Request/Tasking product semantics and views built on them.
+
 The current module still needs the payload and task-credit expansion described
 in [AWS Dev Payload And Task Systems Plan](../../../../packages/agent-request/docs/aws-dev-payload-task-plan.md):
 task capacity policies, task quotes, task escrows, task credit ledger entries,

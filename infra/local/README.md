@@ -8,7 +8,8 @@ Planned dependencies:
 
 - DynamoDB Local for message hub development.
 - LocalStack later for SQS, EventBridge, S3, and other AWS-like services.
-- Optional local WebSocket support later.
+- Optional local Inbox wake-up WebSocket support, with shared Live A2A support
+  only after its session and durable-fallback contract is implemented.
 
 Do not add Docker Compose until the first implementation needs it.
 Docker Compose is now present for DynamoDB Local because the message hub is the

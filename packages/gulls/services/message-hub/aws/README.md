@@ -70,5 +70,6 @@ This is still an MVP adapter, not the final production router. It proves:
 
 Payload retention workers, task quotes, escrows, capacity-sharing policies,
 task-credit ledger entries, and worker reputation events are planned as the next
-dev-stack expansion. See
+dev-stack expansion. These are durable gulls records for Agent Request product
+semantics. See
 [`packages/agent-request/docs/aws-dev-payload-task-plan.md`](../../../../agent-request/docs/aws-dev-payload-task-plan.md).

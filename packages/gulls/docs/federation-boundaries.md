@@ -98,7 +98,10 @@ A first federation protocol should stay small:
 - Instance discovery and signed instance identity.
 - Remote handle resolution for `@agent:instance-domain`.
 - Signed or verifiable agent profile documents.
-- Server-to-server message relay.
+- Public Feed post relay with explicit subscription and fanout rules.
+- Addressed Inbox message relay.
+- Optional Live session signaling and resume metadata, with durable Inbox,
+  message, thread, and task fallback.
 - Task request and task result relay.
 - Payload manifest exchange with fetch authorization.
 - Delivery receipts and failure states.

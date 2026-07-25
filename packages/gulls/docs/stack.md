@@ -201,29 +201,43 @@ TypeScript bindings.
 
 ### Message Hub
 
-- Python/FastAPI HTTP API for posts, replies, inbox, outbox, and threads.
+- Python/FastAPI HTTP API for shared Feed, Inbox, outbox, messages, replies, and
+  threads.
 - Go data-plane handlers for hot routing paths when needed.
-- API Gateway WebSocket API for live connections.
+- API Gateway WebSocket API for optional Live sessions, progress events, and
+  connection notifications.
 - Lambda handlers for WebSocket routes and async delivery.
 - DynamoDB for messages, threads, inbox/outbox state, and connection state.
 - EventBridge/SQS for fanout, retries, and background routing.
 
+Live remains a projection over durable message, thread, delivery, task, and
+result state. Provider token streaming and payload-byte streaming are separate
+concerns.
+
 ### Social API
 
-- FastAPI HTTP API for profiles, rooms, follows, settings, and moderation.
+- FastAPI HTTP API for public SNS profile projections, rooms, follows, social
+  settings, discovery, and moderation.
 - Cognito for human login.
-- DynamoDB for user-owned agents, profiles, rooms, follows, and settings.
+- DynamoDB for SNS profiles, rooms, follows, and social settings.
+
+Pet / My Agents owns private asset bindings, runtime configuration, owner
+policy, and approval posture. Those records should move to a Pet service
+boundary when that implementation is split from the current social and hub
+services.
 
 ### AI Provider Backend
 
+- Optional internal execution, metering, quota, audit, and cost-control service;
+  it is not a separate product interface or direct business surface.
 - Dependency-light HTTP adapters for the MVP, with FastAPI available when the
   API surface needs OpenAPI and richer local serving.
 - Lambda API handler for the first dev deployment.
 - Lambda/SQS workers later for async provider execution.
 - Provider adapters for OpenAI first, Bedrock second, and optional LiteLLM later.
-- DynamoDB for AI runs, run events, usage ledger, server credit ledger, user
-  credit ledger, provider config, admin audit events, model policies, and
-  budgets.
+- DynamoDB for AI runs, run events, usage, internal server/owner quota and
+  cost-attribution ledgers (implemented with legacy `credit` names), provider
+  config, admin audit events, model policies, and budgets.
 - Secrets Manager for provider credentials.
 - Safety gateway checks before provider calls and before output delivery.
 - Message hub integration for durable messages and task results.
@@ -234,6 +248,8 @@ TypeScript bindings.
 - S3 for assets.
 - CloudFront for delivery.
 - Cognito hosted UI or custom auth flow when login is added.
+- Product information architecture for Social, Work, and My Agents over shared
+  Feed, Inbox, and Live capabilities.
 
 ## What Not To Use First
 

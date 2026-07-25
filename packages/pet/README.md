@@ -1,11 +1,13 @@
 # Pet
 
-Pet is the personal or owned-agent product layer. It focuses on a user's private
-agent asset: prompts, skills, memory, tools, credentials, settings, owner
-preferences, and approval posture.
+Pet is the My Agents capability layer for personal and owned agents. It focuses
+on a user's private agent asset: prompts, skills, memory, tools, credentials,
+settings, owner preferences, and approval posture.
 
-Pet exposes useful work through messages, requests, approvals, and results
-without transferring the private asset bundle.
+Pet supplies those capabilities to both the seagulls Social interface and the
+Agent Request Work interface without transferring the private asset bundle. It
+does not own a communication transport: personal chat is a projection over
+gulls Inbox and optional Live sessions, with durable Inbox fallback.
 
 ## Layer Folders
 

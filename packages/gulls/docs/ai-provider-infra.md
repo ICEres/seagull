@@ -1,15 +1,17 @@
-# AI Provider Backend
+# Internal AI Provider Backend
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-25.
 
-This document defines the planned backend for Seagull-managed AI provider calls.
-It is the implementation plan for [Roadmap](roadmap.md) Phase 10.
+This document defines shared gulls infrastructure for optional
+Seagull-managed AI provider calls. It is the implementation plan for
+[Roadmap](roadmap.md) Phase 10, not a customer-facing product or direct
+business surface.
 
 ## Purpose
 
-Seagull should support hosted agent response generation and approved cloud
-actions without putting provider calls directly inside the message hub, safety
-gateway, social API, or connectors.
+Pet, seagulls, and Agent Request may use model-backed response or action steps
+without putting provider calls directly inside the message hub, safety gateway,
+social API, connectors, or product-layer domain services.
 
 The planned service is:
 
@@ -20,7 +22,7 @@ packages/gulls/services/ai-provider
 It should behave as a Seagull-native AI gateway and hosted run service:
 
 ```text
-message or task request
+authorized product action
 -> safety preflight
 -> AI run record
 -> context-pack and payload-ref resolution
@@ -30,71 +32,78 @@ message or task request
 -> message or task result persisted through the message hub
 ```
 
-The message hub remains the owner of messages, deliveries, threads, tasks, and
-task results. The safety gateway remains the owner of policy decisions. The AI
-provider backend owns model execution, provider credentials, usage accounting,
-provider routing, and run-level audit.
+The message hub remains the durable source of messages, deliveries, threads,
+task primitives, and task results; Agent Request owns their Request/Tasking
+workflow semantics. The safety gateway remains the owner of policy decisions.
+The AI provider backend owns model execution, provider credentials, usage
+accounting, provider routing, quota enforcement, cost controls, and run-level
+audit.
 
 Provider execution is optional for any given Seagull step. A chat message or
 agent delivery must remain valid without an LLM provider. When a response step
 does use a provider, the caller passes the already authorized agent identity,
 user-owned prompt or skill instructions, input messages, context refs, and audit
 refs into an AI run. The provider backend executes that run; it does not become
-the chat runtime, message store, asset owner, or source of delivery truth.
+the chat runtime, message store, asset owner, product interface, or source of
+delivery truth.
 
-## Credit Ownership
+## Internal Accounting And Quota Ownership
 
-Hosted provider spend should be governed by the server owner first, then charged
-to a human user credit balance.
+The implementation calls its internal accounting and quota units `credits`.
+These units are manually allocated, non-purchasable controls. They are not
+customer balances, product entitlements, Agent Request task credits, or
+cash-equivalent value.
 
 The server owner controls the instance-level provider account, provider
-configuration, model allowlists, and the server credit pool. Users receive
-credits from that pool. Agents spend the owning user's credits only when policy
-allows the run.
+configuration, model allowlists, and the server accounting pool. Administrators
+allocate internal units from that pool to an `owner_user_id`. An authorized run
+debits the owning user's allocation only when policy permits it.
 
-Agents and tasks should not own provider credits. They should carry attribution,
-limits, approval state, and usage refs. This keeps a user's whole agent fleet
-under one clear spend account while still letting Seagull enforce per-agent,
+Agents and tasks do not own provider accounting units. They carry attribution,
+limits, approval state, and usage refs. This keeps an owner's whole agent fleet
+under one cost-control boundary while still letting Seagull enforce per-agent,
 per-task, per-room, and per-tenant limits.
 
-The first credit rule is:
+The first internal accounting rule is:
 
 ```text
-server owner credit pool
--> admin-audited user credit grant
--> owner_user_id credit balance
+server accounting pool
+-> admin-audited internal allocation
+-> owner_user_id quota balance
 -> preflight estimated run cost
 -> provider call
--> actual usage charge
--> append-only user credit ledger entry
+-> actual usage debit
+-> append-only accounting ledger entry
 ```
 
 The local MVP can estimate cost in internal credit units from input tokens plus
-`max_output_tokens`, then charge actual recorded usage after the provider
-returns. A future AWS worker should add an explicit reserve/release flow for
-server credits and user credits before high-concurrency provider usage.
+`max_output_tokens`, then debit actual recorded usage after the provider
+returns. The implemented `credit` names remain storage and API identifiers. A
+future AWS worker should add an explicit reserve/release flow for internal
+server and owner allocations before high-concurrency provider usage.
 
 ## Assumptions
 
 - The first version is for Seagull-managed hosted AI calls, not for replacing
   local user-owned agents.
 - LLM provider calls are optional executors for individual response or action
-  steps. Seagull message delivery, inbox state, thread state, safety, and audit
-  must not depend on a provider being configured.
-- The MVP supports generated drafts and durable task results before live token
-  streaming.
+  steps. Feed, Inbox, Live, message delivery, thread and task state, safety, and
+  audit must not depend on a provider being configured.
+- The MVP supports generated drafts and durable task results before provider
+  token streaming.
 - Provider credentials are never visible to agents, connectors, prompts,
   context packs, messages, payloads, or task records.
 - Large inputs and generated outputs move through `content_ref` payload records,
   not inline message, inbox, queue, webhook, or DynamoDB item bodies.
-- The MVP uses manual Seagull credit grants only. External payment and billing
-  pages are deliberately deferred until after the hosted AI MVP.
-- Provider spend and task credits connect only after the internal credit and
-  escrow model is stable.
-- Hosted provider credits are owned by the human user account identified by
-  `owner_user_id`; agents only spend against that account when policy allows it.
-- Server owner credit grants and provider configuration changes are admin
-  actions and must write audit events.
+- The MVP uses manual internal allocations only. They cannot be bought and do
+  not imply a customer balance or provider-credit product.
+- Provider accounting remains separate from Agent Request task credits. A
+  product layer may use recorded provider usage as an input to its own limits
+  without sharing ledgers or currencies.
+- Internal provider usage is attributed to the human account identified by
+  `owner_user_id`; agents only debit that allocation when policy allows it.
+- Server-owner allocation and provider-configuration changes are admin actions
+  and must write audit events.
 
 ## Non-Goals
 
@@ -105,9 +114,25 @@ server credits and user credits before high-concurrency provider usage.
   provider backend.
 - Do not expose private MCP endpoints, tool handles, browser sessions, shells,
   credentials, prompts, memory, or local callback URLs to another agent.
-- Do not require streaming for the first hosted-response milestone.
-- Do not add external payment, billing, purchase, invoice, or checkout surfaces
-  to the MVP.
+- Do not require provider token streaming for the first hosted-response
+  milestone.
+- Do not expose AI Provider as a standalone customer product.
+- Do not add payment, billing, purchase, subscription, invoice, checkout,
+  refund, or dispute handling to this service. Those concerns belong to product
+  layers and plans if they are introduced.
+
+## Live And Streaming Boundary
+
+Live A2A is a shared gulls network capability. Agent Request is one consumer of
+Live for active work and progress; it does not own a separate real-time
+transport. A disconnected Live session falls back to durable Inbox, message,
+and task state and can resume from that state later.
+
+Provider token streaming is an optional execution detail of an AI run. Payload
+streaming is a separate payload-plane optimization for large bytes. Neither is
+the source of truth for a Live session, and neither turns token deltas or
+payload chunks into durable messages. Meaningful output must resolve to a
+durable message, task result, artifact, or audit record.
 
 ## External Patterns
 
@@ -127,8 +152,8 @@ and agent/task orchestration:
   supported Bedrock models.
 
 Seagull should borrow these gateway and observability ideas while keeping the
-social graph, safety policy, task lifecycle, payload references, credits, and
-audit records inside Seagull.
+social graph, safety policy, task lifecycle, payload references, internal
+accounting controls, and audit records inside Seagull.
 
 ## Recommended Stack
 
@@ -303,23 +328,24 @@ Usage records should capture:
 
 User credit ledger records should be append-only. Initial entry types:
 
-- `credit_grant`: grant internal provider credits to a human user account.
-- `ai_run_charge`: debit actual provider usage for one AI run.
+- `credit_grant`: allocate internal provider quota to a human user account.
+- `ai_run_charge`: debit recorded provider usage for one AI run.
 
-The credit ledger should link charges to `run_id` and `usage_id`. It should not
-store provider credentials or billing-provider secrets.
+The credit ledger should link debits to `run_id` and `usage_id`. It stores
+internal accounting only and must not store payment, customer-billing, or
+provider credential state.
 
 Server credit ledger records should be append-only. Initial entry types:
 
-- `credit_grant`: increase the server owner's internal provider credit pool.
-- `user_credit_grant`: move credits from the server pool to one user's balance.
+- `credit_grant`: increase the server owner's internal accounting pool.
+- `user_credit_grant`: allocate units from the server pool to one user's quota.
 
-Admin audit records should capture who changed provider settings, who granted
-credits, the target user/provider, the reason, and related ledger IDs.
+Admin audit records should capture who changed provider settings, who allocated
+internal units, the target user/provider, the reason, and related ledger IDs.
 
 ## API Surface
 
-Initial local/API routes:
+Initial internal and admin API routes:
 
 ```text
 POST /ai-runs
@@ -351,13 +377,16 @@ message-hub task-result APIs rather than writing task records directly.
 
 ### Chat Reply Response Steps
 
-The social API uses `POST /ai-runs` for the optional provider-backed response
-step in chat-to-agent conversations:
+The SNS chat path may initiate `POST /ai-runs` for an optional provider-backed
+response step. For a Pet-backed agent, Pet must authorize and resolve the
+private asset snapshot; seagulls may present the chat action but does not own or
+read the underlying prompt and skill assets.
 
-- The social API composes the run request from platform guardrails, the
-  authorized agent identity, the bound user-owned prompt and skill assets, and
-  the recent chat thread, then calls the AI provider synchronously with the
-  admin secret.
+- The current Social API compatibility path composes the run request from
+  platform guardrails, the authorized agent identity, an already-approved Pet
+  asset snapshot, and the recent chat thread, then calls the AI provider
+  synchronously with the admin secret. The target split moves private asset
+  authorization and resolution behind Pet.
 - Completed runs become an agent chat reply that persists the `run_id` as its
   AI run reference alongside the run state.
 - Denied, quarantined, or failed runs never invalidate the stored inbound
@@ -368,19 +397,17 @@ step in chat-to-agent conversations:
   provider URL, admin secret, reply provider, and reply model
   (`AI_PROVIDER_API_URL`, `AI_PROVIDER_ADMIN_SECRET`, `AI_REPLY_PROVIDER`,
   `AI_REPLY_MODEL`). Idempotency keys derive from the inbound chat message ID
-  so retries do not double-charge.
+  so retries do not create duplicate accounting debits.
 
-## Management UI
+## Operations And Product Integration Views
 
-The MVP management surface should live inside Seagull Web. It should not link to
-or depend on external billing pages.
+The AI Provider owns no standalone customer interface. Admin and dev operations
+may live inside Seagull Web, while a calling product layer may show contextual
+usage and limit summaries for its own actions.
 
-User-facing pages:
+Product-layer views may show:
 
 ```text
-/settings/ai-credits
-/settings/ai-credits/ledger
-/settings/ai-credits/limits
 /agents/:handle/ai-usage
 ```
 
@@ -392,28 +419,28 @@ Admin or dev-only pages:
 /admin/ai-providers
 ```
 
-The user credit page should show:
+Product-owned usage summaries may show:
 
-- Current credit balance.
-- Credits used today and this month.
-- Recent ledger entries: manual grants and AI run charges.
 - Usage grouped by agent, model, and task.
 - Current per-run, per-agent, and per-owner limits.
 - Approval thresholds for high-cost runs.
+- Whether a provider-backed action is available under the product's policy.
+
+They must not offer provider-credit purchase, checkout, or billing controls.
 
 The admin page should support:
 
-- Server credit pool balance and ledger.
-- Manual credit grants and adjustments.
+- Internal server accounting pool and ledger.
+- Manual quota allocations and adjustments.
 - Run lookup by `run_id`, `task_id`, `message_id`, user, agent, provider, or
   model.
 - Provider enable/disable state.
 - Model allowlist and max-output-token policy.
-- Inspection of a run, usage record, and credit charge together.
+- Inspection of a run, usage record, and accounting debit together.
 
-Manual grants should be explicit audit actions. They are useful for local dev,
-private alpha, demos, support adjustments, and initial hosted-AI testing before
-any billing provider exists.
+Manual allocations should be explicit audit actions. They are useful for local
+development, private alpha, demos, and controlled provider testing; they are
+not customer credit grants.
 
 ## Safety And Approval
 
@@ -437,13 +464,13 @@ After the provider returns, the output should be checked before delivery:
 - Tool-call-like output becomes a Seagull task or tool request, not direct tool
   execution.
 
-## Credit And Budget Boundary
+## Internal Accounting And Budget Boundary
 
-The MVP manages credits inside Seagull only. Credits are granted manually through
-admin or dev-only operations, then spent by hosted AI runs. It must enforce hard
-limits:
+The MVP manages non-purchasable accounting units inside this service. Units are
+allocated through admin or dev-only operations, then debited by AI runs. It
+must enforce hard limits:
 
-- Human user credit balance before every hosted provider call.
+- Human-owner internal quota before every hosted provider call.
 - Server owner provider config before every hosted provider call.
 - Per-run max output tokens.
 - Per-agent daily or rolling token limit.
@@ -451,7 +478,7 @@ limits:
 - Per-provider fail-closed quota when usage cannot be estimated.
 - Model-level allowlist and denylist.
 
-Out of scope for the MVP:
+Outside the AI Provider boundary at every phase:
 
 - Card payments.
 - External checkout pages.
@@ -460,18 +487,15 @@ Out of scope for the MVP:
 - Invoice and receipt views.
 - Credit purchases.
 
-Those surfaces can be designed after the hosted AI MVP proves local grants,
-usage metering, run audit, and provider-cost controls. Before any paid usage is
-enabled, Seagull will need:
+If a product layer later monetizes an action, that product and its plan own
+customer consent, entitlements, prices, billing state, invoices, payments,
+refunds, and disputes. The AI Provider receives an already-authorized action
+and applicable limits, records usage, and enforces provider-cost controls. It
+does not sell or reconcile credits and does not share a ledger with Agent
+Request task credits.
 
-- User consent records.
-- Billing customer state.
-- Entitlement records.
-- Spend limits.
-- Credit purchase or grant reconciliation.
-- Provider-credit reserve and release records for concurrent runs.
-- Provider usage reconciliation.
-- Refund, dispute, and abuse-handling paths.
+Concurrent workers may still reserve and release internal accounting units.
+That is quota correctness, not payment settlement.
 
 ## AWS Dev Shape
 
@@ -501,11 +525,11 @@ POST /ai-runs
 -> write ai_runs requested record
 -> safety and budget preflight
 -> provider config preflight
--> user credit preflight
+-> internal owner-quota preflight
 -> enqueue provider job
 -> worker resolves context refs
 -> provider adapter call
--> write usage, user credit charge, and run events
+-> write usage, internal accounting debit, and run events
 -> post output to message hub as task result or message draft
 ```
 
@@ -514,7 +538,8 @@ POST /ai-runs
 ### Phase A: Documentation And Local Contract
 
 - Add this document.
-- Add `packages/agent-request/docs/tasks.md` backlog items for the MVP.
+- Record the shared gulls infrastructure backlog. Agent Request may reference
+  it as one integration consumer, but does not own the provider service.
 - Create Linear tracking for the Phase 10 backend.
 
 Success criteria:
@@ -527,37 +552,38 @@ Success criteria:
 - Create `packages/gulls/services/ai-provider`.
 - Add domain models, in-memory repository, fake provider, local API adapter, and
   tests.
-- Prove a fake provider run completes, records usage, and charges user credits.
-- Prove server owner grants user credits from the server credit pool and admin
-  audit records are written.
+- Prove a fake provider run completes, records usage, and debits internal owner
+  accounting units.
+- Prove an administrator allocates internal units from the server pool and an
+  audit record is written.
 
 Success criteria:
 
 ```text
-server owner grants server credits -> server owner grants user credits
+administrator seeds server accounting pool -> allocates owner quota
 -> create run -> fake provider returns result -> usage ledger row exists
--> user credit ledger charge exists
+-> internal accounting debit exists
 ```
 
 ### Phase C: Safety And Budget Gates
 
 - Add policy-client and budget-client interfaces.
 - Deny unsafe, disallowed, or over-budget requests before provider calls.
-- Deny insufficient-credit requests before provider calls.
+- Deny requests with insufficient internal quota before provider calls.
 - Deny disabled providers and disallowed provider models before provider calls.
 - Add postflight output safety checks.
 
 Success criteria:
 
 - Denied and over-budget runs never call the provider adapter.
-- Insufficient-credit runs never call the provider adapter.
+- Runs with insufficient internal quota never call the provider adapter.
 - Provider-disabled and provider-model-denied runs never call the provider
   adapter.
 - Unsafe output is not delivered.
 
 ### Phase D: Message Hub Integration
 
-- Let approved task flows create AI runs.
+- Let approved product flows, including Agent Request tasks, create AI runs.
 - Return generated results through the existing message-hub task-result surface.
 - Use payload refs for large inputs and outputs.
 
@@ -604,14 +630,14 @@ Success criteria:
 
 ## Open Questions
 
-- Whether the first user-facing action is "draft a reply" or "complete an
+- Whether the first product integration is "draft a reply" or "complete an
   approved task result".
-- Whether AI runs should be visible in the frontend during the manual-credit
-  MVP.
+- Whether run audit should be visible through a product-owned usage view or
+  remain admin-only during the internal-accounting MVP.
 - Whether provider routing should be direct-only at first or include optional
   LiteLLM in local development.
 - Which model aliases should be allowed in dev.
-- How detailed cost estimates need to be before manual-credit alpha usage.
+- How detailed cost estimates need to be before controlled alpha usage.
 
 ## References
 

@@ -27,7 +27,12 @@ For manual testing without a hosted hub, `go run ./cmd/hubstub` serves a fake
 Message Hub on `:8200` (or `make hubstub-run` from the repo root), including a
 WebSocket push endpoint at `ws://localhost:8200/stream`.
 
-## Streaming (WebSocket push)
+## Inbox Wake-Up Stream (WebSocket Push)
+
+This existing stream is an Inbox wake-up channel, not a Live A2A session.
+Events carry no conversation or task truth; durable Inbox state remains
+authoritative. A future Live client may reuse WebSocket infrastructure only
+through the shared Live protocol and fallback rules.
 
 Set `SEAGULL_STREAM_URL` (or `--stream-url`) to a `ws://`/`wss://` URL — for
 the deployed hub, the message router's WebSocket URL — and:

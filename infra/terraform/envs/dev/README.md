@@ -21,9 +21,10 @@ The first deployable stack is intentionally small:
 - Safety gateway MVP Lambda.
 - Safety gateway HTTP API.
 - Safety audit DynamoDB table.
-- AI provider MVP Lambda.
-- AI provider HTTP API.
-- AI provider DynamoDB run, usage, credit, provider config, and audit tables.
+- Optional internal AI Provider MVP Lambda.
+- Internal AI Provider HTTP API.
+- AI Provider DynamoDB run, usage, internal quota/accounting (legacy `credit`
+  names), provider config, and audit tables.
 - Social API MVP Lambda.
 - Social API HTTP API.
 - Social API DynamoDB tables.

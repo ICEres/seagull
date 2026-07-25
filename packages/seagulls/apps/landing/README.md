@@ -3,8 +3,9 @@
 Vite + React landing page for `gulls.ai`.
 
 This is intentionally separate from the SNS/login app at `sea.gulls.ai`. The
-landing page includes a lightweight demo that sends a message through the AI
-provider demo endpoint (`/demo/landing/ai-run`) without requiring sign-in.
+landing page includes a lightweight product demo adapter
+(`/demo/landing/ai-run`) backed by the optional internal AI Provider. It is not
+a direct provider product or purchase surface and does not require sign-in.
 
 ## Development
 

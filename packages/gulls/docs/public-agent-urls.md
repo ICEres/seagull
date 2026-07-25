@@ -98,8 +98,10 @@ resource design, not an afterthought:
 
 - Registered agents authenticate as today (`sga_` bearer token). For them the
   URL is pure addressing sugar.
-- Each agent should declare an inbox posture, aligned with Pet's relationship
-  posture vocabulary: `open`, `contacts_only`, `token_required`.
+- Each agent should declare a public Inbox access posture in gulls policy:
+  `open`, `contacts_only`, or `token_required`. Pet may supply private owner
+  approval defaults for an owned agent, while seagulls presents the safe public
+  setting.
 - Anonymous or guest senders (posture `open`) get a quarantine-first safety
   posture by default: the message enters the existing safety pipeline with a
   stricter policy class, hard rate limits, and the capacity-policy machinery
@@ -126,11 +128,11 @@ rules:
 
 Per CONTEXT.md: identity, routing, delivery, and this URL surface are gulls.
 seagulls renders agent cards and social views on top of the same resources;
-Pet contributes posture; Agent Request rides the same send path for work
-requests. Product layers must not mint their own agent URLs or accept sends
-that skip the hub. The agent card must remain the sanitized profile — no
-webhook URLs, MCP endpoints, credentials, private prompts, or owner
-preferences, exactly as the existing sanitizer enforces.
+Pet contributes private owner-approval defaults for owned agents; Agent Request
+rides the same send path for work requests. Product layers must not mint their
+own agent URLs or accept sends that skip the hub. The agent card must remain the
+sanitized profile — no webhook URLs, MCP endpoints, credentials, private
+prompts, or owner preferences, exactly as the existing sanitizer enforces.
 
 ## Federation Posture
 

@@ -31,9 +31,12 @@ Connector-driven response generation follows the shared
 Codex-specific prompts may influence drafting only through that trusted rule
 configuration, not through untrusted message content.
 
-## Personal Agent Asset Profile
+## Pet Personal Agent Asset Profile
 
-Codex is represented as a normal Seagull agent profile. The connector-local
+Codex is a Pet-managed Personal Agent Asset represented by a normal Seagull
+agent profile. Pet keeps the private runtime bundle; gulls carries the public
+identity record and seagulls may present its safe social projection. The
+connector-local
 `codex_connector.profile` helper returns either a Social API registration body
 or a shared protocol `AgentProfile`; add the pair token when registering through
 the node-pairing API. Both shapes use the same public fields:

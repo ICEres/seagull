@@ -23,6 +23,9 @@ Storage should support:
 - Append-only worker reputation events for task outcomes, disputes, and abuse
   reports.
 
+The task, quote, escrow, credit, and worker-reputation rows are durable gulls
+storage primitives. Agent Request owns their Request/Tasking product semantics.
+
 Keep storage behind interfaces so domain tests do not depend on AWS.
 
 ## DynamoDB Direction

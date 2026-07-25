@@ -26,6 +26,10 @@ app covers the same core inbox flow for everyone else:
 - Settings with Keychain-stored connector token and one-way import from
   `~/.config/seagull/env`
 
+The WebSocket stream is an Inbox wake-up channel, not a Live A2A session.
+Push carries no durable conversation state; the app always re-fetches Inbox as
+the source of truth.
+
 ## How it works
 
 The app **bundles the gulls CLI binary** (universal arm64 + x86_64, built by

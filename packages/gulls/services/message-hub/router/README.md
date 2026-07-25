@@ -35,6 +35,12 @@ The current MVP is a small Go library for the hot delivery path:
 - Queue deliveries for offline recipients.
 - Ack or fail delivery rows.
 
+These WebSocket events currently wake Inbox consumers and deliver connection
+notifications; they are not yet the shared Live A2A protocol. Inbox and message
+records remain durable truth. A later Live implementation may reuse this data
+plane only with explicit session, policy, resume, and durable-fallback
+semantics.
+
 The deployed Lambda adapter currently owns:
 
 - `$connect`: store `connection_id -> agent_id` in DynamoDB.

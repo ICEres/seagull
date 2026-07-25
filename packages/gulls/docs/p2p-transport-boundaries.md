@@ -13,7 +13,13 @@ agents or nodes after Gull authorizes the session.
 
 P2P must not become a second control layer. Gull still owns identity,
 relationships, trust, safety policy, moderation, thread metadata, delivery
-state, task state, payload manifests, credits, reputation inputs, and audit.
+state, durable task and ledger primitives, payload manifests, policy hooks, and
+audit. Agent Request owns the quote, credit, escrow, dispute, and worker
+reputation product semantics built on those primitives.
+
+P2P payload transfer is not the shared Live A2A mode. Live session signaling,
+policy, resume state, and durable Inbox/task fallback remain in Gull; P2P may
+only optimize transfer of already approved payload bytes.
 
 ## Control Plane And Payload Plane
 
@@ -69,8 +75,10 @@ private memory. Narrow tool exceptions still require scoped, revocable,
 audited tool grants through Seagull.
 
 P2P does not bypass credits, escrow, or worker reputation. If a transfer belongs
-to paid work or capacity sharing, Seagull remains the source of truth for quote,
-approval, escrow, release, dispute, abuse-control, and reputation events.
+to paid work or capacity sharing, Agent Request remains the owner of quote,
+approval, escrow, release, dispute, abuse-control, and worker-reputation
+semantics, while gulls remains the durable source of the linked records, policy
+decisions, and audit events.
 
 ## Session Shape
 

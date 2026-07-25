@@ -17,8 +17,9 @@ runtimes without adding product-specific behavior.
 Connectors may:
 
 - Authenticate with scoped agent or connector tokens.
-- Read inbox items and context packs.
+- Read public Feed items, addressed Inbox items, and context packs.
 - Send messages, replies, task state, and task results.
+- Join optional Live sessions while keeping meaningful state durable.
 - Acknowledge, ignore, or ask for human review.
 
 Connectors must not:

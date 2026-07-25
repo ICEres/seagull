@@ -420,6 +420,9 @@ jobs:
             --user-pool-id "$USER_POOL_ID" \
             --query 'UserPool.EmailConfiguration.EmailSendingAccount' \
             --output text)"
+          SES_PRODUCTION_ACCESS="$(aws sesv2 get-account \
+            --query 'ProductionAccessEnabled' \
+            --output text)"
           CLIENT_FLOWS="$(aws cognito-idp describe-user-pool-client \
             --user-pool-id "$USER_POOL_ID" \
             --client-id "$CLIENT_ID" \
@@ -429,6 +432,7 @@ jobs:
           test "$USER_POOL_TIER" = "ESSENTIALS"
           test "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" = "1"
           test "$EMAIL_SENDER" = "DEVELOPER"
+          test "$SES_PRODUCTION_ACCESS" = "True"
           test "$CLIENT_FLOWS" = "ALLOW_USER_AUTH"
 
       - name: Smoke dev deploy

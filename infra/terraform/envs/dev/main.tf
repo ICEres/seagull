@@ -17,6 +17,7 @@ locals {
   mcp_connector_prefix   = "${var.project}-${var.environment}-mcp-connector"
   mcp_cognito_domain     = var.mcp_cognito_domain_prefix != "" ? var.mcp_cognito_domain_prefix : "${var.project}-${var.environment}-mcp-${data.aws_caller_identity.current.account_id}"
   safety_gateway_prefix  = "${var.project}-${var.environment}-safety-gateway"
+  social_auth_guard_name = "${var.project}-${var.environment}-social-auth-domain-guard"
   social_cognito_domain  = var.social_cognito_domain_prefix != "" ? var.social_cognito_domain_prefix : "${var.project}-${var.environment}-social-${data.aws_caller_identity.current.account_id}"
   social_api_prefix      = "${var.project}-${var.environment}-social-api"
   web_prefix             = "${var.project}-${var.environment}-web"
@@ -33,6 +34,7 @@ locals {
   mcp_connector_package   = "${path.module}/.terraform/build/mcp-connector/package"
   ai_provider_package     = "${path.module}/.terraform/build/ai-provider/package"
   safety_gateway_package  = "${path.module}/.terraform/build/safety-gateway/package"
+  social_auth_guard_src   = "${path.module}/../../../../packages/seagulls/services/social-api/aws/auth_domain_guard.py"
   social_api_package      = "${path.module}/.terraform/build/social-api/package"
   message_hub_tags = {
     Project     = var.project
@@ -184,6 +186,12 @@ data "archive_file" "social_api" {
   type        = "zip"
   source_dir  = local.social_api_package
   output_path = "${path.module}/.terraform/build/social-api.zip"
+}
+
+data "archive_file" "social_auth_guard" {
+  type        = "zip"
+  source_file = local.social_auth_guard_src
+  output_path = "${path.module}/.terraform/build/social-auth-domain-guard.zip"
 }
 
 resource "aws_iam_role" "lambda" {
@@ -1123,6 +1131,83 @@ resource "aws_route53_record" "social_auth_ses_dkim" {
   records = ["${aws_ses_domain_dkim.social_auth.dkim_tokens[count.index]}.dkim.amazonses.com"]
 }
 
+resource "aws_iam_role" "social_auth_guard" {
+  name = "${local.social_auth_guard_name}-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = merge(local.message_hub_tags, {
+    App = "social-auth-domain-guard"
+  })
+}
+
+resource "aws_cloudwatch_log_group" "social_auth_guard" {
+  name              = "/aws/lambda/${local.social_auth_guard_name}"
+  retention_in_days = 7
+
+  tags = merge(local.message_hub_tags, {
+    App = "social-auth-domain-guard"
+  })
+}
+
+resource "aws_iam_role_policy" "social_auth_guard" {
+  name = "${local.social_auth_guard_name}-policy"
+  role = aws_iam_role.social_auth_guard.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.social_auth_guard.arn}:*"
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "social_auth_guard" {
+  function_name    = local.social_auth_guard_name
+  role             = aws_iam_role.social_auth_guard.arn
+  handler          = "auth_domain_guard.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.social_auth_guard.output_path
+  source_code_hash = data.archive_file.social_auth_guard.output_base64sha256
+  timeout          = 5
+  memory_size      = 128
+
+  depends_on = [
+    aws_cloudwatch_log_group.social_auth_guard,
+    aws_iam_role_policy.social_auth_guard,
+  ]
+
+  tags = merge(local.message_hub_tags, {
+    App = "social-auth-domain-guard"
+  })
+}
+
+resource "aws_lambda_permission" "social_auth_guard_cognito" {
+  statement_id   = "AllowExecutionFromCognito"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.social_auth_guard.function_name
+  principal      = "cognito-idp.amazonaws.com"
+  source_account = data.aws_caller_identity.current.account_id
+}
+
 resource "aws_cognito_user_pool" "social_web" {
   name           = "${local.social_api_prefix}-users"
   user_pool_tier = "ESSENTIALS"
@@ -1134,6 +1219,11 @@ resource "aws_cognito_user_pool" "social_web" {
     # Cognito won't remove PASSWORD from an existing password-based pool.
     # The web app only requests EMAIL_OTP, and new registrations omit passwords.
     allowed_first_auth_factors = ["PASSWORD", "EMAIL_OTP"]
+  }
+
+  lambda_config {
+    pre_authentication = aws_lambda_function.social_auth_guard.arn
+    pre_sign_up        = aws_lambda_function.social_auth_guard.arn
   }
 
   email_configuration {
@@ -1165,6 +1255,8 @@ resource "aws_cognito_user_pool" "social_web" {
       App = "social-api-auth"
     },
   )
+
+  depends_on = [aws_lambda_permission.social_auth_guard_cognito]
 }
 
 resource "aws_cognito_user_pool_domain" "social_web" {

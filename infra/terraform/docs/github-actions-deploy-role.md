@@ -171,6 +171,7 @@ ses:DeleteIdentity
 ses:VerifyDomainDkim
 ses:GetIdentityDkimAttributes
 ses:SetIdentityDkimEnabled
+ses:GetAccount
 ```
 
 SES production access is regional. Before deploying email-code authentication,

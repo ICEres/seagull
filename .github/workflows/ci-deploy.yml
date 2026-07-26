@@ -485,11 +485,37 @@ jobs:
             --query 'UserPoolClient.ExplicitAuthFlows' \
             --output text)"
 
-          test "$USER_POOL_TIER" = "ESSENTIALS"
-          test "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" = "1"
-          test "$EMAIL_SENDER" = "DEVELOPER"
-          test "$SES_PRODUCTION_ACCESS" = "True"
-          test "$CLIENT_FLOWS" = "ALLOW_USER_AUTH"
+          # Bare `test` under `set -e` exits silently on the first failure, so a
+          # red deploy said only "exit code 1" -- not which of the five checks
+          # failed, nor what the value actually was. Report every mismatch, and
+          # report the observed value, so one run diagnoses the whole step
+          # instead of fixing one assertion and rediscovering the next.
+          failed=0
+          expect() {
+            local label="$1" actual="$2" wanted="$3"
+            if [ "$actual" != "$wanted" ]; then
+              echo "::error::$label is '$actual', expected '$wanted'"
+              failed=1
+            fi
+          }
+
+          expect "Cognito user pool tier" "$USER_POOL_TIER" "ESSENTIALS"
+          expect "EMAIL_OTP first-auth factors" \
+            "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" "1"
+          expect "Cognito email sending account" "$EMAIL_SENDER" "DEVELOPER"
+          expect "App client auth flows" "$CLIENT_FLOWS" "ALLOW_USER_AUTH"
+
+          # Account-level and not fixable by a deploy: leaving SES in sandbox
+          # needs an AWS support request, so name that in the message rather
+          # than leaving an operator to infer it from a bare 'False'.
+          if [ "$SES_PRODUCTION_ACCESS" != "True" ]; then
+            echo "::error::SES production access is '$SES_PRODUCTION_ACCESS', expected 'True' -- the account is in the SES sandbox, which needs an AWS support request to lift"
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Smoke dev deploy
         run: |

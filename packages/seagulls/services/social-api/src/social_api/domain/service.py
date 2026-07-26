@@ -97,6 +97,14 @@ class PermissionDeniedError(SocialApiError):
     """Raised when a human cannot operate on a requested agent."""
 
 
+class AgentRegistryUnavailableError(SocialApiError):
+    """Raised when gulls could not register a handle and is required to.
+
+    gulls owns identity and handles, so when a registry is configured a
+    profile it does not know about must not be presented as created.
+    """
+
+
 @contextmanager
 def _pet_asset_errors() -> Iterator[None]:
     """Re-raise Pet asset failures as the social API's own error types.
@@ -124,11 +132,22 @@ class SocialApiService:
         clock: Clock = utc_now,
         agent_registry: AgentRegistry | None = None,
         feed_mirror: FeedMirror | None = None,
+        require_agent_registry: bool | None = None,
     ) -> None:
         self._repository = repository
         self._id_factory = id_factory or self._default_id_factory
         self._clock = clock
         self._agent_registry = agent_registry or NullAgentRegistry()
+        # gulls owns identity and handles, so a handle it rejects is arguably
+        # not a usable profile. Enabling this makes that literal: registration
+        # failure surfaces instead of leaving a seagulls-only ghost.
+        #
+        # Defaults to off. Registration has been best-effort by deliberate
+        # design (the hub's POST /agents is an idempotent get-or-create, and
+        # local dev runs with no hub), so turning it on trades a silent
+        # inconsistency for a hard failure when the hub blips -- a deployment
+        # decision, not one to make silently on everyone's behalf.
+        self._require_agent_registry = bool(require_agent_registry)
         # Feed source of truth is moving to gulls; mirror every feed write
         # there while seagulls still serves reads from its own tables.
         self._feed_mirror = feed_mirror or NullFeedMirror()
@@ -238,11 +257,9 @@ class SocialApiService:
             updated_at=now,
         )
         self._repository.put_agent_profile(profile)
-        # M0.2 (public-agent-urls plan): the gulls message hub is the
-        # authoritative agent registry; the local profile table only keeps
-        # product metadata. Registration is best-effort because the hub's
-        # POST /agents is an idempotent get-or-create and local dev runs
-        # without a hub, so profile creation must not fail on hub errors.
+        # gulls owns identity and handles; the local profile table only keeps
+        # product metadata on top. The hub's POST /agents is an idempotent
+        # get-or-create, so re-registering an existing handle is safe.
         self._register_agent_handle(profile)
         return profile
 
@@ -250,6 +267,15 @@ class SocialApiService:
         try:
             self._agent_registry.register(profile.handle, display_name=profile.display_name)
         except Exception as exc:
+            if self._require_agent_registry:
+                # A profile gulls does not know about has no identity on the
+                # network, so surface the failure rather than creating a
+                # seagulls-only ghost.
+                raise AgentRegistryUnavailableError(
+                    f"gulls agent registry rejected handle {profile.handle}: {exc}"
+                ) from exc
+            # No registry configured (local dev, single-store deployments):
+            # there is no gulls to be authoritative, so carry on.
             LOGGER.warning("agent registry registration failed for %s: %s", profile.handle, exc)
 
     def update_agent_profile(

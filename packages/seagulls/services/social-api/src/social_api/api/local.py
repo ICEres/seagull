@@ -41,6 +41,7 @@ from social_api.domain import (
     SocialApiService,
     compose_agent_reply_request,
 )
+from social_api.domain.chat_source import ChatSource
 from social_api.storage import InMemorySocialRepository
 
 
@@ -103,6 +104,7 @@ class LocalSocialApi:
         feed_mirror: FeedMirror | None = None,
         feed_source: FeedSource | None = None,
         human_proxy_domain: str | None = None,
+        chat_source: ChatSource | None = None,
     ) -> LocalSocialApi:
         return cls(
             SocialApiService(
@@ -111,6 +113,7 @@ class LocalSocialApi:
                 feed_mirror=feed_mirror,
                 feed_source=feed_source,
                 human_proxy_domain=human_proxy_domain,
+                chat_source=chat_source,
             ),
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,
@@ -459,7 +462,12 @@ class LocalSocialApi:
                 content=required_string(body, "content"),
             )
             message = self._deliver_agent_chat_message(owner_user_id, chat, message)
+            # Re-read: delivery stamps hub_thread_id on the session, and the
+            # reply has to land in that same thread rather than opening a new one.
+            chat = self._service.get_agent_chat(owner_user_id=owner_user_id, chat_id=chat.chat_id)
             message, reply = self._generate_agent_chat_reply(owner_user_id, chat, message)
+            if reply is not None:
+                reply = self._deliver_agent_chat_reply(owner_user_id, chat, reply)
         except PermissionDeniedError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
         except InvalidSocialRequestError as exc:
@@ -651,6 +659,50 @@ class LocalSocialApi:
         return self._service.record_agent_chat_message_delivery(
             owner_user_id=owner_user_id,
             chat_message_id=message.chat_message_id,
+            delivery_status="delivered",
+            hub_message_id=hub_message_id,
+            hub_thread_id=hub_thread_id,
+        )
+
+    def _deliver_agent_chat_reply(
+        self,
+        owner_user_id: str,
+        chat: AgentChatSession,
+        reply: AgentChatMessage,
+    ) -> AgentChatMessage:
+        """Carry the agent's reply back through the shared Inbox.
+
+        Inbox is addressed delivery in both directions. Mirroring only the
+        human's side would leave gulls holding half a conversation -- which is
+        what reading chat from gulls would then surface, so this has to work
+        before the read cutover means anything.
+
+        Sender and recipient are reversed relative to the inbound message, and
+        the existing hub thread is reused so both sides share one thread.
+        """
+        if self._message_hub_sender is None or chat.sender_handle is None:
+            return reply
+        try:
+            result = self._message_hub_sender.send_message(
+                sender_handle=chat.agent_handle,
+                recipient_handle=chat.sender_handle,
+                content=reply.content,
+                thread_id=chat.hub_thread_id,
+            )
+        except Exception as exc:
+            return self._service.record_agent_chat_message_delivery(
+                owner_user_id=owner_user_id,
+                chat_message_id=reply.chat_message_id,
+                delivery_status="delivery_failed",
+                delivery_error=str(exc),
+            )
+
+        hub_message = result.get("message") if isinstance(result.get("message"), dict) else {}
+        hub_message_id = optional_payload_string(hub_message, "message_id") or optional_payload_string(result, "message_id")
+        hub_thread_id = optional_payload_string(result, "thread_id") or optional_payload_string(hub_message, "thread_id")
+        return self._service.record_agent_chat_message_delivery(
+            owner_user_id=owner_user_id,
+            chat_message_id=reply.chat_message_id,
             delivery_status="delivered",
             hub_message_id=hub_message_id,
             hub_thread_id=hub_thread_id,

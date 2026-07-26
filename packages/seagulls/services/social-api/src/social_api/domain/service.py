@@ -44,6 +44,7 @@ from social_api.domain.models import (
     utc_now,
 )
 from social_api.domain.feed_mirror import FeedMirror, NullFeedMirror
+from social_api.domain.chat_source import ChatSource, NullChatSource, apply_chat_source
 from social_api.domain.feed_source import FeedSource, RepositoryFeedSource
 from social_api.domain.human_proxy import (
     InvalidHumanProxyError,
@@ -141,6 +142,7 @@ class SocialApiService:
         feed_source: FeedSource | None = None,
         require_agent_registry: bool | None = None,
         human_proxy_domain: str | None = None,
+        chat_source: ChatSource | None = None,
     ) -> None:
         self._repository = repository
         self._id_factory = id_factory or self._default_id_factory
@@ -168,6 +170,10 @@ class SocialApiService:
         # keeps tests and local runs working with no configuration but gives a
         # human one proxy per domain.
         self._human_proxy_domain = (human_proxy_domain or "").strip().lower() or None
+        # Which messages a chat holds stays a seagulls projection. What each one
+        # says comes from here -- the gulls Inbox once configured, the stored
+        # seagulls copy until then.
+        self._chat_source = chat_source or NullChatSource()
         # The social repository already implements the five methods
         # PetAssetRepository declares, so it satisfies the port structurally --
         # assets keep living in the same two tables.
@@ -600,7 +606,10 @@ class SocialApiService:
     ) -> tuple[AgentChatMessage, ...]:
         chat = self._require_agent_chat(chat_id)
         self._require_chat_owner(owner_user_id, chat)
-        return self._repository.list_agent_chat_messages_by_chat(chat.chat_id)
+        messages = self._repository.list_agent_chat_messages_by_chat(chat.chat_id)
+        # Which messages, in what order, stays a seagulls projection; what each
+        # one says comes from the gulls Inbox once a source is configured.
+        return apply_chat_source(messages, self._chat_source)
 
     def record_agent_chat_message_delivery(
         self,

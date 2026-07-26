@@ -178,6 +178,43 @@ class MessageHubAgentRegistry:
         register_message_hub_agent(message_api_url, handle, display_name=display_name)
 
 
+def _build_chat_source():
+    """Serve chat message content from the gulls Inbox once it holds it.
+
+    Gated separately from the chat mirror so the cutover is its own step, the
+    same order the Feed migration used. Which messages a chat holds stays a
+    seagulls projection; only what each one says moves.
+
+    Wrapped so a gulls-side failure degrades to the stored seagulls copy rather
+    than emptying a conversation.
+    """
+    if os.environ.get("GULLS_CHAT_READS", "").strip().lower() not in {"1", "true", "yes"}:
+        return None
+
+    # Chat content lives in the hub's messages table, which the Feed repository
+    # deliberately leaves unconfigured -- so this needs its own binding rather
+    # than reusing the one the Feed mirror built.
+    messages_table_name = os.environ.get("GULLS_MESSAGES_TABLE", "").strip()
+    if not messages_table_name:
+        return None
+
+    from message_hub.storage.dynamodb import DynamoDbMessageHubRepository
+    from social_api.domain.chat_source import GullsChatSource, SafeChatSource
+
+    return SafeChatSource(
+        GullsChatSource(
+            DynamoDbMessageHubRepository(
+                agents_table=None,
+                messages_table=dynamodb.Table(messages_table_name),
+                threads_table=None,
+                deliveries_table=None,
+                idempotency_table=None,
+                thread_summaries_table=None,
+            )
+        )
+    )
+
+
 service = SocialApiService(
     repository,
     agent_registry=MessageHubAgentRegistry(),
@@ -187,6 +224,7 @@ service = SocialApiService(
     # identity rather than one per agent domain they chat. Unset falls back to
     # the chatted agent's domain, which keeps unconfigured environments working.
     human_proxy_domain=os.environ.get("HUMAN_PROXY_DOMAIN", "").strip(),
+    chat_source=_build_chat_source(),
 )
 
 

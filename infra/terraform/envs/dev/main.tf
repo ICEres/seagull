@@ -1328,6 +1328,15 @@ module "social_api" {
   # dual-write cannot be verified, which is step 1 of the cutover runbook.
   feed_mirror_metrics_enabled = true
 
+  # Base Feed records now come from gulls. The mirror was verified live
+  # (feed_mirror outcome=ok, alarm quiet) and the backfill brought all six
+  # tables to exact parity, so gulls holds everything seagulls does.
+  #
+  # Which posts appear and in what order stays a seagulls projection; only what
+  # a post *is* moves. FallbackFeedSource still serves the seagulls copy on a
+  # gulls miss or failure, so this degrades rather than empties a feed.
+  gulls_feed_reads_enabled = true
+
   # Chat content lives in the hub's messages table. Reads stay on the stored
   # seagulls copy until gulls_chat_reads_enabled is flipped.
   gulls_messages_table_name = module.message_hub_storage.table_names.messages

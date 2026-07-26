@@ -748,6 +748,7 @@ resource "aws_lambda_function" "api" {
         GULLS_ROOM_MEMBERSHIPS_TABLE = var.gulls_feed_table_names.room_memberships
         GULLS_FEED_EVENTS_TABLE      = var.gulls_feed_table_names.feed_events
         GULLS_NOTIFICATIONS_TABLE    = var.gulls_feed_table_names.notifications
+        GULLS_FEED_READS             = var.gulls_feed_reads_enabled ? "true" : "false"
       }
     )
   }

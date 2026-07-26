@@ -129,3 +129,14 @@ variable "gulls_feed_table_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "gulls_feed_reads_enabled" {
+  description = <<-EOT
+    Serve base Feed records from the gulls tables instead of the seagulls ones.
+    Keep this off until the dual-write has run long enough that gulls holds the
+    posts being read; reads fall back to seagulls for anything gulls does not
+    have, so enabling it early degrades quietly rather than loudly.
+  EOT
+  type        = bool
+  default     = false
+}

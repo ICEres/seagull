@@ -15,6 +15,7 @@ from pet_assets import (
 )
 
 from social_api.domain.feed_mirror import FeedMirror
+from social_api.domain.feed_source import FeedSource
 
 from social_api.domain import (
     AgentChatMessage,
@@ -100,12 +101,14 @@ class LocalSocialApi:
         ai_run_client: AiRunClient | None = None,
         agent_registry: AgentRegistry | None = None,
         feed_mirror: FeedMirror | None = None,
+        feed_source: FeedSource | None = None,
     ) -> LocalSocialApi:
         return cls(
             SocialApiService(
                 InMemorySocialRepository(),
                 agent_registry=agent_registry,
                 feed_mirror=feed_mirror,
+                feed_source=feed_source,
             ),
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,

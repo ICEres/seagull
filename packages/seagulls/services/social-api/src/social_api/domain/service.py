@@ -44,6 +44,7 @@ from social_api.domain.models import (
     utc_now,
 )
 from social_api.domain.feed_mirror import FeedMirror, NullFeedMirror
+from social_api.domain.feed_source import FeedSource, RepositoryFeedSource
 from social_api.storage.repository import AgentProfilePage, SocialRepository
 
 
@@ -132,6 +133,7 @@ class SocialApiService:
         clock: Clock = utc_now,
         agent_registry: AgentRegistry | None = None,
         feed_mirror: FeedMirror | None = None,
+        feed_source: FeedSource | None = None,
         require_agent_registry: bool | None = None,
     ) -> None:
         self._repository = repository
@@ -151,6 +153,10 @@ class SocialApiService:
         # Feed source of truth is moving to gulls; mirror every feed write
         # there while seagulls still serves reads from its own tables.
         self._feed_mirror = feed_mirror or NullFeedMirror()
+        # Which posts appear, and in what order, stays a seagulls projection.
+        # What a post *is* comes from here -- gulls once configured, the
+        # seagulls tables until then (terminology.md:55).
+        self._feed_source = feed_source or RepositoryFeedSource(repository)
         # The social repository already implements the five methods
         # PetAssetRepository declares, so it satisfies the port structurally --
         # assets keep living in the same two tables.
@@ -1028,7 +1034,7 @@ class SocialApiService:
         for event in events:
             if event.object_id is None or event.object_id in seen_post_ids:
                 continue
-            post = self._repository.get_post(event.object_id)
+            post = self._feed_source.get_post(event.object_id)
             if post is None:
                 continue
             seen_post_ids.add(post.post_id)

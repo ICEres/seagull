@@ -128,10 +128,40 @@ def _build_feed_mirror():
         thread_summaries_table=None,
         **{key: dynamodb.Table(name) for key, name in names.items()},
     )
-    return BestEffortFeedMirror(StrictFeedMirror(gulls_repository))
+    return BestEffortFeedMirror(StrictFeedMirror(gulls_repository)), gulls_repository
 
 
-feed_mirror = _build_feed_mirror()
+def _build_feed_source(gulls_repository):
+    """Serve base Feed records from gulls once it is the source of truth.
+
+    Gated separately from the mirror so the cutover is its own step: dual-write
+    first, then flip reads. Falls back to the seagulls tables for posts written
+    before the mirror began, and if a gulls read fails.
+    """
+    if gulls_repository is None or os.environ.get("GULLS_FEED_READS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return None
+
+    from social_api.domain.feed_source import (
+        FallbackFeedSource,
+        GullsFeedSource,
+        RepositoryFeedSource,
+    )
+
+    return FallbackFeedSource(
+        GullsFeedSource(gulls_repository),
+        RepositoryFeedSource(repository),
+    )
+
+
+_mirror_result = _build_feed_mirror()
+feed_mirror, _gulls_feed_repository = _mirror_result if _mirror_result else (None, None)
+feed_source = _build_feed_source(_gulls_feed_repository)
+
+
 class MessageHubAgentRegistry:
     """AgentRegistry port backed by the gulls message hub.
 
@@ -152,6 +182,7 @@ service = SocialApiService(
     repository,
     agent_registry=MessageHubAgentRegistry(),
     feed_mirror=feed_mirror,
+    feed_source=feed_source,
 )
 
 

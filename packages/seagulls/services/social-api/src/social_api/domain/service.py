@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -16,8 +17,16 @@ from seagull_protocol import (
     relationship_preset_defaults,
 )
 
-from social_api.domain.models import (
+from pet_assets import (
     AgentAssetBinding,
+    InvalidPetAssetRequestError,
+    PersonalAgentAsset,
+    PetAssetNotFoundError,
+    PetAssetPermissionDeniedError,
+    PetAssetService,
+)
+
+from social_api.domain.models import (
     AgentChatMessage,
     AgentChatSession,
     AgentProfileRecord,
@@ -28,7 +37,6 @@ from social_api.domain.models import (
     NodeRecord,
     Notification,
     PairTokenRecord,
-    PersonalAgentAsset,
     PostRecord,
     Room,
     RoomMembership,
@@ -42,7 +50,6 @@ MENTION_RE = re.compile(r"@[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9.-]*", re.IGNOREC
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DELIVERY_MODES = {"pull", "webhook", "pull_webhook"}
 NODE_TYPES = {"cloud", "lan"}
-PERSONAL_AGENT_ASSET_TYPES = {"prompt", "skill"}
 CHAT_DELIVERY_STATUSES = {"stored", "delivered", "delivery_failed"}
 
 IdFactory = Callable[[str], str]
@@ -89,6 +96,24 @@ class PermissionDeniedError(SocialApiError):
     """Raised when a human cannot operate on a requested agent."""
 
 
+@contextmanager
+def _pet_asset_errors() -> Iterator[None]:
+    """Re-raise Pet asset failures as the social API's own error types.
+
+    The Pet layer raises its own exceptions so it stays independent of
+    seagulls. Mapping them here keeps the HTTP status mapping in
+    ``api/local.py`` -- and every existing response body -- unchanged.
+    """
+    try:
+        yield
+    except InvalidPetAssetRequestError as exc:
+        raise InvalidSocialRequestError(str(exc)) from exc
+    except PetAssetNotFoundError as exc:
+        raise NotFoundError(str(exc)) from exc
+    except PetAssetPermissionDeniedError as exc:
+        raise PermissionDeniedError(str(exc)) from exc
+
+
 class SocialApiService:
     def __init__(
         self,
@@ -102,6 +127,14 @@ class SocialApiService:
         self._id_factory = id_factory or self._default_id_factory
         self._clock = clock
         self._agent_registry = agent_registry or NullAgentRegistry()
+        # The social repository already implements the five methods
+        # PetAssetRepository declares, so it satisfies the port structurally --
+        # assets keep living in the same two tables.
+        self._pet_assets = PetAssetService(
+            repository,
+            id_factory=self._new_id,
+            clock=clock,
+        )
 
     def identify_human(
         self,
@@ -338,6 +371,10 @@ class SocialApiService:
         self._require_identity(owner_user_id)
         return self._repository.count_agent_profiles_by_owner(owner_user_id)
 
+    # Asset operations below delegate to the Pet product layer. seagulls still
+    # resolves the handle and checks who owns the *agent* -- that is profile
+    # territory -- then hands Pet the resolved agent id.
+
     def create_personal_agent_asset(
         self,
         *,
@@ -351,22 +388,17 @@ class SocialApiService:
         max_output_chars: int | None = None,
     ) -> PersonalAgentAsset:
         self._require_identity(owner_user_id)
-        now = self._clock()
-        asset = PersonalAgentAsset(
-            asset_id=self._new_id("asset"),
-            owner_user_id=owner_user_id,
-            asset_type=normalize_personal_agent_asset_type(asset_type),
-            name=normalized_required(name, "name"),
-            instructions=normalized_required(instructions, "instructions"),
-            description=clean_optional(description),
-            style=clean_optional(style),
-            tags=clean_string_tuple(tags, "tags"),
-            max_output_chars=normalize_optional_max_output_chars(max_output_chars),
-            created_at=now,
-            updated_at=now,
-        )
-        self._repository.put_personal_agent_asset(asset)
-        return asset
+        with _pet_asset_errors():
+            return self._pet_assets.create_personal_agent_asset(
+                owner_user_id=owner_user_id,
+                asset_type=asset_type,
+                name=name,
+                instructions=instructions,
+                description=description,
+                style=style,
+                tags=tags,
+                max_output_chars=max_output_chars,
+            )
 
     def list_personal_agent_assets(
         self,
@@ -375,11 +407,11 @@ class SocialApiService:
         asset_type: str | None = None,
     ) -> tuple[PersonalAgentAsset, ...]:
         self._require_identity(owner_user_id)
-        assets = self._repository.list_personal_agent_assets_by_owner(owner_user_id)
-        if asset_type is None:
-            return assets
-        normalized_type = normalize_personal_agent_asset_type(asset_type)
-        return tuple(asset for asset in assets if asset.asset_type == normalized_type)
+        with _pet_asset_errors():
+            return self._pet_assets.list_personal_agent_assets(
+                owner_user_id,
+                asset_type=asset_type,
+            )
 
     def get_personal_agent_asset(
         self,
@@ -387,9 +419,11 @@ class SocialApiService:
         owner_user_id: str,
         asset_id: str,
     ) -> PersonalAgentAsset:
-        asset = self._require_asset(asset_id)
-        self._require_asset_owner(owner_user_id, asset)
-        return asset
+        with _pet_asset_errors():
+            return self._pet_assets.get_personal_agent_asset(
+                owner_user_id=owner_user_id,
+                asset_id=asset_id,
+            )
 
     def set_agent_asset_binding(
         self,
@@ -401,28 +435,13 @@ class SocialApiService:
     ) -> AgentAssetBinding:
         profile = self._require_profile_by_handle(agent_handle)
         self._require_owner(owner_user_id, profile)
-        prompt_asset = self._optional_owned_asset(
-            owner_user_id=owner_user_id,
-            asset_id=prompt_asset_id,
-            expected_asset_type="prompt",
-        )
-        skill_asset = self._optional_owned_asset(
-            owner_user_id=owner_user_id,
-            asset_id=skill_asset_id,
-            expected_asset_type="skill",
-        )
-        now = self._clock()
-        existing = self._repository.get_agent_asset_binding(profile.agent_id)
-        binding = AgentAssetBinding(
-            agent_id=profile.agent_id,
-            owner_user_id=owner_user_id,
-            prompt_asset_id=None if prompt_asset is None else prompt_asset.asset_id,
-            skill_asset_id=None if skill_asset is None else skill_asset.asset_id,
-            created_at=now if existing is None else existing.created_at,
-            updated_at=now,
-        )
-        self._repository.put_agent_asset_binding(binding)
-        return binding
+        with _pet_asset_errors():
+            return self._pet_assets.set_agent_asset_binding(
+                owner_user_id=owner_user_id,
+                agent_id=profile.agent_id,
+                prompt_asset_id=prompt_asset_id,
+                skill_asset_id=skill_asset_id,
+            )
 
     def get_owned_profile(
         self,
@@ -442,7 +461,7 @@ class SocialApiService:
     ) -> AgentAssetBinding | None:
         profile = self._require_profile_by_handle(agent_handle)
         self._require_owner(owner_user_id, profile)
-        return self._repository.get_agent_asset_binding(profile.agent_id)
+        return self._pet_assets.get_agent_asset_binding(profile.agent_id)
 
     def create_agent_chat(
         self,
@@ -993,28 +1012,6 @@ class SocialApiService:
             raise NotFoundError(f"agent profile not found: {normalized_handle}")
         return profile
 
-    def _require_asset(self, asset_id: str) -> PersonalAgentAsset:
-        normalized_asset_id = normalized_required(asset_id, "asset_id")
-        asset = self._repository.get_personal_agent_asset(normalized_asset_id)
-        if asset is None:
-            raise NotFoundError(f"personal agent asset not found: {normalized_asset_id}")
-        return asset
-
-    def _optional_owned_asset(
-        self,
-        *,
-        owner_user_id: str,
-        asset_id: str | None,
-        expected_asset_type: str,
-    ) -> PersonalAgentAsset | None:
-        if asset_id is None:
-            return None
-        asset = self._require_asset(asset_id)
-        self._require_asset_owner(owner_user_id, asset)
-        if asset.asset_type != expected_asset_type:
-            raise InvalidSocialRequestError(f"{expected_asset_type}_asset_id must reference a {expected_asset_type} asset")
-        return asset
-
     def _require_agent_chat(self, chat_id: str) -> AgentChatSession:
         normalized_chat_id = normalized_required(chat_id, "chat_id")
         chat = self._repository.get_agent_chat_session(normalized_chat_id)
@@ -1047,11 +1044,6 @@ class SocialApiService:
     def _require_owner(owner_user_id: str, profile: AgentProfileRecord) -> None:
         if profile.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
             raise PermissionDeniedError(f"user does not own agent: {profile.handle}")
-
-    @staticmethod
-    def _require_asset_owner(owner_user_id: str, asset: PersonalAgentAsset) -> None:
-        if asset.owner_user_id != normalized_required(owner_user_id, "owner_user_id"):
-            raise PermissionDeniedError(f"user does not own personal agent asset: {asset.asset_id}")
 
     @staticmethod
     def _require_chat_owner(owner_user_id: str, chat: AgentChatSession) -> None:
@@ -1133,13 +1125,6 @@ def normalize_node_type(node_type: str) -> str:
     return normalized
 
 
-def normalize_personal_agent_asset_type(asset_type: str) -> str:
-    normalized = normalized_required(asset_type, "asset_type").lower()
-    if normalized not in PERSONAL_AGENT_ASSET_TYPES:
-        raise InvalidSocialRequestError("asset_type must be prompt or skill")
-    return normalized
-
-
 def normalize_chat_delivery_status(status: str) -> str:
     normalized = normalized_required(status, "delivery_status").lower()
     if normalized not in CHAT_DELIVERY_STATUSES:
@@ -1151,14 +1136,6 @@ def normalize_limit(limit: int) -> int:
     if not isinstance(limit, int):
         raise InvalidSocialRequestError("limit must be an integer")
     return max(1, min(limit, 100))
-
-
-def normalize_optional_max_output_chars(max_output_chars: int | None) -> int | None:
-    if max_output_chars is None:
-        return None
-    if not isinstance(max_output_chars, int):
-        raise InvalidSocialRequestError("max_output_chars must be an integer")
-    return max(1, min(max_output_chars, 4000))
 
 
 def normalize_pair_token_ttl(ttl_seconds: int) -> int:

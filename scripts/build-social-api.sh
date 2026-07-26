@@ -11,6 +11,7 @@ mkdir -p "$PACKAGE_DIR"
 cp -p "$ROOT_DIR/packages/seagulls/services/social-api/aws/lambda_function.py" "$PACKAGE_DIR/lambda_function.py"
 cp -Rp "$ROOT_DIR/packages/seagulls/services/social-api/src/social_api" "$PACKAGE_DIR/social_api"
 cp -Rp "$ROOT_DIR/packages/gulls/packages/protocol/src/seagull_protocol" "$PACKAGE_DIR/seagull_protocol"
+cp -Rp "$ROOT_DIR/packages/pet/packages/assets/src/pet_assets" "$PACKAGE_DIR/pet_assets"
 
 find "$PACKAGE_DIR" -name "__pycache__" -type d -prune -exec rm -rf {} +
 find "$PACKAGE_DIR" -name "*.pyc" -type f -delete

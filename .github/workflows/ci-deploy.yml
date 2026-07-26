@@ -104,6 +104,22 @@ jobs:
       - name: Run Sea-gull Python tests
         run: make social-api-test
 
+  pet-python-tests:
+    name: Pet layer Python tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+
+      - name: Run Pet Python tests
+        run: make pet-test
+
   sea-gull-web-test-build:
     name: Sea-gull layer web test and build
     runs-on: ubuntu-latest
@@ -292,6 +308,7 @@ jobs:
       - layer-folder-check
       - gulls-python-tests
       - sea-gull-python-tests
+      - pet-python-tests
       - sea-gull-web-test-build
       - connector-test
       - gulls-router-test-build

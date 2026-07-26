@@ -187,6 +187,22 @@ jobs:
       - name: Test connector
         run: make connector-test
 
+  agent-request-test:
+    name: Agent Request layer client tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Test Agent Request client
+        run: make agent-request-test
+
   gulls-router-test-build:
     name: Gulls layer router test and build
     runs-on: ubuntu-latest
@@ -311,6 +327,7 @@ jobs:
       - pet-python-tests
       - sea-gull-web-test-build
       - connector-test
+      - agent-request-test
       - gulls-router-test-build
       - gulls-local-agent-test
       - gulls-lambda-builds

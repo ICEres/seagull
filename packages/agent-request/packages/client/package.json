@@ -1,0 +1,16 @@
+{
+  "name": "@seagull/agent-request",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Request/Tasking interface over the shared gulls Inbox. Spec: packages/agent-request/docs/spec.md",
+  "exports": "./src/agent-request.ts",
+  "scripts": {
+    "test": "node --test test/agent-request.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^6.0.3"
+  }
+}

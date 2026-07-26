@@ -204,3 +204,21 @@ variable "require_agent_registry" {
   type        = bool
   default     = false
 }
+
+variable "feed_mirror_metrics_enabled" {
+  description = <<-EOT
+    Create the Feed mirror log metric filters and their alarm.
+
+    Off by default because they need logs:PutMetricFilter on the deploy role,
+    which is bootstrap IAM this stack does not manage. When the grant is missing
+    the apply fails, and because Terraform stops there, every unrelated change
+    is blocked too -- so this is gated rather than allowed to red the pipeline.
+
+    Turn it on once the grant is applied. Until then the Feed mirror still runs
+    and still emits its feed_mirror events; only the CloudWatch metrics and the
+    alarm are absent, which means the dual-write cannot be verified and
+    gulls_feed_reads_enabled should stay off.
+  EOT
+  type        = bool
+  default     = false
+}

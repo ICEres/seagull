@@ -840,3 +840,63 @@ resource "aws_lambda_permission" "api_gateway" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
 }
+
+# ---------------------------------------------------------------------------
+# Feed mirror observability
+#
+# BestEffortFeedMirror swallows gulls-side failures on purpose: during the
+# dual-write stage seagulls is still authoritative, so a mirror problem must
+# never cost a human their post. The cost of that choice is that a broken
+# mirror is invisible -- gulls silently falls behind, and the first symptom is
+# a thin feed after GULLS_FEED_READS is flipped.
+#
+# These filters make it visible. The mirror emits one JSON line per attempt
+# with event="feed_mirror"; the pattern below keys off that field, matching
+# FEED_MIRROR_EVENT in social_api/domain/feed_mirror.py.
+#
+# Both outcomes are metered, not just failures. An alarm on failures alone
+# cannot tell "healthy" from "never configured" -- NullFeedMirror is equally
+# silent. Comparing ok against failed is what proves the dual-write is live
+# before reads move over.
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_metric_filter" "feed_mirror_ok" {
+  name           = "${var.name_prefix}-feed-mirror-ok"
+  log_group_name = aws_cloudwatch_log_group.lambda.name
+  pattern        = "{ $.event = \"feed_mirror\" && $.outcome = \"ok\" }"
+
+  metric_transformation {
+    name          = "FeedMirrorOk"
+    namespace     = "Seagull/SocialApi"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "feed_mirror_failed" {
+  name           = "${var.name_prefix}-feed-mirror-failed"
+  log_group_name = aws_cloudwatch_log_group.lambda.name
+  pattern        = "{ $.event = \"feed_mirror\" && $.outcome = \"failed\" }"
+
+  metric_transformation {
+    name          = "FeedMirrorFailed"
+    namespace     = "Seagull/SocialApi"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "feed_mirror_failed" {
+  alarm_name          = "${var.name_prefix}-feed-mirror-failed"
+  alarm_description   = "gulls Feed mirror is dropping writes; gulls is falling behind seagulls. Do not flip GULLS_FEED_READS while this is alarming."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = aws_cloudwatch_log_metric_filter.feed_mirror_failed.metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.feed_mirror_failed.metric_transformation[0].namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  tags = local.common_tags
+}

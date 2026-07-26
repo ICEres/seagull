@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
+from seagull_common.logging import log
+
 from social_api.domain.models import (
     FeedEvent,
     FollowRecord,
@@ -32,6 +34,25 @@ from social_api.domain.models import (
 
 
 LOGGER = logging.getLogger(__name__)
+
+# Matched by the CloudWatch metric filters in
+# infra/terraform/modules/social-api/main.tf. Changing this string without
+# changing them there turns the mirror alarms silent, so both sides name it.
+FEED_MIRROR_EVENT = "feed_mirror"
+
+
+def _emit(operation: str, outcome: str) -> None:
+    """Emit one structured line per mirror attempt.
+
+    Uses the shared single-line JSON logger so the metric filters can key off
+    the field rather than parsing a prose message. Never raises: observability
+    must not be able to fail a write that the caller already decided to
+    tolerate.
+    """
+    try:
+        log("info", FEED_MIRROR_EVENT, event=FEED_MIRROR_EVENT, operation=operation, outcome=outcome)
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 class FeedMirror(Protocol):
@@ -227,6 +248,16 @@ class BestEffortFeedMirror:
     seagulls remains authoritative for reads during the dual-write stage, so a
     gulls-side problem degrades to "gulls is behind", never to a failed write
     for the human who posted.
+
+    Swallowing is right for the human, but on its own it makes a broken mirror
+    invisible: gulls silently falls behind, and the first symptom is a thin feed
+    after ``GULLS_FEED_READS`` is flipped. So every attempt emits a structured
+    ``feed_mirror`` event that CloudWatch turns into a metric.
+
+    Both outcomes are emitted, not just failures. An alarm on failures alone
+    cannot distinguish "the mirror is healthy" from "the mirror was never
+    configured" -- ``NullFeedMirror`` is equally silent. Comparing ok against
+    failed is what makes the dual-write provable before reads move over.
     """
 
     def __init__(self, mirror: FeedMirror) -> None:
@@ -237,6 +268,9 @@ class BestEffortFeedMirror:
             call()
         except Exception:
             LOGGER.warning("gulls feed mirror failed: %s", operation, exc_info=True)
+            _emit(operation, "failed")
+        else:
+            _emit(operation, "ok")
 
     def mirror_post(self, post: PostRecord) -> None:
         self._attempt("post", lambda: self._mirror.mirror_post(post))

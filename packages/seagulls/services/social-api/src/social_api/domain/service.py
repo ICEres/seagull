@@ -43,6 +43,7 @@ from social_api.domain.models import (
     SharedReference,
     utc_now,
 )
+from social_api.domain.feed_mirror import FeedMirror, NullFeedMirror
 from social_api.storage.repository import AgentProfilePage, SocialRepository
 
 
@@ -122,11 +123,15 @@ class SocialApiService:
         id_factory: IdFactory | None = None,
         clock: Clock = utc_now,
         agent_registry: AgentRegistry | None = None,
+        feed_mirror: FeedMirror | None = None,
     ) -> None:
         self._repository = repository
         self._id_factory = id_factory or self._default_id_factory
         self._clock = clock
         self._agent_registry = agent_registry or NullAgentRegistry()
+        # Feed source of truth is moving to gulls; mirror every feed write
+        # there while seagulls still serves reads from its own tables.
+        self._feed_mirror = feed_mirror or NullFeedMirror()
         # The social repository already implements the five methods
         # PetAssetRepository declares, so it satisfies the port structurally --
         # assets keep living in the same two tables.
@@ -748,6 +753,7 @@ class SocialApiService:
             updated_at=now,
         )
         self._repository.put_room(room)
+        self._feed_mirror.mirror_room(room)
         return room
 
     def join_room(
@@ -772,6 +778,7 @@ class SocialApiService:
             created_at=self._clock(),
         )
         self._repository.put_room_membership(membership)
+        self._feed_mirror.mirror_room_membership(membership)
         return membership
 
     def follow_agent(
@@ -797,6 +804,7 @@ class SocialApiService:
             created_at=self._clock(),
         )
         self._repository.put_follow(follow)
+        self._feed_mirror.mirror_follow(follow)
         for post in self._repository.list_posts_by_author(followed.agent_id, limit=50):
             self._put_owner_feed_event_for_post(follower.owner_user_id, post)
         return follow
@@ -836,6 +844,7 @@ class SocialApiService:
             created_at=now,
         )
         self._repository.put_post(post)
+        self._feed_mirror.mirror_post(post)
         feed_event = FeedEvent(
             event_id=self._new_id("event"),
             event_type="post",
@@ -846,6 +855,9 @@ class SocialApiService:
             created_at=now,
         )
         self._repository.put_feed_event(feed_event)
+        self._feed_mirror.mirror_feed_event(feed_event)
+        # Per-owner fan-out below stays a seagulls projection and is not
+        # mirrored: gulls owns the base Feed record, seagulls owns ranking.
         owner_feed_user_ids = {author.owner_user_id}
         owner_feed_user_ids.update(profile.owner_user_id for profile in mentioned_profiles)
         for follow in self._repository.list_follows_by_followed(author.agent_id):
@@ -860,18 +872,18 @@ class SocialApiService:
         for mentioned in mentioned_profiles:
             if mentioned.agent_id == author.agent_id:
                 continue
-            self._repository.put_notification(
-                Notification(
-                    notification_id=self._new_id("notification"),
-                    recipient_agent_id=mentioned.agent_id,
-                    notification_type="mention",
-                    owner_user_id=mentioned.owner_user_id,
-                    actor_agent_id=author.agent_id,
-                    post_id=post.post_id,
-                    room_id=post.room_id,
-                    created_at=now,
-                )
+            notification = Notification(
+                notification_id=self._new_id("notification"),
+                recipient_agent_id=mentioned.agent_id,
+                notification_type="mention",
+                owner_user_id=mentioned.owner_user_id,
+                actor_agent_id=author.agent_id,
+                post_id=post.post_id,
+                room_id=post.room_id,
+                created_at=now,
             )
+            self._repository.put_notification(notification)
+            self._feed_mirror.mirror_notification(notification)
         return post
 
     def get_home_feed(self, owner_user_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:

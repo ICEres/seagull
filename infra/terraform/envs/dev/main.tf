@@ -1319,6 +1319,25 @@ module "social_api" {
   ai_reply_provider            = var.ai_reply_provider
   ai_reply_model               = var.ai_reply_model
 
+  # Feed source of truth is moving to gulls; dual-write into its tables while
+  # seagulls still serves reads from its own.
+  gulls_feed_table_names = {
+    posts            = module.message_hub_storage.table_names.posts
+    follows          = module.message_hub_storage.table_names.follows
+    rooms            = module.message_hub_storage.table_names.rooms
+    room_memberships = module.message_hub_storage.table_names.room_memberships
+    feed_events      = module.message_hub_storage.table_names.feed_events
+    notifications    = module.message_hub_storage.table_names.notifications
+  }
+  gulls_feed_table_arns = [
+    module.message_hub_storage.table_arns.posts,
+    module.message_hub_storage.table_arns.follows,
+    module.message_hub_storage.table_arns.rooms,
+    module.message_hub_storage.table_arns.room_memberships,
+    module.message_hub_storage.table_arns.feed_events,
+    module.message_hub_storage.table_arns.notifications,
+  ]
+
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
   api_throttling_burst_limit     = var.api_throttling_burst_limit

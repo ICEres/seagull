@@ -112,3 +112,20 @@ variable "access_log_retention_days" {
   description = "Retention in days for Social API Gateway access logs."
   default     = 30
 }
+
+variable "gulls_feed_table_names" {
+  description = <<-EOT
+    Names of the gulls Feed tables to dual-write into, keyed by
+    posts/follows/rooms/room_memberships/feed_events/notifications. Empty
+    disables the mirror, so an environment applied before those tables existed
+    keeps working unchanged.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
+variable "gulls_feed_table_arns" {
+  description = "ARNs of the gulls Feed tables, for the dual-write IAM grant."
+  type        = list(string)
+  default     = []
+}

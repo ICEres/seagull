@@ -34,7 +34,7 @@ safety-gateway-test:
 phase2-test: safety-gateway-test
 
 social-api-test:
-	PYTHONPATH=packages/seagulls/services/social-api/src:packages/gulls/packages/protocol/src:packages/pet/packages/assets/src python3 -m unittest discover -s packages/seagulls/services/social-api/tests
+	PYTHONPATH=packages/seagulls/services/social-api/src:packages/gulls/packages/protocol/src:packages/pet/packages/assets/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/seagulls/services/social-api/tests
 
 pet-test:
 	PYTHONPATH=packages/pet/packages/assets/src python3 -m unittest discover -s packages/pet/packages/assets/tests

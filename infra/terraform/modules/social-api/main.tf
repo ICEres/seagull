@@ -877,7 +877,15 @@ resource "aws_lambda_permission" "api_gateway" {
 # before reads move over.
 # ---------------------------------------------------------------------------
 
+# Gated because the deploy role needs logs:PutMetricFilter to create these, and
+# that role is bootstrap IAM the dev stack deliberately does not manage. Without
+# the gate a missing grant fails the whole apply, so an unrelated change cannot
+# deploy either -- a bootstrap dependency should not be able to red the entire
+# pipeline. Turn on once the grant is in place (see
+# infra/terraform/docs/github-actions-deploy-role.md).
 resource "aws_cloudwatch_log_metric_filter" "feed_mirror_ok" {
+  count = var.feed_mirror_metrics_enabled ? 1 : 0
+
   name           = "${var.name_prefix}-feed-mirror-ok"
   log_group_name = aws_cloudwatch_log_group.lambda.name
   pattern        = "{ $.event = \"feed_mirror\" && $.outcome = \"ok\" }"
@@ -891,6 +899,8 @@ resource "aws_cloudwatch_log_metric_filter" "feed_mirror_ok" {
 }
 
 resource "aws_cloudwatch_log_metric_filter" "feed_mirror_failed" {
+  count = var.feed_mirror_metrics_enabled ? 1 : 0
+
   name           = "${var.name_prefix}-feed-mirror-failed"
   log_group_name = aws_cloudwatch_log_group.lambda.name
   pattern        = "{ $.event = \"feed_mirror\" && $.outcome = \"failed\" }"
@@ -904,12 +914,14 @@ resource "aws_cloudwatch_log_metric_filter" "feed_mirror_failed" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "feed_mirror_failed" {
+  count = var.feed_mirror_metrics_enabled ? 1 : 0
+
   alarm_name          = "${var.name_prefix}-feed-mirror-failed"
   alarm_description   = "gulls Feed mirror is dropping writes; gulls is falling behind seagulls. Do not flip GULLS_FEED_READS while this is alarming."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
-  metric_name         = aws_cloudwatch_log_metric_filter.feed_mirror_failed.metric_transformation[0].name
-  namespace           = aws_cloudwatch_log_metric_filter.feed_mirror_failed.metric_transformation[0].namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.feed_mirror_failed[0].metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.feed_mirror_failed[0].metric_transformation[0].namespace
   period              = 300
   statistic           = "Sum"
   threshold           = 1

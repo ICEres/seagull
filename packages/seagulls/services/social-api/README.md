@@ -75,6 +75,17 @@ serves all reads from its own tables. `GULLS_FEED_READS` is off.
 
 **1. Confirm the mirror is actually working.**
 
+This step needs `feed_mirror_metrics_enabled = true`, which is off by default.
+The metric filters require `logs:PutMetricFilter` on the deploy role -- bootstrap
+IAM the dev stack does not manage -- and a missing grant fails the whole apply,
+blocking unrelated changes too. So they are gated rather than allowed to red the
+pipeline. Apply the grant first (`infra/terraform/docs/github-actions-deploy-role.md`,
+*Log Metric Filter Policy Repair*), then turn the variable on.
+
+Until then the mirror still runs and still emits its `feed_mirror` events, but
+nothing measures them: the dual-write cannot be verified, so
+`gulls_feed_reads_enabled` must stay off.
+
 `BestEffortFeedMirror` swallows gulls-side failures on purpose -- during
 dual-write seagulls is authoritative, so a mirror problem must never cost a
 human their post. The cost is that a broken mirror is invisible, so it emits a

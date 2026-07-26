@@ -90,6 +90,78 @@ repository = DynamoDbSocialRepository(
     notifications_table=dynamodb.Table(os.environ["NOTIFICATIONS_TABLE"]),
     moderation_table=dynamodb.Table(os.environ["MODERATION_TABLE"]),
 )
+
+
+def _build_feed_mirror():
+    """Dual-write feed records into the gulls Feed tables.
+
+    Feed is a gulls network capability; seagulls still serves reads from its
+    own tables during the migration but mirrors every write across. Table names
+    are GULLS_*-prefixed because this Lambda already binds POSTS_TABLE and
+    friends to the *seagulls* tables.
+
+    Returns None when the gulls tables are not configured, so an environment
+    applied before they existed keeps working unchanged.
+    """
+    names = {
+        "posts_table": os.environ.get("GULLS_POSTS_TABLE", "").strip(),
+        "follows_table": os.environ.get("GULLS_FOLLOWS_TABLE", "").strip(),
+        "rooms_table": os.environ.get("GULLS_ROOMS_TABLE", "").strip(),
+        "room_memberships_table": os.environ.get("GULLS_ROOM_MEMBERSHIPS_TABLE", "").strip(),
+        "feed_events_table": os.environ.get("GULLS_FEED_EVENTS_TABLE", "").strip(),
+        "notifications_table": os.environ.get("GULLS_NOTIFICATIONS_TABLE", "").strip(),
+    }
+    if not all(names.values()):
+        return None
+
+    from message_hub.storage.dynamodb import DynamoDbMessageHubRepository
+    from social_api.domain.feed_mirror import BestEffortFeedMirror, StrictFeedMirror
+
+    gulls_repository = DynamoDbMessageHubRepository(
+        # Only the Feed tables are needed; the rest of the hub repository is
+        # unused here and stays unconfigured.
+        agents_table=None,
+        messages_table=None,
+        threads_table=None,
+        deliveries_table=None,
+        idempotency_table=None,
+        thread_summaries_table=None,
+        **{key: dynamodb.Table(name) for key, name in names.items()},
+    )
+    return BestEffortFeedMirror(StrictFeedMirror(gulls_repository)), gulls_repository
+
+
+def _build_feed_source(gulls_repository):
+    """Serve base Feed records from gulls once it is the source of truth.
+
+    Gated separately from the mirror so the cutover is its own step: dual-write
+    first, then flip reads. Falls back to the seagulls tables for posts written
+    before the mirror began, and if a gulls read fails.
+    """
+    if gulls_repository is None or os.environ.get("GULLS_FEED_READS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return None
+
+    from social_api.domain.feed_source import (
+        FallbackFeedSource,
+        GullsFeedSource,
+        RepositoryFeedSource,
+    )
+
+    return FallbackFeedSource(
+        GullsFeedSource(gulls_repository),
+        RepositoryFeedSource(repository),
+    )
+
+
+_mirror_result = _build_feed_mirror()
+feed_mirror, _gulls_feed_repository = _mirror_result if _mirror_result else (None, None)
+feed_source = _build_feed_source(_gulls_feed_repository)
+
+
 class MessageHubAgentRegistry:
     """AgentRegistry port backed by the gulls message hub.
 
@@ -106,7 +178,12 @@ class MessageHubAgentRegistry:
         register_message_hub_agent(message_api_url, handle, display_name=display_name)
 
 
-service = SocialApiService(repository, agent_registry=MessageHubAgentRegistry())
+service = SocialApiService(
+    repository,
+    agent_registry=MessageHubAgentRegistry(),
+    feed_mirror=feed_mirror,
+    feed_source=feed_source,
+)
 
 
 class BadRequest(ValueError):

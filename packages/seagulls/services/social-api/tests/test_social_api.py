@@ -1187,6 +1187,56 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual("stored", result["message"]["delivery_status"])
         self.assertIsNone(result["message"]["ai_run_id"])
 
+    def test_social_surface_works_with_no_provider_and_no_message_hub(self) -> None:
+        # Regression guard for the concept doc's hardest guarantee: "Feed, Inbox,
+        # Live, delivery, tasks, safety, and audit must continue to work when no AI
+        # provider is configured" (packages/gulls/docs/concept.md). The shared AI
+        # Provider and the message hub are both optional infrastructure, so a
+        # deployment with neither configured must still store and read everything.
+        api = LocalSocialApi.in_memory(
+            auth_required=True,
+            message_hub_sender=None,
+            ai_run_client=None,
+        )
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        author = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+        assistant = api.create_agent_profile({"handle": "@assistant:seagull.local"}, principal)["profile"]
+
+        # Feed: publish and follow still work with no infrastructure configured.
+        post = api.create_post(
+            {"author_handle": author["handle"], "text": "Provider-free post."},
+            principal,
+        )["post"]
+        api.follow_agent(
+            {"follower_handle": author["handle"], "followed_handle": assistant["handle"]},
+            principal,
+        )
+        feed = api.read_home_feed(principal=principal)["items"]
+
+        # Inbox: the chat is stored durably and is readable back.
+        chat = api.create_agent_chat({"agent_handle": assistant["handle"]}, principal)["chat"]
+        result = api.create_agent_chat_message(chat["chat_id"], {"content": "Plan the MVP."}, principal)
+        message = result["message"]
+        stored = api.list_agent_chat_messages(chat["chat_id"], principal=principal)["items"]
+
+        self.assertEqual([post["post_id"]], [item["post_id"] for item in feed])
+        self.assertEqual("Provider-free post.", feed[0]["text"])
+
+        # Stored, not delivered: no hub means no delivery, but never a lost message.
+        self.assertEqual("stored", message["delivery_status"])
+        self.assertIsNone(message["delivery_error"])
+        self.assertIsNone(message["hub_message_id"])
+        self.assertIsNone(message["hub_thread_id"])
+
+        # No provider means no reply and no AI run reference, not an error.
+        self.assertIsNone(result["reply"])
+        self.assertIsNone(message["ai_run_id"])
+        self.assertIsNone(message["ai_run_state"])
+        self.assertIsNone(message["ai_error"])
+
+        self.assertEqual([message["chat_message_id"]], [item["chat_message_id"] for item in stored])
+        self.assertEqual("Plan the MVP.", stored[0]["content"])
+
     def test_authenticated_principal_maps_to_identity_and_lists_owned_profiles(self) -> None:
         api = LocalSocialApi.in_memory(auth_required=True)
         principal = AuthPrincipal(

@@ -1154,6 +1154,45 @@ class MessageHubService:
         normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
         return self._repository.list_tasks_by_thread(thread_id, limit=normalized_limit)
 
+    def list_agent_tasks(
+        self,
+        agent_handle: str,
+        *,
+        role: str = "all",
+        limit: int = 50,
+    ) -> tuple[TaskRecord, ...]:
+        """Requests involving one agent, for the Agent Request product surface.
+
+        ``role`` selects requester (work this agent asked for), worker (work
+        asked of it), or all. Tasks were only listable per thread before, which
+        no product surface can build a queue from.
+        """
+        agent = self._require_agent_by_handle(agent_handle)
+        normalized_limit = require_bounded_int(limit, "limit", minimum=1, maximum=100)
+        normalized_role = str(role or "all").strip().lower()
+        if normalized_role not in {"all", "requester", "worker"}:
+            raise InvalidMessageError("role must be all, requester, or worker")
+
+        if normalized_role == "requester":
+            return self._repository.list_tasks_by_requester(agent.agent_id, limit=normalized_limit)
+        if normalized_role == "worker":
+            return self._repository.list_tasks_by_worker(agent.agent_id, limit=normalized_limit)
+
+        # Both sides of the same request must not appear twice.
+        merged = {
+            task.task_id: task
+            for task in (
+                *self._repository.list_tasks_by_requester(agent.agent_id, limit=normalized_limit),
+                *self._repository.list_tasks_by_worker(agent.agent_id, limit=normalized_limit),
+            )
+        }
+        ordered = sorted(
+            merged.values(),
+            key=lambda task: (task.created_at, task.task_id),
+            reverse=True,
+        )
+        return tuple(ordered[:normalized_limit])
+
     def grant_task_credits(
         self,
         *,

@@ -33,6 +33,10 @@ AI-native SNS interface, and Agent Request is the request/tasking interface.
 +----------------------------v--------------------------------+
 | Infra                                                       |
 | Storage, queues, webhooks, tokens, local node, cloud node    |
+|                                                             |
+| Optional: AI Provider (metered provider execution) and       |
+| packages/connector (zero-dependency GPT/Claude adapter).     |
+| Nothing above this line requires either to be configured.    |
 +-------------------------------------------------------------+
 ```
 

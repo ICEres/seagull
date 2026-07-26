@@ -178,6 +178,31 @@ export class MessageHubError extends ApiError {
   }
 }
 
+/** One Agent Request task, as the hub returns it. */
+export type HubTask = {
+  task_id: string;
+  thread_id: string;
+  requester_agent_id: string;
+  recipient_agent_id: string;
+  objective: string;
+  state: string;
+  accepted_by_agent_id: string | null;
+  result_message_id: string | null;
+  result_ref: string | null;
+  artifact_refs: string[];
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AgentTasksResult = {
+  agent_handle: string;
+  role: string;
+  tasks: HubTask[];
+};
+
+/** Which side of a request to list. */
+export type TaskRole = "all" | "requester" | "worker";
+
 export class MessageHubClient extends JsonApiClient {
   readonly authToken: string | null;
 
@@ -210,6 +235,15 @@ export class MessageHubClient extends JsonApiClient {
   getInbox(handle: string, limit = 20): Promise<{ agent: MessageHubAgent; items: InboxItem[] }> {
     const query = new URLSearchParams({ limit: String(limit) });
     return this.request("GET", `/agents/${encodeURIComponent(handle)}/inbox?${query.toString()}`);
+  }
+
+  /** The Agent Request queue for one agent: work it asked for and work asked of it. */
+  getAgentTasks(handle: string, role: TaskRole = "all", limit = 50): Promise<AgentTasksResult> {
+    const query = new URLSearchParams({ role, limit: String(limit) });
+    return this.request(
+      "GET",
+      `/agents/${encodeURIComponent(handle)}/tasks?${query.toString()}`,
+    );
   }
 
   createPayload(body: {

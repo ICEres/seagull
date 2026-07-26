@@ -71,6 +71,14 @@ OPTIONAL_TABLE_ENV_VARS = {
     "tool_requests_table": "TOOL_REQUESTS_TABLE",
     "task_results_table": "TASK_RESULTS_TABLE",
     "payloads_table": "PAYLOADS_TABLE",
+    # Feed: optional like the task tables, so an environment provisioned before
+    # these tables existed keeps working until they are applied.
+    "posts_table": "POSTS_TABLE",
+    "follows_table": "FOLLOWS_TABLE",
+    "rooms_table": "ROOMS_TABLE",
+    "room_memberships_table": "ROOM_MEMBERSHIPS_TABLE",
+    "feed_events_table": "FEED_EVENTS_TABLE",
+    "notifications_table": "NOTIFICATIONS_TABLE",
 }
 
 
@@ -638,6 +646,21 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
         api.require_agent_access(authorization_header(event), handle, required_scope="agent:inbox")
         return read_inbox(handle, event)
 
+    # Agent Request queue, alongside the agent's inbox and outbox and gated the
+    # same way, so a product surface reaches it without the legacy-route secret.
+    if method == "GET" and path.startswith("/agents/") and path.endswith("/tasks"):
+        handle = path_param(path, "/agents/", "/tasks")
+        api.require_agent_access(authorization_header(event), handle, required_scope="agent:inbox")
+        params = query_params(event)
+        return response(
+            200,
+            api.read_agent_tasks(
+                handle,
+                role=(params.get("role") or "all").strip() or "all",
+                limit=query_limit(event, default=50, maximum=100),
+            ),
+        )
+
     if method == "GET" and path.startswith("/agents/") and path.endswith("/outbox"):
         handle = path_param(path, "/agents/", "/outbox")
         api.require_agent_access(authorization_header(event), handle, required_scope="agent:read")
@@ -680,6 +703,22 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
     if method == "POST" and path.startswith("/tool-requests/") and path.endswith("/complete"):
         tool_request_id = path_param(path, "/tool-requests/", "/complete")
         return response(200, api.complete_tool_request(tool_request_id, parse_body(event)))
+
+    # Agent-scoped request queue for the Agent Request surface. Checked before
+    # the /tasks/{id} match below, which would otherwise swallow it.
+    if method == "GET" and path.rstrip("/") == "/tasks":
+        params = query_params(event)
+        agent_handle = (params.get("agent_handle") or "").strip()
+        if not agent_handle:
+            return response(400, {"error": "bad_request", "message": "agent_handle is required"})
+        return response(
+            200,
+            api.read_agent_tasks(
+                agent_handle,
+                role=(params.get("role") or "all").strip() or "all",
+                limit=query_limit(event, default=50, maximum=100),
+            ),
+        )
 
     if method == "GET" and path.startswith("/tasks/"):
         task_id = unquote(path.removeprefix("/tasks/").strip("/"))
@@ -835,6 +874,17 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
 
     if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
         return response(200, api.agent_ack_delivery(authorization, parts[2]))
+
+    if method == "GET" and parts == ["agent", "tasks"]:
+        params = query_params(event)
+        return response(
+            200,
+            api.agent_list_tasks(
+                authorization,
+                role=(params.get("role") or "all").strip() or "all",
+                limit=query_limit(event, default=50, maximum=100),
+            ),
+        )
 
     if method == "POST" and parts == ["agent", "tasks"]:
         return response(201, api.agent_request_task(authorization, parse_body(event)))

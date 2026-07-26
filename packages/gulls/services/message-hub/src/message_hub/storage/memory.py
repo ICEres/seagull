@@ -9,7 +9,13 @@ from message_hub.domain.models import (
     Agent,
     AgentTokenRecord,
     Delivery,
+    FeedEventRecord,
+    FollowRecord,
     Message,
+    NotificationRecord,
+    PostRecord,
+    RoomMembershipRecord,
+    RoomRecord,
     RoutingRule,
     StoredPayload,
     TaskCapacitySharingPolicyRecord,
@@ -42,6 +48,15 @@ class InMemoryMessageHubRepository:
         self._message_ids_by_content_ref: dict[str, list[str]] = defaultdict(list)
         self._payloads_by_ref: dict[str, StoredPayload] = {}
         self._threads_by_id: dict[str, ThreadRecord] = {}
+        # Feed: the base one-to-many capability.
+        self._posts_by_id: dict[str, PostRecord] = {}
+        self._post_ids_by_author: dict[str, list[str]] = defaultdict(list)
+        self._follows: dict[tuple[str, str], FollowRecord] = {}
+        self._rooms_by_id: dict[str, RoomRecord] = {}
+        self._room_id_by_slug: dict[str, str] = {}
+        self._room_memberships: dict[tuple[str, str], RoomMembershipRecord] = {}
+        self._feed_events_by_id: dict[str, FeedEventRecord] = {}
+        self._notifications_by_id: dict[str, NotificationRecord] = {}
         self._deliveries_by_id: dict[str, Delivery] = {}
         self._delivery_ids_by_recipient: dict[str, list[str]] = defaultdict(list)
         self._delivery_ids_by_sender: dict[str, list[str]] = defaultdict(list)
@@ -346,6 +361,31 @@ class InMemoryMessageHubRepository:
                 raise ValueError(f"task does not exist: {task.task_id}")
             self._tasks_by_id[task.task_id] = task
 
+    def list_tasks_by_requester(
+        self, requester_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        return self._list_tasks_by(
+            lambda task: task.requester_agent_id == requester_agent_id, limit
+        )
+
+    def list_tasks_by_worker(
+        self, worker_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        # "Worker" is whoever the request is addressed to; accepted_by is only
+        # set once someone picks it up, so match either.
+        return self._list_tasks_by(
+            lambda task: worker_agent_id in (task.recipient_agent_id, task.accepted_by_agent_id),
+            limit,
+        )
+
+    def _list_tasks_by(self, predicate, limit: int | None) -> tuple[TaskRecord, ...]:
+        with self._lock:
+            tasks = [task for task in self._tasks_by_id.values() if predicate(task)]
+        tasks.sort(key=lambda task: (task.created_at, task.task_id), reverse=True)
+        if limit is not None:
+            tasks = tasks[:limit]
+        return tuple(tasks)
+
     def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
         with self._lock:
             tasks = [
@@ -628,3 +668,128 @@ class InMemoryMessageHubRepository:
         if limit is not None:
             deliveries = deliveries[:limit]
         return tuple(deliveries)
+
+    # --- Feed -----------------------------------------------------------------
+
+    def put_post(self, post: PostRecord) -> None:
+        with self._lock:
+            if post.post_id not in self._posts_by_id:
+                self._post_ids_by_author[post.author_agent_id].append(post.post_id)
+            self._posts_by_id[post.post_id] = post
+
+    def get_post(self, post_id: str) -> PostRecord | None:
+        with self._lock:
+            return self._posts_by_id.get(post_id)
+
+    def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        with self._lock:
+            posts = list(self._posts_by_id.values())
+        return _newest_first(posts, lambda post: (post.created_at, post.post_id), limit)
+
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        with self._lock:
+            posts = [
+                self._posts_by_id[post_id]
+                for post_id in self._post_ids_by_author.get(author_agent_id, [])
+                if post_id in self._posts_by_id
+            ]
+        return _newest_first(posts, lambda post: (post.created_at, post.post_id), limit)
+
+    def put_follow(self, follow: FollowRecord) -> None:
+        with self._lock:
+            self._follows[(follow.follower_agent_id, follow.followed_agent_id)] = follow
+
+    def get_follow(self, follower_agent_id: str, followed_agent_id: str) -> FollowRecord | None:
+        with self._lock:
+            return self._follows.get((follower_agent_id, followed_agent_id))
+
+    def list_follows_by_follower(self, follower_agent_id: str) -> tuple[FollowRecord, ...]:
+        with self._lock:
+            follows = [
+                follow
+                for (follower, _), follow in self._follows.items()
+                if follower == follower_agent_id
+            ]
+        follows.sort(key=lambda follow: (follow.created_at, follow.followed_agent_id))
+        return tuple(follows)
+
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        with self._lock:
+            follows = [
+                follow
+                for (_, followed), follow in self._follows.items()
+                if followed == followed_agent_id
+            ]
+        follows.sort(key=lambda follow: (follow.created_at, follow.follower_agent_id))
+        return tuple(follows)
+
+    def put_room(self, room: RoomRecord) -> None:
+        with self._lock:
+            self._rooms_by_id[room.room_id] = room
+            self._room_id_by_slug[room.slug] = room.room_id
+
+    def get_room(self, room_id: str) -> RoomRecord | None:
+        with self._lock:
+            return self._rooms_by_id.get(room_id)
+
+    def get_room_by_slug(self, slug: str) -> RoomRecord | None:
+        with self._lock:
+            room_id = self._room_id_by_slug.get(slug)
+            return None if room_id is None else self._rooms_by_id.get(room_id)
+
+    def put_room_membership(self, membership: RoomMembershipRecord) -> None:
+        with self._lock:
+            self._room_memberships[(membership.room_id, membership.agent_id)] = membership
+
+    def get_room_membership(self, room_id: str, agent_id: str) -> RoomMembershipRecord | None:
+        with self._lock:
+            return self._room_memberships.get((room_id, agent_id))
+
+    def list_room_memberships_by_agent(self, agent_id: str) -> tuple[RoomMembershipRecord, ...]:
+        with self._lock:
+            memberships = [
+                membership
+                for (_, member_agent_id), membership in self._room_memberships.items()
+                if member_agent_id == agent_id
+            ]
+        memberships.sort(key=lambda membership: (membership.created_at, membership.room_id))
+        return tuple(memberships)
+
+    def put_feed_event(self, event: FeedEventRecord) -> None:
+        with self._lock:
+            self._feed_events_by_id[event.event_id] = event
+
+    def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEventRecord, ...]:
+        with self._lock:
+            events = list(self._feed_events_by_id.values())
+        return _newest_first(events, lambda event: (event.created_at, event.event_id), limit)
+
+    def put_notification(self, notification: NotificationRecord) -> None:
+        with self._lock:
+            self._notifications_by_id[notification.notification_id] = notification
+
+    def list_notifications_by_recipient(
+        self,
+        recipient_agent_id: str,
+        *,
+        limit: int = 50,
+    ) -> tuple[NotificationRecord, ...]:
+        with self._lock:
+            notifications = [
+                notification
+                for notification in self._notifications_by_id.values()
+                if notification.recipient_agent_id == recipient_agent_id
+            ]
+        return _newest_first(
+            notifications,
+            lambda notification: (notification.created_at, notification.notification_id),
+            limit,
+        )
+
+
+def _newest_first(records, key, limit):
+    """Sort newest-first and apply a limit, matching the hub's list ordering."""
+    records.sort(key=key, reverse=True)
+    if limit is not None:
+        records = records[:limit]
+    return tuple(records)

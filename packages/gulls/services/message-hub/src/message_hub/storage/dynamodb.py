@@ -38,8 +38,14 @@ from message_hub.domain.models import (
     AgentTokenRecord,
     Delivery,
     DeliveryStatus,
+    FeedEventRecord,
+    FollowRecord,
     Message,
     MessageRef,
+    NotificationRecord,
+    PostRecord,
+    RoomMembershipRecord,
+    RoomRecord,
     PayloadCompaction,
     PayloadRecord,
     RoutingRule,
@@ -139,6 +145,15 @@ def _clean(value: Any) -> Any:
     if isinstance(value, Decimal):
         return int(value) if value % 1 == 0 else float(value)
     return value
+
+
+def _enum_value(value: Any) -> Any:
+    """Stored form of an enum-or-string field.
+
+    ``str()`` on a str-Enum yields "Visibility.PUBLIC", not "public", so read
+    ``.value`` explicitly rather than relying on stringification.
+    """
+    return value.value if hasattr(value, "value") else value
 
 
 def _refs_to_items(refs: tuple[MessageRef, ...]) -> list[dict[str, Any]]:
@@ -996,6 +1011,12 @@ class DynamoDbMessageHubRepository:
         task_credit_ledger_table: Any = None,
         task_reputation_events_table: Any = None,
         tool_grants_table: Any = None,
+        posts_table: Any = None,
+        follows_table: Any = None,
+        rooms_table: Any = None,
+        room_memberships_table: Any = None,
+        feed_events_table: Any = None,
+        notifications_table: Any = None,
         payload_objects_bucket: str | None = None,
         s3_client: Any = None,
     ) -> None:
@@ -1017,6 +1038,12 @@ class DynamoDbMessageHubRepository:
         self._task_credit_ledger = task_credit_ledger_table
         self._task_reputation_events = task_reputation_events_table
         self._tool_grants = tool_grants_table
+        self._posts = posts_table
+        self._follows = follows_table
+        self._rooms = rooms_table
+        self._room_memberships = room_memberships_table
+        self._feed_events = feed_events_table
+        self._notifications = notifications_table
         self._payload_objects_bucket = payload_objects_bucket
         self._s3 = s3_client
 
@@ -1466,6 +1493,34 @@ class DynamoDbMessageHubRepository:
     def update_task(self, task: TaskRecord) -> None:
         self.put_task(task)
 
+    def list_tasks_by_requester(
+        self, requester_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        table = self._require(self._tasks, "tasks")
+        items = self._query_all(
+            table,
+            index_name="requester-created-at-index",
+            key_name="requester_agent_id",
+            key_value=requester_agent_id,
+            newest_first=True,
+            limit=limit,
+        )
+        return tuple(task_from_item(item) for item in items)
+
+    def list_tasks_by_worker(
+        self, worker_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        table = self._require(self._tasks, "tasks")
+        items = self._query_all(
+            table,
+            index_name="recipient-created-at-index",
+            key_name="recipient_agent_id",
+            key_value=worker_agent_id,
+            newest_first=True,
+            limit=limit,
+        )
+        return tuple(task_from_item(item) for item in items)
+
     def list_tasks_by_thread(
         self, thread_id: str, *, limit: int | None = None
     ) -> tuple[TaskRecord, ...]:
@@ -1752,3 +1807,293 @@ class DynamoDbMessageHubRepository:
                 "expires_at": epoch,
             }
         )
+
+    # --- Feed -----------------------------------------------------------------
+    # Feed tables follow the same optional-provisioning rule as the task tables:
+    # constructing the repository without them is allowed, and only the methods
+    # that need them raise RepositoryTableNotConfiguredError.
+
+    def put_post(self, post: PostRecord) -> None:
+        self._require(self._posts, "posts_table").put_item(Item=post_to_item(post))
+
+    def get_post(self, post_id: str) -> PostRecord | None:
+        item = self._require(self._posts, "posts_table").get_item(
+            Key={"post_id": post_id}
+        ).get("Item")
+        return None if item is None else item_to_post(item)
+
+    def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        table = self._require(self._posts, "posts_table")
+        items = self._scan_all(table)
+        posts = [item_to_post(item) for item in items]
+        posts.sort(key=lambda post: (post.created_at, post.post_id), reverse=True)
+        return tuple(posts[:limit])
+
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        table = self._require(self._posts, "posts_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            IndexName="author-created-at-index",
+            KeyConditionExpression=Key("author_agent_id").eq(author_agent_id),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return tuple(item_to_post(item) for item in result.get("Items", []))
+
+    def put_follow(self, follow: FollowRecord) -> None:
+        self._require(self._follows, "follows_table").put_item(Item=follow_to_item(follow))
+
+    def get_follow(self, follower_agent_id: str, followed_agent_id: str) -> FollowRecord | None:
+        item = self._require(self._follows, "follows_table").get_item(
+            Key={"follower_agent_id": follower_agent_id, "followed_agent_id": followed_agent_id}
+        ).get("Item")
+        return None if item is None else item_to_follow(item)
+
+    def list_follows_by_follower(self, follower_agent_id: str) -> tuple[FollowRecord, ...]:
+        table = self._require(self._follows, "follows_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            KeyConditionExpression=Key("follower_agent_id").eq(follower_agent_id),
+        )
+        return tuple(item_to_follow(item) for item in result.get("Items", []))
+
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        table = self._require(self._follows, "follows_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            IndexName="followed-index",
+            KeyConditionExpression=Key("followed_agent_id").eq(followed_agent_id),
+        )
+        return tuple(item_to_follow(item) for item in result.get("Items", []))
+
+    def put_room(self, room: RoomRecord) -> None:
+        self._require(self._rooms, "rooms_table").put_item(Item=room_to_item(room))
+
+    def get_room(self, room_id: str) -> RoomRecord | None:
+        item = self._require(self._rooms, "rooms_table").get_item(
+            Key={"room_id": room_id}
+        ).get("Item")
+        return None if item is None else item_to_room(item)
+
+    def get_room_by_slug(self, slug: str) -> RoomRecord | None:
+        table = self._require(self._rooms, "rooms_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            IndexName="slug-index",
+            KeyConditionExpression=Key("slug").eq(slug),
+            Limit=1,
+        )
+        items = result.get("Items", [])
+        return None if not items else item_to_room(items[0])
+
+    def put_room_membership(self, membership: RoomMembershipRecord) -> None:
+        self._require(self._room_memberships, "room_memberships_table").put_item(
+            Item=room_membership_to_item(membership)
+        )
+
+    def get_room_membership(self, room_id: str, agent_id: str) -> RoomMembershipRecord | None:
+        item = self._require(self._room_memberships, "room_memberships_table").get_item(
+            Key={"room_id": room_id, "agent_id": agent_id}
+        ).get("Item")
+        return None if item is None else item_to_room_membership(item)
+
+    def list_room_memberships_by_agent(self, agent_id: str) -> tuple[RoomMembershipRecord, ...]:
+        table = self._require(self._room_memberships, "room_memberships_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            IndexName="agent-index",
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+        )
+        return tuple(item_to_room_membership(item) for item in result.get("Items", []))
+
+    def put_feed_event(self, event: FeedEventRecord) -> None:
+        self._require(self._feed_events, "feed_events_table").put_item(
+            Item=feed_event_to_item(event)
+        )
+
+    def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEventRecord, ...]:
+        table = self._require(self._feed_events, "feed_events_table")
+        events = [item_to_feed_event(item) for item in self._scan_all(table)]
+        events.sort(key=lambda event: (event.created_at, event.event_id), reverse=True)
+        return tuple(events[:limit])
+
+    def put_notification(self, notification: NotificationRecord) -> None:
+        self._require(self._notifications, "notifications_table").put_item(
+            Item=notification_to_item(notification)
+        )
+
+    def list_notifications_by_recipient(
+        self,
+        recipient_agent_id: str,
+        *,
+        limit: int = 50,
+    ) -> tuple[NotificationRecord, ...]:
+        table = self._require(self._notifications, "notifications_table")
+        from boto3.dynamodb.conditions import Key
+
+        result = table.query(
+            IndexName="recipient-created-at-index",
+            KeyConditionExpression=Key("recipient_agent_id").eq(recipient_agent_id),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return tuple(item_to_notification(item) for item in result.get("Items", []))
+
+
+def post_to_item(post: PostRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "post_id": post.post_id,
+            "author_agent_id": post.author_agent_id,
+            "content": post.content,
+            "text": post.text,
+            "refs": _refs_to_items(post.refs),
+            "visibility": _enum_value(post.visibility),
+            "room_id": post.room_id,
+            "reply_to_post_id": post.reply_to_post_id,
+            "mention_agent_ids": list(post.mention_agent_ids),
+            "created_at": to_iso(post.created_at),
+        }
+    )
+
+
+def item_to_post(item: dict[str, Any]) -> PostRecord:
+    return PostRecord(
+        post_id=str(item["post_id"]),
+        author_agent_id=str(item["author_agent_id"]),
+        content=str(item.get("content") or ""),
+        text=str(item.get("text") or ""),
+        refs=_refs_from_items(item.get("refs")),
+        visibility=str(item.get("visibility") or "public"),
+        room_id=item.get("room_id"),
+        reply_to_post_id=item.get("reply_to_post_id"),
+        mention_agent_ids=_strings(item.get("mention_agent_ids")),
+        created_at=parse_iso(item["created_at"]),
+    )
+
+
+def follow_to_item(follow: FollowRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "follower_agent_id": follow.follower_agent_id,
+            "followed_agent_id": follow.followed_agent_id,
+            "created_at": to_iso(follow.created_at),
+        }
+    )
+
+
+def item_to_follow(item: dict[str, Any]) -> FollowRecord:
+    return FollowRecord(
+        follower_agent_id=str(item["follower_agent_id"]),
+        followed_agent_id=str(item["followed_agent_id"]),
+        created_at=parse_iso(item["created_at"]),
+    )
+
+
+def room_to_item(room: RoomRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "room_id": room.room_id,
+            "slug": room.slug,
+            "name": room.name,
+            "description": room.description,
+            "visibility": _enum_value(room.visibility),
+            "created_by_user_id": room.created_by_user_id,
+            "created_at": to_iso(room.created_at),
+            "updated_at": to_iso(room.updated_at),
+        }
+    )
+
+
+def item_to_room(item: dict[str, Any]) -> RoomRecord:
+    return RoomRecord(
+        room_id=str(item["room_id"]),
+        slug=str(item["slug"]),
+        name=str(item.get("name") or ""),
+        description=item.get("description"),
+        visibility=str(item.get("visibility") or "public"),
+        created_by_user_id=item.get("created_by_user_id"),
+        created_at=parse_iso(item["created_at"]),
+        updated_at=parse_iso(item.get("updated_at") or item["created_at"]),
+    )
+
+
+def room_membership_to_item(membership: RoomMembershipRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "room_id": membership.room_id,
+            "agent_id": membership.agent_id,
+            "role": membership.role,
+            "created_at": to_iso(membership.created_at),
+        }
+    )
+
+
+def item_to_room_membership(item: dict[str, Any]) -> RoomMembershipRecord:
+    return RoomMembershipRecord(
+        room_id=str(item["room_id"]),
+        agent_id=str(item["agent_id"]),
+        role=str(item.get("role") or "member"),
+        created_at=parse_iso(item["created_at"]),
+    )
+
+
+def feed_event_to_item(event: FeedEventRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "event_id": event.event_id,
+            "event_type": _enum_value(event.event_type),
+            "actor_agent_id": event.actor_agent_id,
+            "object_id": event.object_id,
+            "target_agent_ids": list(event.target_agent_ids),
+            "room_id": event.room_id,
+            "created_at": to_iso(event.created_at),
+        }
+    )
+
+
+def item_to_feed_event(item: dict[str, Any]) -> FeedEventRecord:
+    return FeedEventRecord(
+        event_id=str(item["event_id"]),
+        event_type=str(item.get("event_type") or ""),
+        actor_agent_id=item.get("actor_agent_id"),
+        object_id=item.get("object_id"),
+        target_agent_ids=_strings(item.get("target_agent_ids")),
+        room_id=item.get("room_id"),
+        created_at=parse_iso(item["created_at"]),
+    )
+
+
+def notification_to_item(notification: NotificationRecord) -> dict[str, Any]:
+    return without_none(
+        {
+            "notification_id": notification.notification_id,
+            "recipient_agent_id": notification.recipient_agent_id,
+            "notification_type": notification.notification_type,
+            "owner_user_id": notification.owner_user_id,
+            "actor_agent_id": notification.actor_agent_id,
+            "post_id": notification.post_id,
+            "room_id": notification.room_id,
+            "read_at": _opt_iso(notification.read_at),
+            "created_at": to_iso(notification.created_at),
+        }
+    )
+
+
+def item_to_notification(item: dict[str, Any]) -> NotificationRecord:
+    return NotificationRecord(
+        notification_id=str(item["notification_id"]),
+        recipient_agent_id=str(item["recipient_agent_id"]),
+        notification_type=str(item.get("notification_type") or ""),
+        owner_user_id=item.get("owner_user_id"),
+        actor_agent_id=item.get("actor_agent_id"),
+        post_id=item.get("post_id"),
+        room_id=item.get("room_id"),
+        read_at=_opt_parse_iso(item.get("read_at")),
+        created_at=parse_iso(item["created_at"]),
+    )

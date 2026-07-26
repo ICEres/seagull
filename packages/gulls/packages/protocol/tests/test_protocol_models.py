@@ -15,6 +15,9 @@ from seagull_protocol import (
     Handle,
     HookRuntime,
     HookType,
+    LiveSession,
+    LiveSessionState,
+    LiveSubjectType,
     Message,
     MessageRef,
     MessageIntent,
@@ -641,6 +644,75 @@ class ProtocolModelsTest(TestCase):
         self.assertEqual("message_2", event.final_message_id)
         self.assertIs(EventStreamEvent, StreamEvent)
         self.assertIs(WorkTaskRequest, TaskRequest)
+
+    def test_live_session_falls_back_to_inbox_and_resumes_from_durable_state(self) -> None:
+        # concept.md: "A live conversation can fall back to Inbox delivery when an
+        # agent disconnects and resume from durable state later." The session holds
+        # no content of its own -- only where to resume in the durable record.
+        session = LiveSession(
+            live_session_id="live_1",
+            subject_type="thread",
+            subject_id="thread_1",
+            participants=(
+                Handle("@researcher:seagull.local"),
+                Handle("@reviewer:seagull.local"),
+            ),
+            state=LiveSessionState.ACTIVE,
+            stream_id="stream_1",
+            delivered_sequence=4,
+        )
+
+        self.assertEqual(LiveSubjectType.THREAD, session.subject_type)
+        self.assertTrue(session.is_live)
+        self.assertTrue(session.includes("@reviewer:seagull.local"))
+        self.assertFalse(session.includes(Handle("@stranger:seagull.local")))
+        # With no explicit resume point, resume after the durable high-water mark.
+        self.assertEqual(4, session.resume_point())
+
+        # A participant drops: Live degrades to Inbox, and the session stays
+        # addressable so the tail of the conversation is replayed, not lost.
+        degraded = LiveSession(
+            live_session_id="live_1",
+            subject_type=LiveSubjectType.THREAD,
+            subject_id="thread_1",
+            state="degraded",
+            stream_id="stream_1",
+            delivered_sequence=4,
+            resume_after=2,
+            fallback_thread_id="thread_1",
+        )
+
+        self.assertEqual(LiveSessionState.DEGRADED, degraded.state)
+        self.assertFalse(degraded.is_live)
+        self.assertEqual(2, degraded.resume_point())
+        self.assertEqual("thread_1", degraded.fallback_thread_id)
+
+    def test_live_session_validation_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ProtocolError):
+            LiveSession(live_session_id=" ", subject_type="thread", subject_id="thread_1")
+
+        with self.assertRaises(ProtocolError):
+            LiveSession(
+                live_session_id="live_1",
+                subject_type="broadcast",
+                subject_id="thread_1",
+            )
+
+        with self.assertRaises(ProtocolError):
+            LiveSession(
+                live_session_id="live_1",
+                subject_type="thread",
+                subject_id="thread_1",
+                state="paused",
+            )
+
+        with self.assertRaises(ProtocolError):
+            LiveSession(
+                live_session_id="live_1",
+                subject_type="thread",
+                subject_id="thread_1",
+                delivered_sequence=-1,
+            )
 
     def test_payload_and_stream_validation_rejects_invalid_values(self) -> None:
         with self.assertRaises(ProtocolError):

@@ -297,11 +297,17 @@ resource "aws_lambda_function" "message_hub_api" {
       AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
       APP_NAME                        = local.message_hub_prefix
       DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
+      FEED_EVENTS_TABLE               = module.message_hub_storage.table_names.feed_events
+      FOLLOWS_TABLE                   = module.message_hub_storage.table_names.follows
       GUEST_STATUS_SIGNING_SECRET_ARN = aws_secretsmanager_secret.guest_status_signing.arn
       IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
       MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
+      NOTIFICATIONS_TABLE             = module.message_hub_storage.table_names.notifications
       PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
       PAYLOADS_TABLE                  = module.message_hub_storage.table_names.payloads
+      POSTS_TABLE                     = module.message_hub_storage.table_names.posts
+      ROOM_MEMBERSHIPS_TABLE          = module.message_hub_storage.table_names.room_memberships
+      ROOMS_TABLE                     = module.message_hub_storage.table_names.rooms
       ROUTING_RULES_TABLE             = module.message_hub_storage.table_names.routing_rules
       SAFETY_BLOCKED_TERMS            = "unsafe:"
       SAFETY_GATEWAY_ADMIN_SECRET_ARN = aws_secretsmanager_secret.safety_gateway_admin.arn
@@ -1312,6 +1318,25 @@ module "social_api" {
   ai_provider_admin_secret_arn = aws_secretsmanager_secret.ai_provider_admin.arn
   ai_reply_provider            = var.ai_reply_provider
   ai_reply_model               = var.ai_reply_model
+
+  # Feed source of truth is moving to gulls; dual-write into its tables while
+  # seagulls still serves reads from its own.
+  gulls_feed_table_names = {
+    posts            = module.message_hub_storage.table_names.posts
+    follows          = module.message_hub_storage.table_names.follows
+    rooms            = module.message_hub_storage.table_names.rooms
+    room_memberships = module.message_hub_storage.table_names.room_memberships
+    feed_events      = module.message_hub_storage.table_names.feed_events
+    notifications    = module.message_hub_storage.table_names.notifications
+  }
+  gulls_feed_table_arns = [
+    module.message_hub_storage.table_arns.posts,
+    module.message_hub_storage.table_arns.follows,
+    module.message_hub_storage.table_arns.rooms,
+    module.message_hub_storage.table_arns.room_memberships,
+    module.message_hub_storage.table_arns.feed_events,
+    module.message_hub_storage.table_arns.notifications,
+  ]
 
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled

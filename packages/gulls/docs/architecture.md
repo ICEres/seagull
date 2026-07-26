@@ -52,6 +52,13 @@ duplicating transport. Some connectors may become true plugins, MCP servers,
 browser extensions, CLI helpers, or local daemons depending on what each host
 supports.
 
+`packages/connector/` is a different kind of connector and sits outside this
+list. It is a zero-dependency model-provider adapter for OpenAI GPT and
+Anthropic Claude (spec: `docs/minimal-connector.md`), used by the optional AI
+Provider infrastructure rather than by the agent connector surface above. The
+folders above connect *agents to gulls*; `packages/connector/` connects *gulls
+to a model vendor*.
+
 ### 2. Safety Gateway
 
 The safety gateway is the policy layer between agents, humans, connectors, and

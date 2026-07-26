@@ -2,149 +2,42 @@ from __future__ import annotations
 
 from dataclasses import field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any
 
 from dataclasses import dataclass
+
+# Shared vocabulary lives in the protocol package; the hub imports it rather than
+# re-declaring it. Only types whose hub shape genuinely differs from the protocol
+# shape are defined below (storage records key agents by id, not by Handle).
+from seagull_protocol.base import (
+    DeliveryState,
+    MessageIntent,
+    MessageRef,
+    RoutingRuleMode,
+    Visibility,
+    normalize_message_intent,
+)
+from seagull_protocol.work import (
+    TASK_CREDIT_SETTLEMENT_SCOPE,
+    TASK_LIFECYCLE_TRANSITIONS,
+    TaskCapacityRole,
+    TaskCapacityTier,
+    TaskCreditLedgerEntryType,
+    TaskState,
+    TaskWorkerReputationEventType,
+    task_lifecycle_allows,
+    task_lifecycle_next_states,
+)
+
+# The hub spells this `DeliveryStatus`; the protocol spells it `DeliveryState`.
+# Keep the hub name as an alias so call sites and stored values are untouched
+# (terminology.md defers identifier renames to a separate migration).
+DeliveryStatus = DeliveryState
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
-
-class DeliveryStatus(str, Enum):
-    QUEUED = "queued"
-    DELIVERED = "delivered"
-    READ = "read"
-    ACKED = "acked"
-    FAILED = "failed"
-    REPLIED = "replied"
-    IGNORED = "ignored"
-    NEEDS_REVIEW = "needs_review"
-    PENDING_ACTION = "pending_action"
-
-
-class RoutingRuleMode(str, Enum):
-    DIRECT = "direct"
-    COPY = "copy"
-    HANDOFF = "handoff"
-    REVIEW = "review"
-    BLOCK = "block"
-
-
-class TaskState(str, Enum):
-    REQUESTED = "requested"
-    QUOTED = "quoted"
-    NEEDS_APPROVAL = "needs_approval"
-    APPROVED = "approved"
-    ESCROWED = "escrowed"
-    ACCEPTED = "accepted"
-    RUNNING = "running"
-    RESULT_READY = "result_ready"
-    RESULT_ACCEPTED = "result_accepted"
-    RELEASED = "released"
-    COMPLETED = "completed"
-    CANCELED = "canceled"
-    DISPUTED = "disputed"
-    REFUSED = "refused"
-    FAILED = "failed"
-
-
-class TaskCreditLedgerEntryType(str, Enum):
-    CREDIT_GRANT = "credit_grant"
-    ESCROW_HOLD = "escrow_hold"
-    ESCROW_RELEASE = "escrow_release"
-    ESCROW_CANCEL = "escrow_cancel"
-    DISPUTE_OPEN = "dispute_open"
-
-
-class TaskCapacityRole(str, Enum):
-    REQUESTER = "requester"
-    WORKER = "worker"
-
-
-class TaskCapacityTier(str, Enum):
-    LOW = "low"
-    STANDARD = "standard"
-    HIGH = "high"
-
-
-class TaskWorkerReputationEventType(str, Enum):
-    TASK_COMPLETED = "task_completed"
-    TASK_FAILED = "task_failed"
-    RESULT_ACCEPTED = "result_accepted"
-    DISPUTE_OPENED = "dispute_opened"
-    ABUSE_REPORTED = "abuse_reported"
-
-
-TASK_CREDIT_SETTLEMENT_SCOPE = "internal_product_credit"
-
-
-TASK_LIFECYCLE_TRANSITIONS: dict[TaskState, tuple[TaskState, ...]] = {
-    TaskState.REQUESTED: (
-        TaskState.QUOTED,
-        TaskState.NEEDS_APPROVAL,
-        TaskState.ACCEPTED,
-        TaskState.CANCELED,
-        TaskState.REFUSED,
-    ),
-    TaskState.QUOTED: (
-        TaskState.NEEDS_APPROVAL,
-        TaskState.APPROVED,
-        TaskState.CANCELED,
-        TaskState.REFUSED,
-    ),
-    TaskState.NEEDS_APPROVAL: (
-        TaskState.APPROVED,
-        TaskState.CANCELED,
-        TaskState.REFUSED,
-    ),
-    TaskState.APPROVED: (
-        TaskState.ESCROWED,
-        TaskState.ACCEPTED,
-        TaskState.CANCELED,
-    ),
-    TaskState.ESCROWED: (
-        TaskState.ACCEPTED,
-        TaskState.RUNNING,
-        TaskState.CANCELED,
-        TaskState.DISPUTED,
-    ),
-    TaskState.ACCEPTED: (
-        TaskState.RUNNING,
-        TaskState.RESULT_READY,
-        TaskState.COMPLETED,
-        TaskState.CANCELED,
-        TaskState.REFUSED,
-    ),
-    TaskState.RUNNING: (
-        TaskState.RESULT_READY,
-        TaskState.COMPLETED,
-        TaskState.FAILED,
-        TaskState.DISPUTED,
-    ),
-    TaskState.RESULT_READY: (
-        TaskState.RESULT_ACCEPTED,
-        TaskState.COMPLETED,
-        TaskState.DISPUTED,
-    ),
-    TaskState.RESULT_ACCEPTED: (
-        TaskState.RELEASED,
-        TaskState.COMPLETED,
-        TaskState.DISPUTED,
-    ),
-    TaskState.RELEASED: (TaskState.COMPLETED,),
-    TaskState.DISPUTED: (
-        TaskState.RESULT_ACCEPTED,
-        TaskState.RELEASED,
-        TaskState.COMPLETED,
-        TaskState.CANCELED,
-    ),
-    TaskState.COMPLETED: (),
-    TaskState.CANCELED: (),
-    TaskState.REFUSED: (),
-    TaskState.FAILED: (TaskState.DISPUTED,),
-}
 
 TASK_INACTIVE_STATES = frozenset(
     {
@@ -157,26 +50,126 @@ TASK_INACTIVE_STATES = frozenset(
 )
 
 
-def _coerce_task_state(state: TaskState | str) -> TaskState:
-    if isinstance(state, TaskState):
-        return state
-    return TaskState(str(state).strip().lower())
+# ---------------------------------------------------------------------------
+# Feed
+#
+# Feed is a gulls network capability: durable one-to-many publishing and
+# subscription. These are the base source-of-truth records. seagulls keeps
+# ranking and projections on top of them, not a second copy of the truth
+# (packages/gulls/docs/terminology.md).
+#
+# Records key agents by id, matching the rest of the hub's storage shapes.
+# ---------------------------------------------------------------------------
 
 
-def task_lifecycle_next_states(state: TaskState | str) -> tuple[TaskState, ...]:
-    return TASK_LIFECYCLE_TRANSITIONS[_coerce_task_state(state)]
+def normalize_visibility(visibility: Visibility | str) -> Visibility | str:
+    """Coerce to the protocol enum, tolerating values it does not name.
 
-
-def task_lifecycle_allows(current: TaskState | str, next_state: TaskState | str) -> bool:
-    return _coerce_task_state(next_state) in task_lifecycle_next_states(current)
+    Same forgiving contract as ``normalize_message_intent``: an unrecognized
+    value passes through as a string rather than failing the write. Feed
+    records are migrated from a store that never constrained this field, so a
+    strict enum here would reject rows that already exist.
+    """
+    if isinstance(visibility, Visibility):
+        return visibility
+    value = str(visibility).strip().lower()
+    try:
+        return Visibility(value)
+    except ValueError:
+        return value
 
 
 @dataclass(frozen=True, slots=True)
-class MessageRef:
-    type: str
-    url: str | None = None
-    find: str | None = None
-    remember_as: str | None = None
+class PostRecord:
+    post_id: str
+    author_agent_id: str
+    content: str
+    text: str
+    refs: tuple[MessageRef, ...] = ()
+    visibility: Visibility | str = Visibility.PUBLIC
+    room_id: str | None = None
+    reply_to_post_id: str | None = None
+    mention_agent_ids: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "visibility", normalize_visibility(self.visibility))
+
+    @property
+    def intent(self) -> MessageIntent:
+        """Which Feed intent this post carries.
+
+        The protocol already names these (``protocol/base.py``); a reply is a
+        reply even when it also mentions someone, so ordering matters.
+        """
+        if self.reply_to_post_id is not None:
+            return MessageIntent.REPLY
+        if self.mention_agent_ids:
+            return MessageIntent.MENTION
+        return MessageIntent.POST
+
+
+@dataclass(frozen=True, slots=True)
+class FollowRecord:
+    follower_agent_id: str
+    followed_agent_id: str
+    created_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def intent(self) -> MessageIntent:
+        return MessageIntent.FOLLOW
+
+
+@dataclass(frozen=True, slots=True)
+class RoomRecord:
+    room_id: str
+    slug: str
+    name: str
+    description: str | None = None
+    visibility: Visibility | str = Visibility.PUBLIC
+    created_by_user_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "visibility", normalize_visibility(self.visibility))
+
+
+@dataclass(frozen=True, slots=True)
+class RoomMembershipRecord:
+    room_id: str
+    agent_id: str
+    role: str = "member"
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedEventRecord:
+    event_id: str
+    event_type: str
+    actor_agent_id: str | None = None
+    object_id: str | None = None
+    target_agent_ids: tuple[str, ...] = ()
+    room_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def intent(self) -> MessageIntent | str:
+        """Feed event types are the protocol's intent vocabulary."""
+        return normalize_message_intent(self.event_type)
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRecord:
+    notification_id: str
+    recipient_agent_id: str
+    notification_type: str
+    owner_user_id: str | None = None
+    actor_agent_id: str | None = None
+    post_id: str | None = None
+    room_id: str | None = None
+    read_at: datetime | None = None
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)

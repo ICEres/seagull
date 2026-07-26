@@ -24,6 +24,41 @@ type Router struct {
 	clock              Clock
 	connectionsByAgent map[string]map[string]Connection
 	deliveries         map[string]Delivery
+	liveByAgent        map[string]LiveSession
+}
+
+// LiveSessionState mirrors seagull_protocol.events.LiveSessionState.
+type LiveSessionState string
+
+const (
+	// LiveActive: the agent is connected and receiving in real time.
+	LiveActive LiveSessionState = "active"
+	// LiveDegraded: the agent dropped, so delivery fell back to the durable
+	// Inbox. The session stays addressable so a reconnect resumes rather than
+	// starting over.
+	LiveDegraded LiveSessionState = "degraded"
+)
+
+// LiveSession is the real-time projection of an agent's delivery stream.
+//
+// It carries no content. Messages and deliveries remain the durable records;
+// this only tracks how far the stream has advanced and where a reconnecting
+// agent should resume (packages/gulls/docs/concept.md).
+type LiveSession struct {
+	AgentID string
+	State   LiveSessionState
+	// DeliveredSequence is the high-water mark handed to this agent. It only
+	// ever increases, so a resume point stays meaningful across reconnects.
+	DeliveredSequence int64
+	UpdatedAt         time.Time
+}
+
+// ResumeResult is what a reconnecting agent missed while it was away.
+type ResumeResult struct {
+	Session LiveSession
+	// Missed are the durable deliveries after the resume point, oldest first,
+	// so the agent replays in the order they happened.
+	Missed []Delivery
 }
 
 type Connection struct {
@@ -45,11 +80,16 @@ type OutboundEvent struct {
 	AgentID      string
 	MessageID    string
 	ThreadID     string
+	Sequence     int64
 	Payload      []byte
 }
 
 type Delivery struct {
-	DeliveryID       string
+	DeliveryID string
+	// Sequence orders one recipient's stream. Resume replays everything after
+	// a given sequence, so this is what makes "resume from durable state"
+	// answerable without re-sending what the agent already saw.
+	Sequence         int64
 	MessageID        string
 	ThreadID         string
 	SenderAgentID    string
@@ -75,6 +115,7 @@ func New(clock Clock) *Router {
 		clock:              clock,
 		connectionsByAgent: make(map[string]map[string]Connection),
 		deliveries:         make(map[string]Delivery),
+		liveByAgent:        make(map[string]LiveSession),
 	}
 }
 
@@ -100,6 +141,11 @@ func (r *Router) Connect(connectionID string, agentID string) (Connection, error
 	}
 	r.connectionsByAgent[agentID][connectionID] = connection
 
+	session := r.sessionFor(agentID)
+	session.State = LiveActive
+	session.UpdatedAt = connection.ConnectedAt
+	r.liveByAgent[agentID] = session
+
 	return connection, nil
 }
 
@@ -118,6 +164,12 @@ func (r *Router) Disconnect(connectionID string, agentID string) bool {
 	delete(connections, connectionID)
 	if len(connections) == 0 {
 		delete(r.connectionsByAgent, agentID)
+		// Last connection gone: Live degrades to durable Inbox delivery. The
+		// session is kept, not dropped, so a reconnect can resume.
+		session := r.sessionFor(agentID)
+		session.State = LiveDegraded
+		session.UpdatedAt = r.clock()
+		r.liveByAgent[agentID] = session
 	}
 	return true
 }
@@ -149,13 +201,30 @@ func (r *Router) Route(event RouteEvent) (RouteResult, error) {
 
 	for _, recipientID := range recipients {
 		connections := r.connectionsByAgent[recipientID]
+		live := len(connections) > 0
+
+		// Every delivery advances the recipient's stream whether or not they
+		// are live. A queued delivery still has a sequence, which is what lets
+		// a reconnect replay exactly what it missed.
+		session := r.sessionFor(recipientID)
+		session.DeliveredSequence++
+		if live {
+			session.State = LiveActive
+		} else {
+			// Not connected: Live falls back to the durable Inbox.
+			session.State = LiveDegraded
+		}
+		session.UpdatedAt = now
+		r.liveByAgent[recipientID] = session
+
 		status := DeliveryQueued
-		if len(connections) > 0 {
+		if live {
 			status = DeliveryDelivered
 		}
 
 		delivery := Delivery{
 			DeliveryID:       deliveryID(event.MessageID, recipientID),
+			Sequence:         session.DeliveredSequence,
 			MessageID:        event.MessageID,
 			ThreadID:         event.ThreadID,
 			SenderAgentID:    event.SenderAgentID,
@@ -174,6 +243,7 @@ func (r *Router) Route(event RouteEvent) (RouteResult, error) {
 				AgentID:      recipientID,
 				MessageID:    event.MessageID,
 				ThreadID:     event.ThreadID,
+				Sequence:     delivery.Sequence,
 				Payload:      slices.Clone(event.Payload),
 			})
 		}
@@ -219,6 +289,69 @@ func (r *Router) Connections(agentID string) []Connection {
 		result = append(result, connections[connectionID])
 	}
 	return result
+}
+
+// LiveSession reports an agent's real-time session state.
+func (r *Router) LiveSession(agentID string) (LiveSession, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	session, ok := r.liveByAgent[agentID]
+	return session, ok
+}
+
+// Resume replays what an agent missed, from durable state.
+//
+// This is the Inbox side of the Live fallback: everything after resumeAfter
+// that has not been acked, oldest first. Acked deliveries are excluded because
+// the agent already handled them; passing a resumeAfter of 0 replays the whole
+// outstanding backlog.
+func (r *Router) Resume(agentID string, resumeAfter int64) (ResumeResult, error) {
+	if agentID == "" {
+		return ResumeResult{}, errors.New("agent id is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	missed := make([]Delivery, 0)
+	for _, delivery := range r.deliveries {
+		if delivery.RecipientAgentID != agentID {
+			continue
+		}
+		if delivery.Sequence <= resumeAfter {
+			continue
+		}
+		if delivery.Status == DeliveryAcked {
+			continue
+		}
+		missed = append(missed, delivery)
+	}
+
+	// Oldest first: a replay must arrive in the order the messages happened.
+	slices.SortFunc(missed, func(a, b Delivery) int {
+		switch {
+		case a.Sequence < b.Sequence:
+			return -1
+		case a.Sequence > b.Sequence:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	session := r.sessionFor(agentID)
+	return ResumeResult{Session: session, Missed: missed}, nil
+}
+
+// sessionFor returns the agent's session, creating a zero-value one on first
+// use. Callers hold the lock.
+func (r *Router) sessionFor(agentID string) LiveSession {
+	session, ok := r.liveByAgent[agentID]
+	if !ok {
+		session = LiveSession{AgentID: agentID, State: LiveDegraded}
+	}
+	return session
 }
 
 func (r *Router) updateDelivery(deliveryID string, update func(Delivery, time.Time) Delivery) (Delivery, error) {

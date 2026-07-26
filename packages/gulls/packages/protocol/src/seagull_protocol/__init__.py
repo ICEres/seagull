@@ -36,8 +36,13 @@ from seagull_protocol.base import (
     relationship_preset_defaults,
 )
 from seagull_protocol.events import (
+    LiveSession,
+    LiveSessionState,
+    LiveSubjectType,
     StreamEvent,
     StreamEventType,
+    normalize_live_session_state,
+    normalize_live_subject_type,
     normalize_stream_event_type,
 )
 from seagull_protocol.work import (
@@ -81,6 +86,9 @@ __all__ = [
     "Handle",
     "HookRuntime",
     "HookType",
+    "LiveSession",
+    "LiveSessionState",
+    "LiveSubjectType",
     "Message",
     "MessageIntent",
     "MessageRef",
@@ -117,6 +125,8 @@ __all__ = [
     "Visibility",
     "WorkflowTraceEntry",
     "normalize_handle",
+    "normalize_live_session_state",
+    "normalize_live_subject_type",
     "normalize_message_intent",
     "normalize_relationship_preset",
     "normalize_task_state",

@@ -1,4 +1,4 @@
-.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test common-test sdk-test safety-gateway-test phase2-test social-api-test phase3-test ai-provider-test web-test web-build landing-test landing-build phase4-test message-hub-test message-hub-build mcp-connector-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build mac-app-build mac-app-test hubstub-run message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-push-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
+.PHONY: setup local-up local-down local-logs local-clean check-local-env phase0-test common-test sdk-test safety-gateway-test phase2-test social-api-test pet-test phase3-test ai-provider-test web-test web-build landing-test landing-build phase4-test message-hub-test message-hub-build mcp-connector-test connector-test agent-request-test local-agent-test local-agent-go-test message-router-test safety-gateway-build social-api-build ai-provider-build mcp-connector-build local-agent-build mac-app-build mac-app-test hubstub-run message-router-build aws-dev-init aws-dev-plan aws-dev-apply aws-dev-output aws-dev-smoke aws-dev-safety-smoke aws-dev-ai-smoke aws-dev-social-smoke aws-dev-web-smoke aws-dev-router-smoke aws-dev-push-smoke aws-dev-destroy domain-init domain-plan domain-apply domain-output domain-destroy
 
 setup:
 	./scripts/setup-local.sh
@@ -26,20 +26,23 @@ common-test:
 	PYTHONPATH=packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/packages/common/tests
 
 sdk-test:
-	PYTHONPATH=packages/gulls/packages/sdk/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/packages/sdk/tests
+	PYTHONPATH=packages/gulls/packages/sdk/src:packages/gulls/services/message-hub/src:packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/packages/sdk/tests
 
 safety-gateway-test:
-	PYTHONPATH=packages/gulls/services/safety-gateway/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/safety-gateway/tests
+	PYTHONPATH=packages/gulls/services/safety-gateway/src:packages/gulls/services/message-hub/src:packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/safety-gateway/tests
 
 phase2-test: safety-gateway-test
 
 social-api-test:
-	PYTHONPATH=packages/seagulls/services/social-api/src:packages/gulls/packages/protocol/src python3 -m unittest discover -s packages/seagulls/services/social-api/tests
+	PYTHONPATH=packages/seagulls/services/social-api/src:packages/gulls/packages/protocol/src:packages/pet/packages/assets/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/seagulls/services/social-api/tests
+
+pet-test:
+	PYTHONPATH=packages/pet/packages/assets/src python3 -m unittest discover -s packages/pet/packages/assets/tests
 
 phase3-test: social-api-test
 
 ai-provider-test:
-	PYTHONPATH=packages/gulls/services/ai-provider/src:packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/ai-provider/tests
+	PYTHONPATH=packages/gulls/services/ai-provider/src:packages/gulls/services/message-hub/src:packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/ai-provider/tests
 
 web-test:
 	CI=true pnpm --filter web test
@@ -56,13 +59,16 @@ landing-build:
 phase4-test: web-test web-build
 
 message-hub-test:
-	PYTHONPATH=packages/gulls/services/message-hub/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/message-hub/tests
+	PYTHONPATH=packages/gulls/services/message-hub/src:packages/gulls/packages/protocol/src:packages/gulls/packages/policy/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/services/message-hub/tests
 
 mcp-connector-test:
 	PYTHONPATH=packages/gulls/connect/mcp-connector/src:packages/gulls/packages/common/src python3 -m unittest discover -s packages/gulls/connect/mcp-connector/tests
 
 connector-test:
 	cd packages/connector && node --test test/connector.test.ts
+
+agent-request-test:
+	cd packages/agent-request/packages/client && node --test test/agent-request.test.ts test/lifecycle-parity.test.ts
 
 local-agent-test:
 	cd packages/gulls/connect/local-agent && GOCACHE="$${TMPDIR:-/tmp}/seagull-go-build" go test ./...

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pet_assets import InMemoryPetAssetRepository
+
 from social_api.domain.models import (
     AgentAssetBinding,
     AgentChatMessage,
@@ -26,9 +28,9 @@ class InMemorySocialRepository:
         self._identity_by_provider_subject: dict[tuple[str, str], str] = {}
         self._profiles: dict[str, AgentProfileRecord] = {}
         self._profile_by_handle: dict[str, str] = {}
-        self._assets: dict[str, PersonalAgentAsset] = {}
-        self._asset_ids_by_owner: dict[str, set[str]] = {}
-        self._asset_bindings: dict[str, AgentAssetBinding] = {}
+        # Owned-agent assets are a Pet product-layer concern; hold the Pet
+        # store rather than a second copy of the same three dicts.
+        self._pet_assets = InMemoryPetAssetRepository()
         self._agent_chats: dict[str, AgentChatSession] = {}
         self._agent_chat_ids_by_owner: dict[str, set[str]] = {}
         self._agent_chat_messages: dict[str, AgentChatMessage] = {}
@@ -111,21 +113,19 @@ class InMemorySocialRepository:
         return AgentProfilePage(items=items, next_cursor=next_cursor)
 
     def put_personal_agent_asset(self, asset: PersonalAgentAsset) -> None:
-        self._assets[asset.asset_id] = asset
-        self._asset_ids_by_owner.setdefault(asset.owner_user_id, set()).add(asset.asset_id)
+        self._pet_assets.put_personal_agent_asset(asset)
 
     def get_personal_agent_asset(self, asset_id: str) -> PersonalAgentAsset | None:
-        return self._assets.get(asset_id)
+        return self._pet_assets.get_personal_agent_asset(asset_id)
 
     def list_personal_agent_assets_by_owner(self, owner_user_id: str) -> tuple[PersonalAgentAsset, ...]:
-        asset_ids = self._asset_ids_by_owner.get(owner_user_id, set())
-        return tuple(sorted((self._assets[asset_id] for asset_id in asset_ids), key=lambda asset: asset.created_at))
+        return self._pet_assets.list_personal_agent_assets_by_owner(owner_user_id)
 
     def put_agent_asset_binding(self, binding: AgentAssetBinding) -> None:
-        self._asset_bindings[binding.agent_id] = binding
+        self._pet_assets.put_agent_asset_binding(binding)
 
     def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
-        return self._asset_bindings.get(agent_id)
+        return self._pet_assets.get_agent_asset_binding(agent_id)
 
     def put_agent_chat_session(self, chat: AgentChatSession) -> None:
         self._agent_chats[chat.chat_id] = chat

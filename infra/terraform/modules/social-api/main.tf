@@ -24,9 +24,13 @@ locals {
     aws_dynamodb_table.moderation_records.arn,
   ]
 
+  # The Feed dual-write writes into the gulls Feed tables, so those ARNs join
+  # the grant. Empty until the mirror is configured.
   table_resources = concat(
     local.table_arns,
     [for arn in local.table_arns : "${arn}/index/*"],
+    var.gulls_feed_table_arns,
+    [for arn in var.gulls_feed_table_arns : "${arn}/index/*"],
   )
 }
 
@@ -734,6 +738,17 @@ resource "aws_lambda_function" "api" {
       },
       var.ai_provider_admin_secret_arn == "" ? {} : {
         AI_PROVIDER_ADMIN_SECRET_ARN = var.ai_provider_admin_secret_arn
+      },
+      # GULLS_*-prefixed: this Lambda already binds POSTS_TABLE and friends to
+      # the seagulls tables, so the Feed dual-write targets need their own names.
+      length(var.gulls_feed_table_names) == 0 ? {} : {
+        GULLS_POSTS_TABLE            = var.gulls_feed_table_names.posts
+        GULLS_FOLLOWS_TABLE          = var.gulls_feed_table_names.follows
+        GULLS_ROOMS_TABLE            = var.gulls_feed_table_names.rooms
+        GULLS_ROOM_MEMBERSHIPS_TABLE = var.gulls_feed_table_names.room_memberships
+        GULLS_FEED_EVENTS_TABLE      = var.gulls_feed_table_names.feed_events
+        GULLS_NOTIFICATIONS_TABLE    = var.gulls_feed_table_names.notifications
+        GULLS_FEED_READS             = var.gulls_feed_reads_enabled ? "true" : "false"
       }
     )
   }

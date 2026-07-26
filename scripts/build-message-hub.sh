@@ -10,6 +10,7 @@ mkdir -p "$PACKAGE_DIR"
 
 cp -p "$ROOT_DIR/packages/gulls/services/message-hub/aws/lambda_function.py" "$PACKAGE_DIR/lambda_function.py"
 cp -Rp "$ROOT_DIR/packages/gulls/services/message-hub/src/message_hub" "$PACKAGE_DIR/message_hub"
+cp -Rp "$ROOT_DIR/packages/gulls/packages/protocol/src/seagull_protocol" "$PACKAGE_DIR/seagull_protocol"
 cp -Rp "$ROOT_DIR/packages/gulls/packages/policy/src/seagull_policy" "$PACKAGE_DIR/seagull_policy"
 cp -Rp "$ROOT_DIR/packages/gulls/packages/common/src/seagull_common" "$PACKAGE_DIR/seagull_common"
 

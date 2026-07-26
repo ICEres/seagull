@@ -78,6 +78,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The DynamoDB repository tests are skipUnless-gated on moto. Without it
+      # they skip instead of failing, so a broken storage adapter reads as green.
+      - name: Install DynamoDB test dependencies
+        run: python -m pip install --disable-pip-version-check moto boto3
+
       - name: Run Gulls Python tests
         run: |
           make phase0-test
@@ -103,6 +108,22 @@ jobs:
 
       - name: Run Sea-gull Python tests
         run: make social-api-test
+
+  pet-python-tests:
+    name: Pet layer Python tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+
+      - name: Run Pet Python tests
+        run: make pet-test
 
   sea-gull-web-test-build:
     name: Sea-gull layer web test and build
@@ -154,6 +175,38 @@ jobs:
           path: packages/seagulls/apps/landing/dist
           if-no-files-found: error
           retention-days: 1
+
+  connector-test:
+    name: Minimal model-provider connector tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Test connector
+        run: make connector-test
+
+  agent-request-test:
+    name: Agent Request layer client tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Test Agent Request client
+        run: make agent-request-test
 
   gulls-router-test-build:
     name: Gulls layer router test and build
@@ -276,7 +329,10 @@ jobs:
       - layer-folder-check
       - gulls-python-tests
       - sea-gull-python-tests
+      - pet-python-tests
       - sea-gull-web-test-build
+      - connector-test
+      - agent-request-test
       - gulls-router-test-build
       - gulls-local-agent-test
       - gulls-lambda-builds

@@ -26,11 +26,21 @@ locals {
 
   # The Feed dual-write writes into the gulls Feed tables, so those ARNs join
   # the grant. Empty until the mirror is configured.
+  #
+  # The hub messages table joins it too once chat reads are configured: chat
+  # content lives there, not in the Feed tables. Read-only in practice -- chat
+  # writes reach the hub over its API, not by writing this table directly.
+  chat_table_arns = var.gulls_messages_table_arn == "" ? [] : [
+    var.gulls_messages_table_arn,
+    "${var.gulls_messages_table_arn}/index/*",
+  ]
+
   table_resources = concat(
     local.table_arns,
     [for arn in local.table_arns : "${arn}/index/*"],
     var.gulls_feed_table_arns,
     [for arn in var.gulls_feed_table_arns : "${arn}/index/*"],
+    local.chat_table_arns,
   )
 }
 
@@ -750,6 +760,11 @@ resource "aws_lambda_function" "api" {
         GULLS_FEED_EVENTS_TABLE      = var.gulls_feed_table_names.feed_events
         GULLS_NOTIFICATIONS_TABLE    = var.gulls_feed_table_names.notifications
         GULLS_FEED_READS             = var.gulls_feed_reads_enabled ? "true" : "false"
+      },
+      # Chat content lives in the hub's messages table, not the Feed tables.
+      var.gulls_messages_table_name == "" ? {} : {
+        GULLS_MESSAGES_TABLE = var.gulls_messages_table_name
+        GULLS_CHAT_READS     = var.gulls_chat_reads_enabled ? "true" : "false"
       }
     )
   }

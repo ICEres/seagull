@@ -155,3 +155,36 @@ variable "human_proxy_domain" {
   type        = string
   default     = ""
 }
+
+variable "gulls_messages_table_name" {
+  description = <<-EOT
+    Name of the gulls message hub messages table. Chat message content lives
+    there once chat is mirrored into the shared Inbox; the Feed tables do not
+    carry it. Empty disables chat reads from gulls entirely.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "gulls_chat_reads_enabled" {
+  description = <<-EOT
+    Serve chat message content from the gulls Inbox instead of the stored
+    seagulls copy. Gated separately from the chat mirror so the cutover is its
+    own step: mirror first, verify, then flip reads.
+
+    Which messages a chat holds, and in what order, stays a seagulls projection
+    either way -- only what each message says moves.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gulls_messages_table_arn" {
+  description = <<-EOT
+    ARN of the gulls message hub messages table, joined to the Lambda's DynamoDB
+    grant so chat reads can resolve message content. Empty leaves the grant
+    unchanged.
+  EOT
+  type        = string
+  default     = ""
+}

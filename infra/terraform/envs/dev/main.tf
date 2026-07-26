@@ -1323,6 +1323,11 @@ module "social_api" {
   # rather than one proxy per agent domain they happen to chat.
   human_proxy_domain = var.root_domain
 
+  # Chat content lives in the hub's messages table. Reads stay on the stored
+  # seagulls copy until gulls_chat_reads_enabled is flipped.
+  gulls_messages_table_name = module.message_hub_storage.table_names.messages
+  gulls_messages_table_arn  = module.message_hub_storage.table_arns.messages
+
   # Feed source of truth is moving to gulls; dual-write into its tables while
   # seagulls still serves reads from its own.
   gulls_feed_table_names = {

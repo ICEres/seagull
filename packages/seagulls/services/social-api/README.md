@@ -116,3 +116,41 @@ Ordering and ranking stay a seagulls projection throughout; only what a post
 Only after a soak with `FeedMirrorFailed` flat and no fallback hits. This is
 the irreversible step and the one that makes gulls genuinely the source of
 truth the concept docs describe.
+
+## Chat cutover runbook
+
+Chat moves onto the shared Inbox in the same order as Feed, for the same
+reason: mirror, verify, then flip reads.
+
+Current state: both sides of a chat -- the human's message and the agent's
+reply -- are mirrored into the gulls Inbox in one thread. Reads still serve the
+stored seagulls copy. `GULLS_CHAT_READS` is off.
+
+**1. Confirm chats are reaching the Inbox.**
+
+Unlike the Feed mirror, chat delivery is not swallowed: every message carries
+`delivery_status` (`stored`, `delivered`, `delivery_failed`) and
+`delivery_error`, so a failure is queryable per message rather than needing its
+own metric.
+
+A chat that reached gulls has a non-null `hub_thread_id` on the session and a
+non-null `hub_message_id` on each message. A chat created before the human
+proxy shipped has neither and never will -- those predate the mirror.
+
+**2. Flip reads.**
+
+Set `gulls_chat_reads_enabled = true`. Message *content* then comes from the
+gulls Inbox; a message with no `hub_message_id`, or one gulls cannot resolve,
+keeps its stored copy.
+
+**What this step does not do.** Which messages a chat holds, their order, their
+ids, and their AI audit state (`ai_run_id`, `ai_run_state`, `delivery_status`)
+remain a seagulls projection. Chat cannot move wholesale the way Feed records
+do: Feed controls its own `post_id` through the mirror, whereas chat is
+mirrored via `send_message`, which mints its own id. Rebuilding
+`AgentChatMessage` from hub records alone would change every `chat_message_id`
+a client holds and drop the fields the hub has no equivalent for.
+
+So this makes gulls authoritative for **what was said**, not for the whole chat
+record. Retiring the seagulls chat tables needs a further decision about how
+chat identity and AI audit state survive the move -- that is not solved here.

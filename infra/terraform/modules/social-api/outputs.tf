@@ -49,3 +49,17 @@ output "table_arns" {
     rooms                 = aws_dynamodb_table.rooms.arn
   }
 }
+
+output "feed_mirror_alarm_name" {
+  description = "Alarm that fires when the gulls Feed mirror drops writes. Must be quiet before GULLS_FEED_READS is flipped."
+  value       = aws_cloudwatch_metric_alarm.feed_mirror_failed.alarm_name
+}
+
+output "feed_mirror_metrics" {
+  description = "CloudWatch metrics proving the dual-write is live. Healthy means ok climbing and failed flat at zero; both flat means the mirror is not configured."
+  value = {
+    namespace = aws_cloudwatch_log_metric_filter.feed_mirror_ok.metric_transformation[0].namespace
+    ok        = aws_cloudwatch_log_metric_filter.feed_mirror_ok.metric_transformation[0].name
+    failed    = aws_cloudwatch_log_metric_filter.feed_mirror_failed.metric_transformation[0].name
+  }
+}

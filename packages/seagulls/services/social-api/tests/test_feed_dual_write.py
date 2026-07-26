@@ -11,13 +11,41 @@ between the two record shapes fails here instead of in production.
 
 from __future__ import annotations
 
+import io
+import json
+from contextlib import redirect_stdout
 from unittest import TestCase
 
 from message_hub.storage.memory import InMemoryMessageHubRepository
 from seagull_protocol.base import MessageIntent, Visibility
 
 from social_api.api.local import AuthPrincipal, LocalSocialApi
-from social_api.domain.feed_mirror import BestEffortFeedMirror, StrictFeedMirror
+from social_api.domain.feed_mirror import (
+    FEED_MIRROR_EVENT,
+    BestEffortFeedMirror,
+    StrictFeedMirror,
+)
+
+
+def _mirror_events(stdout: str) -> list[dict]:
+    """Pull the structured mirror events out of captured stdout.
+
+    The shared logger writes one JSON object per line to stdout, which is what
+    CloudWatch ingests and what the metric filters parse. Reading them back the
+    same way keeps the test honest about the shape the filters actually see.
+    """
+    events = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("event") == FEED_MIRROR_EVENT:
+            events.append(payload)
+    return events
 
 
 class FeedDualWriteTest(TestCase):
@@ -211,6 +239,127 @@ class FeedMirrorFailureTest(TestCase):
             [item["post_id"] for item in api.read_home_feed(principal=principal)["items"]],
         )
         self.assertTrue(any("gulls feed mirror failed" in line for line in logs.output))
+
+    def test_a_failed_mirror_emits_a_metered_event(self) -> None:
+        """The alarm keys off this line, so its shape is a contract.
+
+        The pattern in infra/terraform/modules/social-api/main.tf matches on
+        event and outcome. If either field is renamed here without renaming it
+        there, the alarm goes quiet and a broken mirror becomes invisible
+        again -- which is the failure this whole mechanism exists to catch.
+        """
+        api = LocalSocialApi.in_memory(
+            auth_required=True,
+            feed_mirror=BestEffortFeedMirror(StrictFeedMirror(self.ExplodingRepository())),
+        )
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        author = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+
+        with redirect_stdout(io.StringIO()) as captured:
+            api.create_post({"author_handle": author["handle"], "text": "boom"}, principal)
+
+        events = _mirror_events(captured.getvalue())
+
+        self.assertTrue(events, "expected at least one feed_mirror event")
+        self.assertTrue(all(event["outcome"] == "failed" for event in events))
+        self.assertIn("post", [event["operation"] for event in events])
+
+    def test_a_working_mirror_emits_ok_events(self) -> None:
+        """Failures alone cannot prove health.
+
+        An unconfigured mirror is silent, so "no failed events" is ambiguous.
+        The ok metric is what distinguishes a live dual-write from one that was
+        never wired up, and it is the signal to check before flipping reads.
+        """
+        gulls = InMemoryMessageHubRepository()
+        api = LocalSocialApi.in_memory(
+            auth_required=True,
+            feed_mirror=BestEffortFeedMirror(StrictFeedMirror(gulls)),
+        )
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        author = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+
+        with redirect_stdout(io.StringIO()) as captured:
+            api.create_post({"author_handle": author["handle"], "text": "fine"}, principal)
+
+        events = _mirror_events(captured.getvalue())
+
+        self.assertTrue(events, "expected at least one feed_mirror event")
+        self.assertTrue(all(event["outcome"] == "ok" for event in events))
+        # And the post really did cross over.
+        self.assertEqual(1, len(gulls.list_posts()))
+
+    def test_the_emitted_fields_match_the_terraform_metric_filters(self) -> None:
+        """Parity guard between the log line and the alarm that reads it.
+
+        The metric filters select on `$.event` and `$.outcome`. Nothing else
+        connects the two files, so renaming a field here would leave the
+        filters matching nothing -- the alarm would go quiet and a broken
+        mirror would be invisible again, which is precisely the failure this
+        mechanism exists to catch. A silent alarm looks identical to health.
+
+        So the pattern is parsed out of the module and checked against a real
+        emitted event, including a guard against the parser matching nothing.
+        """
+        import pathlib
+        import re
+
+        module = (
+            pathlib.Path(__file__).resolve().parents[5]
+            / "infra/terraform/modules/social-api/main.tf"
+        )
+        self.assertTrue(module.is_file(), f"terraform module not found at {module}")
+
+        # The HCL string contains escaped quotes, so the capture has to consume
+        # `\"` rather than stop at it.
+        raw_patterns = re.findall(
+            r'aws_cloudwatch_log_metric_filter"\s+"feed_mirror[^{]*\{.*?'
+            r'pattern\s*=\s*"((?:[^"\\]|\\.)*)"',
+            module.read_text(),
+            re.DOTALL,
+        )
+        self.assertEqual(2, len(raw_patterns), "expected both feed mirror metric filters")
+
+        patterns = [pattern.replace('\\"', '"') for pattern in raw_patterns]
+        for pattern in patterns:
+            self.assertTrue(pattern.endswith("}"), f"truncated pattern parsed: {pattern!r}")
+
+        referenced = {field for pattern in patterns for field in re.findall(r"\$\.(\w+)", pattern)}
+        self.assertEqual({"event", "outcome"}, referenced)
+
+        gulls = InMemoryMessageHubRepository()
+        api = LocalSocialApi.in_memory(
+            auth_required=True,
+            feed_mirror=BestEffortFeedMirror(StrictFeedMirror(gulls)),
+        )
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        author = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+
+        with redirect_stdout(io.StringIO()) as captured:
+            api.create_post({"author_handle": author["handle"], "text": "x"}, principal)
+
+        events = _mirror_events(captured.getvalue())
+        self.assertTrue(events)
+
+        for field in referenced:
+            self.assertIn(field, events[0], f"metric filter selects $.{field}, which is not emitted")
+
+        # And the literal values the filters compare against.
+        literals = {value for pattern in patterns for value in re.findall(r'=\s*"(\w+)"', pattern)}
+        self.assertIn(FEED_MIRROR_EVENT, literals)
+        self.assertIn("ok", literals)
+        self.assertIn("failed", literals)
+
+    def test_an_unconfigured_mirror_is_silent(self) -> None:
+        """Pins the ambiguity the ok metric exists to resolve."""
+        api = LocalSocialApi.in_memory(auth_required=True)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub")
+        author = api.create_agent_profile({"handle": "@alice:seagull.local"}, principal)["profile"]
+
+        with redirect_stdout(io.StringIO()) as captured:
+            api.create_post({"author_handle": author["handle"], "text": "quiet"}, principal)
+
+        self.assertEqual([], _mirror_events(captured.getvalue()))
 
     def test_without_a_mirror_configured_nothing_changes(self) -> None:
         # The default NullFeedMirror keeps single-store deployments working.

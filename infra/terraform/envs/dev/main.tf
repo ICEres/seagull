@@ -1410,6 +1410,11 @@ module "message_router" {
   agent_tokens_table_name = module.message_hub_storage.table_names.agent_tokens
   agent_tokens_table_arn  = module.message_hub_storage.table_arns.agent_tokens
 
+  # $connect replays an agent's unacked backlog from durable state, so a
+  # reconnect resumes rather than the agent having to ask for its own backlog.
+  deliveries_table_name = module.message_hub_storage.table_names.deliveries
+  deliveries_table_arn  = module.message_hub_storage.table_arns.deliveries
+
   point_in_time_recovery_enabled = var.dynamodb_point_in_time_recovery_enabled
   deletion_protection_enabled    = var.dynamodb_deletion_protection_enabled
   api_throttling_burst_limit     = var.api_throttling_burst_limit

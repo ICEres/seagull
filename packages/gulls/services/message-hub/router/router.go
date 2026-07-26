@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -402,4 +403,77 @@ func sortedConnectionIDs(connections map[string]Connection) []string {
 
 func deliveryID(messageID string, recipientAgentID string) string {
 	return fmt.Sprintf("%s:%s", messageID, recipientAgentID)
+}
+
+// DeliveryStore reads durable deliveries for one recipient.
+//
+// Resume answers "what did this agent miss while it was away", and until now it
+// could only answer it from Router's in-memory map -- which the deployed Lambda
+// never constructs. A reconnecting agent therefore had to ask for its own
+// backlog, because the router had no memory of it. This is the seam that lets
+// the same replay logic run against DynamoDB.
+//
+// Implementations return every delivery for the agent created after the cursor,
+// in any order; ResumeFrom applies the ordering and the acked filter so both
+// backends agree on what "missed" means.
+type DeliveryStore interface {
+	DeliveriesForAgent(agentID string, after time.Time) ([]Delivery, error)
+}
+
+// ResumeFrom replays what an agent missed, from a durable store.
+//
+// The durable and in-memory paths differ in what orders the stream. Router
+// assigns each recipient a Sequence, but the stored deliveries carry no such
+// column -- ordering there comes from created_at, which the
+// recipient-created-at-index already ranges on. So the cursor is a timestamp
+// rather than a sequence, and Missed is ordered by CreatedAt.
+//
+// The filter matches Resume exactly: acked deliveries are excluded because the
+// agent already handled them, and a zero cursor replays the whole outstanding
+// backlog.
+func ResumeFrom(store DeliveryStore, agentID string, after time.Time) (ResumeResult, error) {
+	if store == nil {
+		return ResumeResult{}, errors.New("delivery store is required")
+	}
+	if agentID == "" {
+		return ResumeResult{}, errors.New("agent id is required")
+	}
+
+	stored, err := store.DeliveriesForAgent(agentID, after)
+	if err != nil {
+		return ResumeResult{}, fmt.Errorf("read durable deliveries: %w", err)
+	}
+
+	missed := make([]Delivery, 0, len(stored))
+	for _, delivery := range stored {
+		if delivery.RecipientAgentID != agentID {
+			// A store that over-returns must not leak another agent's inbox.
+			continue
+		}
+		if delivery.Status == DeliveryAcked {
+			continue
+		}
+		if !after.IsZero() && !delivery.CreatedAt.After(after) {
+			continue
+		}
+		missed = append(missed, delivery)
+	}
+
+	// Oldest first: a replay must arrive in the order the messages happened.
+	// DeliveryID breaks ties so the order is stable when timestamps collide.
+	slices.SortFunc(missed, func(a, b Delivery) int {
+		switch {
+		case a.CreatedAt.Before(b.CreatedAt):
+			return -1
+		case a.CreatedAt.After(b.CreatedAt):
+			return 1
+		default:
+			return strings.Compare(a.DeliveryID, b.DeliveryID)
+		}
+	})
+
+	return ResumeResult{
+		Session: LiveSession{AgentID: agentID, State: LiveDegraded},
+		Missed:  missed,
+	}, nil
 }

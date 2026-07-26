@@ -45,6 +45,11 @@ from social_api.domain.models import (
 )
 from social_api.domain.feed_mirror import FeedMirror, NullFeedMirror
 from social_api.domain.feed_source import FeedSource, RepositoryFeedSource
+from social_api.domain.human_proxy import (
+    InvalidHumanProxyError,
+    handle_domain,
+    human_proxy_handle,
+)
 from social_api.storage.repository import AgentProfilePage, SocialRepository
 
 
@@ -135,6 +140,7 @@ class SocialApiService:
         feed_mirror: FeedMirror | None = None,
         feed_source: FeedSource | None = None,
         require_agent_registry: bool | None = None,
+        human_proxy_domain: str | None = None,
     ) -> None:
         self._repository = repository
         self._id_factory = id_factory or self._default_id_factory
@@ -157,6 +163,11 @@ class SocialApiService:
         # What a post *is* comes from here -- gulls once configured, the
         # seagulls tables until then (terminology.md:55).
         self._feed_source = feed_source or RepositoryFeedSource(repository)
+        # Pins every human proxy to one namespace so a person has a single
+        # network identity. Unset means "follow the agent being chatted", which
+        # keeps tests and local runs working with no configuration but gives a
+        # human one proxy per domain.
+        self._human_proxy_domain = (human_proxy_domain or "").strip().lower() or None
         # The social repository already implements the five methods
         # PetAssetRepository declares, so it satisfies the port structurally --
         # assets keep living in the same two tables.
@@ -515,6 +526,17 @@ class SocialApiService:
             sender = self._require_profile_by_handle(sender_handle)
             self._require_owner(owner_user_id, sender)
 
+        # Without a sender the chat cannot enter the shared Inbox at all: the
+        # delivery step returns early on a null sender_handle. The web never
+        # passes one, so every real chat used to be seagulls-only. Fall back to
+        # the owner's stable human proxy so the message reaches gulls.
+        resolved_sender_handle = None if sender is None else sender.handle
+        resolved_sender_agent_id = None if sender is None else sender.agent_id
+        if resolved_sender_handle is None:
+            resolved_sender_handle = self._ensure_human_proxy_handle(
+                owner_user_id, agent_handle=profile.handle
+            )
+
         binding = self._repository.get_agent_asset_binding(profile.agent_id)
         now = self._clock()
         chat = AgentChatSession(
@@ -523,8 +545,8 @@ class SocialApiService:
             agent_id=profile.agent_id,
             agent_handle=profile.handle,
             title=clean_optional(title) or f"Chat with {profile.display_name or profile.handle}",
-            sender_agent_id=None if sender is None else sender.agent_id,
-            sender_handle=None if sender is None else sender.handle,
+            sender_agent_id=resolved_sender_agent_id,
+            sender_handle=resolved_sender_handle,
             prompt_asset_id=None if binding is None else binding.prompt_asset_id,
             skill_asset_id=None if binding is None else binding.skill_asset_id,
             created_at=now,
@@ -1055,6 +1077,36 @@ class SocialApiService:
         if profile is None:
             raise NotFoundError(f"agent profile not found: {normalized_handle}")
         return profile
+
+    def _ensure_human_proxy_handle(self, owner_user_id: str, *, agent_handle: str) -> str | None:
+        """Resolve the owner's proxy handle and make sure gulls knows it.
+
+        Registration is best-effort for the same reason profile registration is:
+        ``POST /agents`` is an idempotent get-or-create, and local runs have no
+        hub at all. A failure here costs the mirror for this chat, which the
+        mirror metrics surface -- it must not stop the human starting one.
+
+        Returns None if no handle can be derived, which leaves the chat exactly
+        as it behaved before: seagulls-only, no delivery attempt.
+        """
+        domain = self._human_proxy_domain
+        if domain is None:
+            try:
+                domain = handle_domain(agent_handle)
+            except InvalidHumanProxyError:
+                return None
+        try:
+            handle = human_proxy_handle(owner_user_id, domain=domain)
+        except InvalidHumanProxyError:
+            return None
+
+        identity = self._repository.get_human_identity(owner_user_id)
+        display_name = None if identity is None else identity.display_name
+        try:
+            self._agent_registry.register(handle, display_name)
+        except Exception:  # noqa: BLE001 - best effort, same as profile registration
+            LOGGER.warning("could not register human proxy %s", handle, exc_info=True)
+        return handle
 
     def _require_agent_chat(self, chat_id: str) -> AgentChatSession:
         normalized_chat_id = normalized_required(chat_id, "chat_id")

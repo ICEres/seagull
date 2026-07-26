@@ -140,3 +140,18 @@ variable "gulls_feed_reads_enabled" {
   type        = bool
   default     = false
 }
+
+variable "human_proxy_domain" {
+  description = <<-EOT
+    Handle domain for human proxies -- the network identity a signed-in human
+    sends from when chatting their own agent. gulls models senders as agents, so
+    a chat needs one to enter the shared Inbox at all.
+
+    Pinning this gives each person a single identity across every agent they
+    chat. Leaving it empty falls back to the chatted agent's own domain, which
+    keeps an unconfigured environment working but yields one proxy per domain
+    for the same human.
+  EOT
+  type        = string
+  default     = ""
+}

@@ -1323,6 +1323,11 @@ module "social_api" {
   # rather than one proxy per agent domain they happen to chat.
   human_proxy_domain = var.root_domain
 
+  # The deploy role has logs:PutMetricFilter, so the Feed mirror metrics and
+  # their alarm can be created. Without them the mirror runs unmeasured and the
+  # dual-write cannot be verified, which is step 1 of the cutover runbook.
+  feed_mirror_metrics_enabled = true
+
   # Chat content lives in the hub's messages table. Reads stay on the stored
   # seagulls copy until gulls_chat_reads_enabled is flipped.
   gulls_messages_table_name = module.message_hub_storage.table_names.messages

@@ -13,6 +13,12 @@ output "table_names" {
     tasks            = aws_dynamodb_table.tasks.name
     tool_requests    = aws_dynamodb_table.tool_requests.name
     task_results     = aws_dynamodb_table.task_results.name
+    posts            = aws_dynamodb_table.posts.name
+    follows          = aws_dynamodb_table.follows.name
+    rooms            = aws_dynamodb_table.rooms.name
+    room_memberships = aws_dynamodb_table.room_memberships.name
+    feed_events      = aws_dynamodb_table.feed_events.name
+    notifications    = aws_dynamodb_table.notifications.name
   }
 }
 
@@ -31,6 +37,12 @@ output "table_arns" {
     tasks            = aws_dynamodb_table.tasks.arn
     tool_requests    = aws_dynamodb_table.tool_requests.arn
     task_results     = aws_dynamodb_table.task_results.arn
+    posts            = aws_dynamodb_table.posts.arn
+    follows          = aws_dynamodb_table.follows.arn
+    rooms            = aws_dynamodb_table.rooms.arn
+    room_memberships = aws_dynamodb_table.room_memberships.arn
+    feed_events      = aws_dynamodb_table.feed_events.arn
+    notifications    = aws_dynamodb_table.notifications.arn
   }
 }
 

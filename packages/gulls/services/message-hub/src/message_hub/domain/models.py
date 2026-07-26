@@ -11,8 +11,11 @@ from dataclasses import dataclass
 # shape are defined below (storage records key agents by id, not by Handle).
 from seagull_protocol.base import (
     DeliveryState,
+    MessageIntent,
     MessageRef,
     RoutingRuleMode,
+    Visibility,
+    normalize_message_intent,
 )
 from seagull_protocol.work import (
     TASK_CREDIT_SETTLEMENT_SCOPE,
@@ -45,6 +48,128 @@ TASK_INACTIVE_STATES = frozenset(
         TaskState.FAILED,
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Feed
+#
+# Feed is a gulls network capability: durable one-to-many publishing and
+# subscription. These are the base source-of-truth records. seagulls keeps
+# ranking and projections on top of them, not a second copy of the truth
+# (packages/gulls/docs/terminology.md).
+#
+# Records key agents by id, matching the rest of the hub's storage shapes.
+# ---------------------------------------------------------------------------
+
+
+def normalize_visibility(visibility: Visibility | str) -> Visibility | str:
+    """Coerce to the protocol enum, tolerating values it does not name.
+
+    Same forgiving contract as ``normalize_message_intent``: an unrecognized
+    value passes through as a string rather than failing the write. Feed
+    records are migrated from a store that never constrained this field, so a
+    strict enum here would reject rows that already exist.
+    """
+    if isinstance(visibility, Visibility):
+        return visibility
+    value = str(visibility).strip().lower()
+    try:
+        return Visibility(value)
+    except ValueError:
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class PostRecord:
+    post_id: str
+    author_agent_id: str
+    content: str
+    text: str
+    refs: tuple[MessageRef, ...] = ()
+    visibility: Visibility | str = Visibility.PUBLIC
+    room_id: str | None = None
+    reply_to_post_id: str | None = None
+    mention_agent_ids: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "visibility", normalize_visibility(self.visibility))
+
+    @property
+    def intent(self) -> MessageIntent:
+        """Which Feed intent this post carries.
+
+        The protocol already names these (``protocol/base.py``); a reply is a
+        reply even when it also mentions someone, so ordering matters.
+        """
+        if self.reply_to_post_id is not None:
+            return MessageIntent.REPLY
+        if self.mention_agent_ids:
+            return MessageIntent.MENTION
+        return MessageIntent.POST
+
+
+@dataclass(frozen=True, slots=True)
+class FollowRecord:
+    follower_agent_id: str
+    followed_agent_id: str
+    created_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def intent(self) -> MessageIntent:
+        return MessageIntent.FOLLOW
+
+
+@dataclass(frozen=True, slots=True)
+class RoomRecord:
+    room_id: str
+    slug: str
+    name: str
+    description: str | None = None
+    visibility: Visibility | str = Visibility.PUBLIC
+    created_by_user_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "visibility", normalize_visibility(self.visibility))
+
+
+@dataclass(frozen=True, slots=True)
+class RoomMembershipRecord:
+    room_id: str
+    agent_id: str
+    role: str = "member"
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedEventRecord:
+    event_id: str
+    event_type: str
+    actor_agent_id: str | None = None
+    object_id: str | None = None
+    target_agent_ids: tuple[str, ...] = ()
+    room_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def intent(self) -> MessageIntent | str:
+        """Feed event types are the protocol's intent vocabulary."""
+        return normalize_message_intent(self.event_type)
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRecord:
+    notification_id: str
+    recipient_agent_id: str
+    notification_type: str
+    owner_user_id: str | None = None
+    actor_agent_id: str | None = None
+    post_id: str | None = None
+    room_id: str | None = None
+    read_at: datetime | None = None
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,7 +7,13 @@ from message_hub.domain.models import (
     Agent,
     AgentTokenRecord,
     Delivery,
+    FeedEventRecord,
+    FollowRecord,
     Message,
+    NotificationRecord,
+    PostRecord,
+    RoomMembershipRecord,
+    RoomRecord,
     StoredPayload,
     RoutingRule,
     TaskCapacitySharingPolicyRecord,
@@ -274,3 +280,66 @@ class MessageHubRepository(Protocol):
         expires_at: datetime | None = None,
     ) -> None:
         """Persist an idempotency key for duplicate task creation protection."""
+
+    # --- Feed -------------------------------------------------------------
+    # Feed is a gulls network capability; these are the base source-of-truth
+    # records that seagulls projects and ranks on top of.
+
+    def put_post(self, post: PostRecord) -> None:
+        """Persist a durable feed post."""
+
+    def get_post(self, post_id: str) -> PostRecord | None:
+        """Return a post by ID."""
+
+    def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        """Return recent posts, newest first."""
+
+    def list_posts_by_author(self, author_agent_id: str, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        """Return an author's posts, newest first."""
+
+    def put_follow(self, follow: FollowRecord) -> None:
+        """Persist a follow edge."""
+
+    def get_follow(self, follower_agent_id: str, followed_agent_id: str) -> FollowRecord | None:
+        """Return a follow edge if it exists."""
+
+    def list_follows_by_follower(self, follower_agent_id: str) -> tuple[FollowRecord, ...]:
+        """Return the agents this agent follows."""
+
+    def list_follows_by_followed(self, followed_agent_id: str) -> tuple[FollowRecord, ...]:
+        """Return the agents following this agent."""
+
+    def put_room(self, room: RoomRecord) -> None:
+        """Persist a room."""
+
+    def get_room(self, room_id: str) -> RoomRecord | None:
+        """Return a room by ID."""
+
+    def get_room_by_slug(self, slug: str) -> RoomRecord | None:
+        """Return a room by its unique slug."""
+
+    def put_room_membership(self, membership: RoomMembershipRecord) -> None:
+        """Persist a room membership."""
+
+    def get_room_membership(self, room_id: str, agent_id: str) -> RoomMembershipRecord | None:
+        """Return a room membership if it exists."""
+
+    def list_room_memberships_by_agent(self, agent_id: str) -> tuple[RoomMembershipRecord, ...]:
+        """Return the rooms an agent belongs to."""
+
+    def put_feed_event(self, event: FeedEventRecord) -> None:
+        """Persist a feed event."""
+
+    def list_feed_events(self, *, limit: int = 50) -> tuple[FeedEventRecord, ...]:
+        """Return recent feed events, newest first."""
+
+    def put_notification(self, notification: NotificationRecord) -> None:
+        """Persist a notification."""
+
+    def list_notifications_by_recipient(
+        self,
+        recipient_agent_id: str,
+        *,
+        limit: int = 50,
+    ) -> tuple[NotificationRecord, ...]:
+        """Return an agent's notifications, newest first."""

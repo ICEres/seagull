@@ -297,11 +297,17 @@ resource "aws_lambda_function" "message_hub_api" {
       AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
       APP_NAME                        = local.message_hub_prefix
       DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
+      FEED_EVENTS_TABLE               = module.message_hub_storage.table_names.feed_events
+      FOLLOWS_TABLE                   = module.message_hub_storage.table_names.follows
       GUEST_STATUS_SIGNING_SECRET_ARN = aws_secretsmanager_secret.guest_status_signing.arn
       IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
       MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
+      NOTIFICATIONS_TABLE             = module.message_hub_storage.table_names.notifications
       PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
       PAYLOADS_TABLE                  = module.message_hub_storage.table_names.payloads
+      POSTS_TABLE                     = module.message_hub_storage.table_names.posts
+      ROOM_MEMBERSHIPS_TABLE          = module.message_hub_storage.table_names.room_memberships
+      ROOMS_TABLE                     = module.message_hub_storage.table_names.rooms
       ROUTING_RULES_TABLE             = module.message_hub_storage.table_names.routing_rules
       SAFETY_BLOCKED_TERMS            = "unsafe:"
       SAFETY_GATEWAY_ADMIN_SECRET_ARN = aws_secretsmanager_secret.safety_gateway_admin.arn

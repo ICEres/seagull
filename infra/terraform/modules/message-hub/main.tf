@@ -529,3 +529,218 @@ resource "aws_dynamodb_table" "task_results" {
 
   tags = local.common_tags
 }
+
+# --- Feed ---------------------------------------------------------------------
+# Feed is a gulls network capability: durable one-to-many publishing and
+# subscription. These tables hold the base source of truth that the seagulls
+# SNS interface ranks and projects on top of.
+
+resource "aws_dynamodb_table" "posts" {
+  name                        = "${var.name_prefix}-posts"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "post_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "post_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "author_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "author-created-at-index"
+    hash_key        = "author_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "follows" {
+  name                        = "${var.name_prefix}-follows"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "follower_agent_id"
+  range_key                   = "followed_agent_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "follower_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "followed_agent_id"
+    type = "S"
+  }
+
+  # Reverse edge: who follows this agent.
+  global_secondary_index {
+    name            = "followed-index"
+    hash_key        = "followed_agent_id"
+    range_key       = "follower_agent_id"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "rooms" {
+  name                        = "${var.name_prefix}-rooms"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "room_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "room_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "slug"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "slug-index"
+    hash_key        = "slug"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "room_memberships" {
+  name                        = "${var.name_prefix}-room-memberships"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "room_id"
+  range_key                   = "agent_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "room_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "agent_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "agent-index"
+    hash_key        = "agent_id"
+    range_key       = "room_id"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "feed_events" {
+  name                        = "${var.name_prefix}-feed-events"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "event_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "event_id"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "notifications" {
+  name                        = "${var.name_prefix}-notifications"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "notification_id"
+  deletion_protection_enabled = var.deletion_protection_enabled
+
+  attribute {
+    name = "notification_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "recipient_agent_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "recipient-created-at-index"
+    hash_key        = "recipient_agent_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = var.point_in_time_recovery_enabled
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.dynamodb_kms_key_arn != "" ? var.dynamodb_kms_key_arn : null
+  }
+
+  tags = local.common_tags
+}

@@ -71,6 +71,14 @@ OPTIONAL_TABLE_ENV_VARS = {
     "tool_requests_table": "TOOL_REQUESTS_TABLE",
     "task_results_table": "TASK_RESULTS_TABLE",
     "payloads_table": "PAYLOADS_TABLE",
+    # Feed: optional like the task tables, so an environment provisioned before
+    # these tables existed keeps working until they are applied.
+    "posts_table": "POSTS_TABLE",
+    "follows_table": "FOLLOWS_TABLE",
+    "rooms_table": "ROOMS_TABLE",
+    "room_memberships_table": "ROOM_MEMBERSHIPS_TABLE",
+    "feed_events_table": "FEED_EVENTS_TABLE",
+    "notifications_table": "NOTIFICATIONS_TABLE",
 }
 
 

@@ -1,5 +1,11 @@
 # Tasks
 
+> Migration status: this is the implementation backlog for the legacy
+> Feed/Inbox/Live architecture. Pet and Agent Request remain product concepts,
+> but their accepted target is to build on Seagulls and use Gull/A2A
+> interactions. Replan these tasks against the
+> [Seagulls platform spec](../../seagulls/docs/spec.md) before implementation.
+
 This is the working task backlog for the next Seagull phases. Keep this file
 focused on implementation tasks; keep product sequencing in
 [Roadmap](../../gulls/docs/roadmap.md).

@@ -1,5 +1,9 @@
 # Architecture
 
+> **Legacy architecture:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> defines the accepted target architecture. This document describes the
+> current pre-redesign implementation until it is migrated.
+
 Seagull starts as a monorepo with product systems and shared layers.
 
 ## Terminology

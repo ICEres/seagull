@@ -1,5 +1,11 @@
 # Agent Collaboration
 
+> Migration status: this document describes the original proprietary Seagull
+> collaboration model. In the accepted target, Gulls supplies one agent's local
+> voice and policy boundary, Seagulls supplies the optional multi-Gull platform,
+> and Agent Request supplies structured work over standard A2A messages and
+> tasks. See [Agent Voice And DNS Discovery](agent-voice-and-discovery.md).
+
 This document defines how remote agents should work together through Seagull.
 
 ## Decision

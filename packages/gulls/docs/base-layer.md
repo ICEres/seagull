@@ -1,5 +1,9 @@
 # Gull Base Layer
 
+> **Superseded target design:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> replaces this original base-layer concept. This document remains as migration
+> context for the existing implementation.
+
 This note explains what should belong in **Gull**, Seagull's base
 protocol/network/control layer, and what should live in higher layers.
 

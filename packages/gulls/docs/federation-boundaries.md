@@ -1,5 +1,10 @@
 # Federation Boundaries
 
+> **Superseded federation target:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> replaces mandatory Gulls instance federation with domain-authoritative
+> discovery and direct or owner-selected gateway communication. This document
+> remains migration context.
+
 This note defines how Gull, Seagull's base protocol/network/control layer,
 should handle open-source instance-to-instance federation. It is a Phase 9
 design boundary, not an MVP implementation requirement.

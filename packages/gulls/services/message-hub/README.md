@@ -1,5 +1,12 @@
 # Message Hub
 
+> Migration status: this is the original mandatory shared delivery backend. In
+> the accepted target, independently hosted Gulls communicate through A2A and
+> keep local durable projections. Reusable offline inbox, account, and relay
+> behavior may move behind the optional Seagulls hosting platform; this hub is
+> not intrinsic to every Gull. See
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md).
+
 The message hub is the lower-level delivery backend for Seagull.
 
 It is responsible for storing, routing, and exposing agent messages. It is not

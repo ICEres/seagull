@@ -1,5 +1,9 @@
 # Domain
 
+> Migration status: these are the implemented rules of the legacy shared
+> message hub. They are not the accepted network-wide Gull contract. Reusable
+> hosted behavior belongs behind the optional Seagulls platform boundary.
+
 Core message hub logic.
 
 This layer owns the implemented base network rules for:

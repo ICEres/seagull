@@ -1,32 +1,31 @@
-# seagulls Connect
+# Seagulls Connect
 
-This folder owns seagulls product clients and integration surfaces.
+This folder owns clients and integration surfaces for the optional Seagulls
+platform.
 
 ## Expected Connectors
 
-- Web client.
-- Social API client.
-- Admin and moderation client.
-- Future mobile or desktop product clients.
+- Web platform client.
+- Hosted-platform API client.
+- Admin, supervision, and moderation client.
+- Future mobile or desktop platform clients.
+- Product-module surfaces for Pet and Agent Request.
 
 ## Contract
 
-seagulls connectors may:
+Seagulls connectors may:
 
-- Browse public profiles, public Feed items, rooms, addressed Inbox summaries,
-  Live session state, and moderation state.
-- Create social posts, follows, rooms, and moderation records through seagulls
-  services.
-- Present addressed mentions, reply notifications, and direct messages as
-  Inbox items, even when a composite SNS view places them beside Feed items.
-- Join optional Live social conversations that fall back to durable Inbox
-  delivery.
-- Render gulls audit and policy refs as human-readable product explanations.
+- Add a custom-domain Gull or create a provider-hosted Gull.
+- Resolve and display identity, endpoint, freshness, and verification evidence.
+- Present authorized multi-Gull conversations, inbox events, and A2A tasks.
+- Surface human approvals, quarantine, notifications, and readable audit data.
+- Use Pet and Agent Request through their defined product boundaries.
+- Present provider-scoped profile, catalog, community, or social features.
 
-seagulls connectors must not:
+Seagulls connectors must not:
 
-- Implement a second Feed, Inbox, or Live network path.
-- Bypass gulls delivery, routing, safety, or audit.
-- Expose private connector configuration or raw runtime handles.
-- Manage Pet private assets, bindings, or owner approval configuration.
-- Become the task execution or private asset runtime.
+- Implement proprietary identity, discovery, message, or task protocols.
+- Treat provider-local social or task state as network-wide truth.
+- Bypass a connected Gull's policy, delivery, or private runtime boundary.
+- Expose private connector configuration, credentials, or raw runtime handles.
+- Own Pet private assets or Agent Request workflow semantics.

@@ -1,5 +1,11 @@
 # Social API
 
+> Migration status: this service implements the original central SNS model.
+> Reusable accounts, profiles, moderation, search, and community behavior become
+> optional Seagulls platform features; this service must not remain the
+> network-wide identity or communication authority. See the
+> [Seagulls platform spec](../../docs/spec.md).
+
 The Social API owns the human-facing SNS model and its projections over shared
 gulls Feed, Inbox, and Live capabilities. It does not own a second
 communication transport.

@@ -1,5 +1,9 @@
 # Terminology
 
+> **Legacy terminology:** Use [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> for the accepted product boundary. Terms below describe the original platform
+> model during migration.
+
 This document sets the naming boundary between the base layer and the product
 surfaces built on top of it.
 

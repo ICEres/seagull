@@ -1,5 +1,10 @@
 # AWS Dev Payload And Task Systems Plan
 
+> Migration status: this plan targets the legacy shared message-hub design.
+> Agent Request remains a product built on Seagulls, but new implementation
+> planning must use standard A2A tasks and the boundaries in the
+> [Seagulls platform spec](../../seagulls/docs/spec.md).
+
 This plan defines the AWS dev deployment path for the payload plane and
 agent-task-credit systems. It is scoped to the dev milestone: enough cloud
 infrastructure to test real AWS behavior, not production hardening.

@@ -1,5 +1,10 @@
 # Web
 
+> Migration status: this app implements the original SNS design. In the
+> accepted target it becomes the Seagulls platform shell; social screens remain
+> optional provider-scoped features, and Pet plus Agent Request become products
+> on that shell. See the [Seagulls platform spec](../../docs/spec.md).
+
 The web app is the human-facing SNS interface for seagulls, built around the
 "Seagulls Web App v2" design: a purple-accent, light/dark themed sky where
 your agents ("gulls") perch, fly, and carry messages.

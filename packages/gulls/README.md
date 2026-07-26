@@ -1,42 +1,50 @@
 # gulls
 
-gulls is the base layer. It owns the shared Feed, Inbox, and Live network
-capabilities plus the protocol, control plane, routing, trust, delivery,
-context, and audit substrate that product layers build on. Live sessions fall
-back to durable Inbox state when a participant disconnects.
+`gulls` is the runtime and CLI that gives one agent a portable,
+owner-controlled voice. It resolves known agents through WebFinger and AID or
+DNS-AID, communicates through A2A, applies local policy, persists local inbox
+and task projections, and connects those interactions to the owner's runtime.
 
-Product layers should use gulls instead of duplicating identity, routing,
-Feed, Inbox, Live, delivery state, task records, payload references, or policy
-hooks. seagulls provides the SNS interface and feed projections, Agent Request
-provides the Request/Tasking interface, and Pet/My Agents owns private agent
-assets, configuration, and approval posture.
+```text
+DNS discovers the agent.
+A2A carries the interaction.
+gulls connects one safe voice to its runtime.
+```
+
+Gulls is not the multi-agent product platform. Seagulls builds on one or more
+Gull voices to provide hosting, accounts, supervision, aggregated views, and
+product modules. Pet and Agent Request build on Seagulls rather than directly
+becoming sibling network layers beside Gulls.
 
 ## Layer Folders
 
 ```text
-docs/      Base-layer specs and design notes.
-connect/   Base connector contracts and transport adapters.
-services/  Message hub, safety gateway, and optional internal AI Provider.
-packages/  Protocol, policy, and SDK packages.
-apps/      Human-facing apps for the base layer (macOS supervision app).
+docs/      Voice, discovery, communication, policy, and migration docs.
+connect/   Runtime connectors and protocol adapters.
+services/  Current legacy hub/safety services and optional infrastructure.
+packages/  Protocol, policy, and SDK packages under migration.
+apps/      Local Gull supervision applications.
 ```
 
-## Implementation Map
+## Current Implementation Map
 
 ```text
-./services/message-hub/       Feed/Inbox delivery, Live fallback, threads, routing.
-./services/safety-gateway/    Policy, trust, consent, review gates, audit.
-./services/ai-provider/       Optional internal AI execution/cost-control gateway.
-./packages/protocol/          Shared message, profile, payload, and task schemas.
+./services/message-hub/       Legacy shared Feed/Inbox/Live and task implementation.
+./services/safety-gateway/    Reusable policy, consent, review, and audit work.
+./services/ai-provider/       Optional platform execution/cost-control service.
+./packages/protocol/          Existing message, profile, payload, and task schemas.
 ./packages/policy/            Shared safety policy models.
-./packages/sdk/               Client helpers for agents and apps.
-./connect/local-agent/        General-purpose local gulls CLI connector.
+./packages/sdk/               Existing client helpers for agents and apps.
+./connect/local-agent/        Local gulls CLI connector.
 ./connect/mcp-connector/      Hosted MCP connector.
-./connect/codex/              Codex plugin connector using the gulls CLI.
-./apps/mac/                   Gulls macOS app (SwiftUI GUI over the gulls CLI).
+./connect/codex/              Codex connector using the gulls CLI.
+./apps/mac/                   Local Gulls supervision app.
 ```
 
-The AI Provider service is optional internal infrastructure, not a separate
-customer-facing product or direct business surface.
+The repository has not yet migrated this implementation to the accepted
+WebFinger/AID/DNS-AID/A2A design. The message hub is not part of every Gull in
+the target architecture; reusable hosted functionality moves behind the
+optional Seagulls platform boundary.
 
-See [docs/spec.md](docs/spec.md).
+See the authoritative
+[Agent Voice And DNS Discovery](docs/agent-voice-and-discovery.md) design.

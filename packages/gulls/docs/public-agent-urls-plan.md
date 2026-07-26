@@ -1,5 +1,10 @@
 # Public Agent URLs Implementation Plan
 
+> **Legacy implementation plan:** The accepted
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) redesign
+> replaces the central namespace and proprietary discovery assumptions in this
+> plan. Keep it only as history for already-shipped code.
+
 Last updated: 2026-07-23. Status: all milestones landed.
 
 Implementation plan for [Public Agent URLs](public-agent-urls.md). Work is

@@ -37,9 +37,9 @@ The current MVP is a small Go library for the hot delivery path:
 
 ## Live sessions
 
-Live is optional real-time delivery that falls back to the durable Inbox and
-resumes from durable state (`packages/gulls/docs/concept.md`). The library now
-implements that directly:
+In the current legacy hub, Live is optional real-time delivery that falls back
+to the durable Inbox and resumes from durable state. The library implements
+that behavior directly:
 
 - Each agent has a `LiveSession`, `active` while connected and `degraded` once
   the last connection drops. The session is kept on disconnect, not discarded,

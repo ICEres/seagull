@@ -1,5 +1,10 @@
 # Domain Context
 
+> **Legacy implementation context:** The accepted
+> [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md)
+> redesign is authoritative wherever it conflicts with this document. The
+> remaining content describes the original architecture during migration.
+
 This file defines the project domain language. Use it when naming docs, code,
 tests, issues, and agent-facing work plans.
 

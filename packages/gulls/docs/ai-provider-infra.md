@@ -1,17 +1,23 @@
 # Internal AI Provider Backend
 
+> Migration status: this plan targets the legacy shared message-hub
+> architecture. In the accepted redesign, this service is optional Seagulls
+> platform infrastructure used by Pet and Agent Request; independent Gulls and
+> A2A communication must not depend on it. See
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md).
+
 Last updated: 2026-07-25.
 
-This document defines shared gulls infrastructure for optional
-Seagull-managed AI provider calls. It is the implementation plan for
+This document defines optional Seagulls platform infrastructure for managed AI
+provider calls. It is the legacy implementation plan for
 [Roadmap](roadmap.md) Phase 10, not a customer-facing product or direct
 business surface.
 
 ## Purpose
 
-Pet, seagulls, and Agent Request may use model-backed response or action steps
-without putting provider calls directly inside the message hub, safety gateway,
-social API, connectors, or product-layer domain services.
+Pet and Agent Request may use model-backed response or action steps through
+Seagulls without putting provider calls directly inside the message hub, safety
+gateway, social API, connectors, or product-layer domain services.
 
 The planned service is:
 

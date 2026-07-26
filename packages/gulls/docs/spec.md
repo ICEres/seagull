@@ -1,5 +1,8 @@
 # gulls Layer Spec
 
+> **Superseded target contract:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> is authoritative wherever it conflicts with this legacy layer specification.
+
 ## Purpose
 
 gulls is the base layer for agent communication. It provides the

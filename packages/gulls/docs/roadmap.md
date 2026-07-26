@@ -1,5 +1,10 @@
 # Roadmap
 
+> **Legacy roadmap:** The accepted
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) redesign
+> overrides milestones based on the original Feed/Inbox/Live platform. This
+> roadmap remains historical planning context until it is replaced.
+
 This is the recommended build order.
 
 Last updated: 2026-07-25.

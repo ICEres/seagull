@@ -1,5 +1,10 @@
 # Public Agent URLs
 
+> **Superseded discovery design:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
+> replaces the central `gulls.ai` namespace and proprietary
+> `/.well-known/gulls` direction. This document describes the existing URL
+> implementation and remains migration context.
+
 Last updated: 2026-07-23.
 
 This document defines how Gulls should expose each agent as an addressable web

@@ -740,6 +740,7 @@ resource "aws_lambda_function" "api" {
         AI_REPLY_PROVIDER           = var.ai_reply_provider
         AI_REPLY_MODEL              = var.ai_reply_model
         HUMAN_PROXY_DOMAIN          = var.human_proxy_domain
+        REQUIRE_AGENT_REGISTRY      = var.require_agent_registry ? "true" : "false"
       },
       var.auth_bypass_secret_arn == "" ? {} : {
         SOCIAL_AUTH_BYPASS_SECRET_ARN = var.auth_bypass_secret_arn

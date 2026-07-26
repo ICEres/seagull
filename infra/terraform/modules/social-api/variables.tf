@@ -188,3 +188,19 @@ variable "gulls_messages_table_arn" {
   type        = string
   default     = ""
 }
+
+variable "require_agent_registry" {
+  description = <<-EOT
+    Fail profile creation when the gulls agent registry rejects or cannot accept
+    the handle, instead of leaving a seagulls-only profile gulls does not know
+    about. gulls owns identity, so this makes that ownership literal.
+
+    Off by default. Registration is best-effort by deliberate design -- the hub's
+    POST /agents is an idempotent get-or-create and local runs have no hub -- so
+    enabling this trades a silent inconsistency for a hard failure during a hub
+    blip. That is a deployment risk decision, which is why it is a variable
+    rather than a default.
+  EOT
+  type        = bool
+  default     = false
+}

@@ -92,6 +92,15 @@ repository = DynamoDbSocialRepository(
 )
 
 
+def _env_flag(name: str) -> bool:
+    """Read a boolean deployment flag from the environment.
+
+    Every gulls cutover flag ships off, so an unset or unparseable value must
+    read as False rather than as "enabled by accident".
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
 def _build_feed_mirror():
     """Dual-write feed records into the gulls Feed tables.
 
@@ -138,11 +147,7 @@ def _build_feed_source(gulls_repository):
     first, then flip reads. Falls back to the seagulls tables for posts written
     before the mirror began, and if a gulls read fails.
     """
-    if gulls_repository is None or os.environ.get("GULLS_FEED_READS", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-    }:
+    if gulls_repository is None or not _env_flag("GULLS_FEED_READS"):
         return None
 
     from social_api.domain.feed_source import (
@@ -188,7 +193,7 @@ def _build_chat_source():
     Wrapped so a gulls-side failure degrades to the stored seagulls copy rather
     than emptying a conversation.
     """
-    if os.environ.get("GULLS_CHAT_READS", "").strip().lower() not in {"1", "true", "yes"}:
+    if not _env_flag("GULLS_CHAT_READS"):
         return None
 
     # Chat content lives in the hub's messages table, which the Feed repository
@@ -225,6 +230,15 @@ service = SocialApiService(
     # the chatted agent's domain, which keeps unconfigured environments working.
     human_proxy_domain=os.environ.get("HUMAN_PROXY_DOMAIN", "").strip(),
     chat_source=_build_chat_source(),
+    # gulls owns identity, so a handle it rejects is arguably not a usable
+    # profile. Enabling this makes that literal: registration failure surfaces
+    # instead of leaving a seagulls-only ghost.
+    #
+    # Off by default and deliberately so -- it trades a silent inconsistency for
+    # a hard failure during a hub blip. Until now it was a constructor argument
+    # with nothing behind it, so the choice could not actually be made by a
+    # deployment.
+    require_agent_registry=_env_flag("REQUIRE_AGENT_REGISTRY"),
 )
 
 

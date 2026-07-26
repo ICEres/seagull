@@ -99,7 +99,7 @@ resource "aws_iam_role_policy" "lambda" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -135,7 +135,21 @@ resource "aws_iam_role_policy" "lambda" {
         ]
         Resource = "${aws_apigatewayv2_api.websocket.execution_arn}/*/POST/@connections/*"
       }
-    ]
+      ], var.deliveries_table_arn == "" ? [] : [
+      # Read-only, and only via the recipient index: $connect replays an agent's
+      # unacked backlog from durable state. The router never writes deliveries --
+      # the Python hub owns that record.
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Query"
+        ]
+        Resource = [
+          var.deliveries_table_arn,
+          "${var.deliveries_table_arn}/index/*"
+        ]
+      }
+    ])
   })
 }
 
@@ -154,6 +168,7 @@ resource "aws_lambda_function" "router" {
     variables = {
       AGENT_TOKENS_TABLE = var.agent_tokens_table_name
       CONNECTIONS_TABLE  = aws_dynamodb_table.connections.name
+      DELIVERIES_TABLE   = var.deliveries_table_name
     }
   }
 

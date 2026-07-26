@@ -57,13 +57,27 @@ durable records; the session only tracks how far the stream advanced and where
 to pick it up. `seagull_protocol.events.LiveSession` is the matching protocol
 shape.
 
-Still outstanding: policy evaluation on session join, and wiring `Resume` into
-the deployed `$connect` handler so a reconnecting client is replayed
-automatically rather than asking for the backlog itself.
+`ResumeFrom(store, agentID, after)` is the durable counterpart. `Router` holds
+deliveries in memory and the deployed Lambda never constructs a `Router`, so
+`Resume` alone could not answer for a real reconnect. `ResumeFrom` runs the same
+filter and ordering against a `DeliveryStore`, which the Lambda backs with the
+hub's deliveries table.
+
+The two differ in what orders the stream. `Router` assigns each recipient a
+`Sequence`; the stored deliveries carry no such column, so `ResumeFrom` orders by
+`created_at` and takes a timestamp cursor -- which is what the
+`recipient-created-at-index` already ranges on.
+
+Still outstanding: policy evaluation on session join.
 
 The deployed Lambda adapter currently owns:
 
-- `$connect`: store `connection_id -> agent_id` in DynamoDB.
+- `$connect`: store `connection_id -> agent_id` in DynamoDB, then replay the
+  agent's unacked backlog over the new socket and report `resumed_count`. A
+  `resume_after` query parameter resumes from a known point; without one the
+  whole outstanding backlog is replayed, capped at 100. Replay is best effort --
+  a failure never refuses a connection the agent is entitled to, and the backlog
+  stays durable either way.
 - `$disconnect`: remove the connection row.
 - `$default`: route a JSON payload to connected recipient agents through API
   Gateway WebSocket management calls.

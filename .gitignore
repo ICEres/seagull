@@ -39,3 +39,4 @@ bin/
 *.xcodeproj
 xcuserdata/
 DerivedData/
+packages/gulls/services/message-hub/router/cmd/lambda/lambda

@@ -28,12 +28,92 @@ import (
 
 const connectionTTL = 24 * time.Hour
 
+// resumeBacklogLimit caps a replay. An agent away for a long time could
+// otherwise be handed an unbounded backlog on reconnect, which would blow the
+// Lambda's time budget and flood the socket. Anything beyond this stays in the
+// durable Inbox for the agent to pull.
+const resumeBacklogLimit = 100
+
 type handler struct {
 	ddb              *dynamodb.Client
 	awsConfig        aws.Config
 	connectionsTable string
 	agentTokensTable string
+	deliveriesTable  string
 	now              func() time.Time
+}
+
+// deliveryRecord is the subset of a stored delivery a resume needs. The hub
+// writes the full record from Python; this reads only what a replay carries.
+type deliveryRecord struct {
+	DeliveryID       string `dynamodbav:"delivery_id"`
+	MessageID        string `dynamodbav:"message_id"`
+	ThreadID         string `dynamodbav:"thread_id"`
+	SenderAgentID    string `dynamodbav:"sender_agent_id"`
+	RecipientAgentID string `dynamodbav:"recipient_agent_id"`
+	Status           string `dynamodbav:"status"`
+	CreatedAt        string `dynamodbav:"created_at"`
+}
+
+// dynamoDeliveryStore backs routecore.DeliveryStore with the hub's deliveries
+// table, querying the recipient-created-at-index the table already carries.
+type dynamoDeliveryStore struct {
+	ctx   context.Context
+	ddb   *dynamodb.Client
+	table string
+}
+
+func (s dynamoDeliveryStore) DeliveriesForAgent(agentID string, after time.Time) ([]routecore.Delivery, error) {
+	if s.table == "" {
+		return nil, errors.New("deliveries table is not configured")
+	}
+
+	keyCondition := "recipient_agent_id = :agent"
+	values := map[string]types.AttributeValue{
+		":agent": &types.AttributeValueMemberS{Value: agentID},
+	}
+	// Range on created_at so the index does the filtering rather than a scan.
+	if !after.IsZero() {
+		keyCondition += " AND created_at > :after"
+		values[":after"] = &types.AttributeValueMemberS{
+			Value: after.UTC().Format(time.RFC3339Nano),
+		}
+	}
+
+	out, err := s.ddb.Query(s.ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.table),
+		IndexName:                 aws.String("recipient-created-at-index"),
+		KeyConditionExpression:    aws.String(keyCondition),
+		ExpressionAttributeValues: values,
+		Limit:                     aws.Int32(resumeBacklogLimit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	deliveries := make([]routecore.Delivery, 0, len(out.Items))
+	for _, item := range out.Items {
+		var record deliveryRecord
+		if err := attributevalue.UnmarshalMap(item, &record); err != nil {
+			return nil, err
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
+		if err != nil {
+			// A row we cannot place in the stream is worse than one we skip:
+			// replaying it out of order would corrupt the agent's view.
+			continue
+		}
+		deliveries = append(deliveries, routecore.Delivery{
+			DeliveryID:       record.DeliveryID,
+			MessageID:        record.MessageID,
+			ThreadID:         record.ThreadID,
+			SenderAgentID:    record.SenderAgentID,
+			RecipientAgentID: record.RecipientAgentID,
+			Status:           routecore.DeliveryStatus(record.Status),
+			CreatedAt:        createdAt,
+		})
+	}
+	return deliveries, nil
 }
 
 type connectionRecord struct {
@@ -74,6 +154,10 @@ func main() {
 		panic("CONNECTIONS_TABLE is required")
 	}
 	agentTokensTable := os.Getenv("AGENT_TOKENS_TABLE")
+	// Optional: without it $connect still authenticates and registers, it just
+	// cannot replay. Resume degrades to "the agent asks for its own backlog",
+	// which is the behaviour that existed before.
+	deliveriesTable := os.Getenv("DELIVERIES_TABLE")
 	if agentTokensTable == "" {
 		panic("AGENT_TOKENS_TABLE is required")
 	}
@@ -82,6 +166,7 @@ func main() {
 		ddb:              dynamodb.NewFromConfig(cfg),
 		awsConfig:        cfg,
 		connectionsTable: tableName,
+		deliveriesTable:  deliveriesTable,
 		agentTokensTable: agentTokensTable,
 		now:              time.Now,
 	}
@@ -155,11 +240,83 @@ func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocket
 		return serverError(err)
 	}
 
+	// Replay what the agent missed while it was away. This is the Live fallback
+	// closing: delivery fell back to the durable Inbox, and the reconnect
+	// resumes from it rather than starting over.
+	//
+	// Best effort on purpose -- a replay failure must not refuse a connection
+	// the agent is entitled to. The backlog stays durable either way, so the
+	// worst case is the pre-existing behaviour of the agent pulling it itself.
+	resumed := h.replayBacklog(ctx, request, agentID, connectionID)
+
 	return jsonResponse(http.StatusOK, map[string]any{
 		"ok":            true,
 		"connection_id": connectionID,
 		"agent_id":      agentID,
+		"resumed_count": resumed,
 	})
+}
+
+// replayBacklog pushes an agent's unacked deliveries to a fresh connection and
+// returns how many were sent.
+func (h handler) replayBacklog(
+	ctx context.Context,
+	request events.APIGatewayWebsocketProxyRequest,
+	agentID string,
+	connectionID string,
+) int {
+	if h.deliveriesTable == "" {
+		return 0
+	}
+
+	// A client that knows where it left off resumes from there; one that does
+	// not gets the whole outstanding backlog.
+	after := time.Time{}
+	if raw := strings.TrimSpace(request.QueryStringParameters["resume_after"]); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			// An unparseable cursor must not silently replay everything: that
+			// would flood a client that believed it was asking for a little.
+			return 0
+		}
+		after = parsed
+	}
+
+	store := dynamoDeliveryStore{ctx: ctx, ddb: h.ddb, table: h.deliveriesTable}
+	result, err := routecore.ResumeFrom(store, agentID, after)
+	if err != nil {
+		return 0
+	}
+	if len(result.Missed) == 0 {
+		return 0
+	}
+
+	client := h.managementClient(request)
+	sent := 0
+	for _, delivery := range result.Missed {
+		payload, err := json.Marshal(map[string]any{
+			"type":               "resume",
+			"delivery_id":        delivery.DeliveryID,
+			"message_id":         delivery.MessageID,
+			"thread_id":          delivery.ThreadID,
+			"sender_agent_id":    delivery.SenderAgentID,
+			"recipient_agent_id": delivery.RecipientAgentID,
+			"status":             string(delivery.Status),
+			"created_at":         delivery.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			continue
+		}
+		if _, err := client.PostToConnection(ctx, &apigatewaymanagementapi.PostToConnectionInput{
+			ConnectionId: aws.String(connectionID),
+			Data:         payload,
+		}); err != nil {
+			// The socket went away mid-replay; the rest stays durable.
+			break
+		}
+		sent++
+	}
+	return sent
 }
 
 func (h handler) requireAgentToken(ctx context.Context, request events.APIGatewayWebsocketProxyRequest, requiredScope string) (agentTokenRecord, *events.APIGatewayProxyResponse, error) {

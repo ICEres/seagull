@@ -14,6 +14,7 @@ the mirror began exist only in the seagulls tables.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest import TestCase
 
 from message_hub.storage.memory import InMemoryMessageHubRepository
@@ -161,6 +162,86 @@ class FeedReadCutoverTest(TestCase):
             feed = api.read_home_feed(principal=principal)["items"]
 
         self.assertEqual([post["post_id"]], [item["post_id"] for item in feed])
+
+    def test_listing_merges_both_stores_mid_migration(self) -> None:
+        """A partially-migrated store must not truncate to the migrated tail.
+
+        This is the state every deployment passes through: gulls holds
+        everything written since the dual-write began, seagulls holds
+        everything older. Returning whichever store answered first would drop
+        the other half of the feed.
+        """
+        from social_api.domain.models import PostRecord
+
+        class StubSource:
+            def __init__(self, posts):
+                self._posts = posts
+
+            def get_post(self, post_id):
+                return next((p for p in self._posts if p.post_id == post_id), None)
+
+            def list_posts(self, *, limit: int = 50):
+                return tuple(self._posts[:limit])
+
+        def post(post_id, seconds, text):
+            return PostRecord(
+                post_id=post_id,
+                author_agent_id="a1",
+                content=text,
+                text=text,
+                created_at=datetime(2025, 1, 1, tzinfo=timezone.utc)
+                + timedelta(seconds=seconds),
+            )
+
+        gulls_only = post("new", 10, "after the mirror")
+        seagulls_only = post("old", 0, "before the mirror")
+
+        source = FallbackFeedSource(StubSource([gulls_only]), StubSource([seagulls_only]))
+
+        listed = source.list_posts()
+
+        self.assertEqual(["new", "old"], [p.post_id for p in listed])
+
+    def test_listing_prefers_gulls_on_id_collision(self) -> None:
+        """Both stores hold a mirrored post; gulls is the source of truth."""
+        from social_api.domain.models import PostRecord
+
+        class StubSource:
+            def __init__(self, posts):
+                self._posts = posts
+
+            def get_post(self, post_id):
+                return next((p for p in self._posts if p.post_id == post_id), None)
+
+            def list_posts(self, *, limit: int = 50):
+                return tuple(self._posts[:limit])
+
+        created = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        base = dict(post_id="p1", author_agent_id="a1", created_at=created)
+
+        source = FallbackFeedSource(
+            StubSource([PostRecord(content="gulls", text="gulls", **base)]),
+            StubSource([PostRecord(content="stale", text="stale", **base)]),
+        )
+
+        listed = source.list_posts()
+
+        self.assertEqual(1, len(listed))
+        self.assertEqual("gulls", listed[0].text)
+
+    def test_an_empty_gulls_is_a_real_answer_not_a_failure(self) -> None:
+        """Distinct from a gulls *failure*, which does fall back."""
+
+        class EmptySource:
+            def get_post(self, post_id):
+                return None
+
+            def list_posts(self, *, limit: int = 50):
+                return ()
+
+        source = FallbackFeedSource(EmptySource(), EmptySource())
+
+        self.assertEqual((), source.list_posts())
 
     def test_without_a_feed_source_reads_stay_on_seagulls(self) -> None:
         # The default must not change under anyone's feet.

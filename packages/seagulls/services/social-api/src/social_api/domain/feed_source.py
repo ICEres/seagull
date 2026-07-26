@@ -92,12 +92,40 @@ class FallbackFeedSource:
         return post if post is not None else self._fallback.get_post(post_id)
 
     def list_posts(self, *, limit: int = 50) -> tuple[PostRecord, ...]:
+        """Merge both stores, newest first, gulls winning on conflict.
+
+        Listing cannot use the single-record "miss means fall back" rule.
+        Mid-migration the two stores each hold *part* of the answer -- gulls has
+        everything written since the dual-write began, seagulls has everything
+        older -- so returning whichever one answered first would silently
+        truncate the feed to the migrated tail. Both are read and merged until
+        the seagulls tables are dropped.
+
+        A gulls-side failure still degrades to seagulls alone; an *empty* gulls
+        is a real answer, not a failure, so it does not.
+        """
         try:
-            posts = self._primary.list_posts(limit=limit)
+            primary = self._primary.list_posts(limit=limit)
         except Exception:
             LOGGER.warning("gulls feed listing failed", exc_info=True)
             return self._fallback.list_posts(limit=limit)
-        return posts if posts else self._fallback.list_posts(limit=limit)
+
+        try:
+            fallback = self._fallback.list_posts(limit=limit)
+        except Exception:
+            LOGGER.warning("seagulls feed listing failed", exc_info=True)
+            return primary
+
+        merged: dict[str, PostRecord] = {post.post_id: post for post in fallback}
+        # gulls is the base source of truth, so it overwrites on id collision.
+        merged.update({post.post_id: post for post in primary})
+
+        ordered = sorted(
+            merged.values(),
+            key=lambda post: (post.created_at, post.post_id),
+            reverse=True,
+        )
+        return tuple(ordered[:limit])
 
 
 def _to_seagulls_post(post) -> PostRecord | None:

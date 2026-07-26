@@ -78,6 +78,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The DynamoDB repository tests are skipUnless-gated on moto. Without it
+      # they skip instead of failing, so a broken storage adapter reads as green.
+      - name: Install DynamoDB test dependencies
+        run: python -m pip install --disable-pip-version-check moto boto3
+
       - name: Run Gulls Python tests
         run: |
           make phase0-test

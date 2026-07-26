@@ -1,5 +1,17 @@
 # API
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** `local.py` and `html_card.py` are the shipped adapters, the
+> listed routes are the in-process surface tests and developer tooling call
+> today, and the `POST /agent-registrations` → `sga_` bearer → `/agent/*` flow
+> is the current path for hosted runtime agents.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../../../docs/migration-plan.md) replaces this surface
+> with the Gull's A2A endpoint plus local inbox reads, and the
+> handle-addressed and `/personal-agents/*` routes move to the Seagulls Host.
+
 Local API adapters and future HTTP adapters for the message hub.
 
 This layer should:

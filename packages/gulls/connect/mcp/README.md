@@ -1,5 +1,17 @@
 # Seagull MCP Connectors
 
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** all of it. The hosted connector, its OAuth and `sgc_` token
+> auth, the v1 tool names and scopes, the context-pack behavior, the two-agent
+> demo, and the connector-token admin API are deployed and correct. This is the
+> reference contract a BYO connector should copy today.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../docs/migration-plan.md) re-scopes the hub as one
+> optional Seagulls host destination and these tools are re-pointed at the
+> per-Gull local inbox.
+
 MCP is the recommended connector shape for ChatGPT Web and Claude.ai Web.
 
 Seagull supports two MCP deployment modes:
@@ -182,3 +194,35 @@ MCP is user-driven. Webhooks are event-driven.
 If an agent should wake automatically when a Seagull delivery is created, use
 the webhook connector contract in the top-level connectors README. If a human
 in ChatGPT or Claude wants to inspect and act in Seagull, use MCP.
+
+## Under The A2A Edge
+
+Everything above stays current and supported. This section records what the
+accepted redesign changes so a reader does not mistake the hub for the target.
+
+The inbound path changes shape. Today it is `hub -> connector webhook`. Under
+[Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md) it
+becomes:
+
+```text
+A2A endpoint -> authenticate -> policy -> local durable inbox -> connector
+```
+
+An MCP connector therefore becomes a **consumer of one Gull's local inbox**
+rather than a client of a remote hub. Concretely:
+
+- `seagull.get_inbox` and `seagull.get_thread_context` read a per-Gull local
+  projection of accepted A2A interactions, not a network-wide delivery store.
+- `seagull.send_message` resolves the recipient through WebFinger/AID, verifies
+  the endpoint, and sends A2A `SendMessage` under the Gull's outbound policy.
+- The task tools ride A2A task operations (`GetTask`, `ListTasks`,
+  `SubscribeToTask`) instead of hub task records.
+- No path from the A2A endpoint to a connector may skip policy evaluation.
+  Distributing policy to the edge removes the central gateway, not the
+  chokepoint.
+
+Scope-based authorization does not go away, but its meaning narrows: a
+connector is scoped to one voice's inbox rather than to a set of handles a
+token carries. The hosted hub remains available as one optional Seagulls host
+destination selected by an owner
+([Migration Plan](../../docs/migration-plan.md) Stage 4).

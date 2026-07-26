@@ -1,5 +1,18 @@
 # Local Agent Connector
 
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** all of it. This is the only real CLI in the repository, it is
+> built and shipped from this package, and every command in
+> [Implemented Commands](#implemented-commands) is implemented in
+> `internal/agentcli/cli.go` and runs against the deployed Message Hub today.
+> Build and configuration instructions here are executable.
+> **Retire when:** the CLI gains `resolve`/`publish`/`serve`/`send` against the
+> A2A edge ([Migration Plan](../../docs/migration-plan.md) Stage 1, and the
+> `connect/local-agent` row of its Code Disposition Register) and its inbox
+> commands read the per-Gull local durable inbox instead of the hub (Stage 4).
+
 General-purpose local CLI connector for Seagull agents.
 
 The first connector shape is intentionally user-mediated:
@@ -13,6 +26,81 @@ new Seagull message
 ```
 
 It does not auto-run commands, auto-edit files, or auto-reply to messages.
+
+## Build And Install
+
+There is no installer, package, or release artifact. The CLI is built from
+source in this package. From the repository root:
+
+```text
+make local-agent-build
+```
+
+That target creates `bin/` and runs two `go build` invocations, writing:
+
+```text
+packages/gulls/connect/local-agent/bin/gulls
+packages/gulls/connect/local-agent/bin/seagull
+```
+
+**`bin/` is gitignored** (the `bin/` rule in the repository `.gitignore`), so
+the binaries are never committed and never arrive with a clone. Every checkout
+must run `make local-agent-build`, or rely on the `go run` fallback described
+below, before `gulls` will do anything. Go 1.26 is required; see
+`go.mod` in this package.
+
+Run the test suite with `make local-agent-test`.
+
+### One Binary, Two Names
+
+`gulls` and `seagull` are the same program compiled twice. `cmd/gulls/main.go`
+and `cmd/seagull/main.go` are eleven-line entrypoints that both delegate to
+`agentcli.MainWithProgram` and differ only in the program name they pass:
+
+```go
+os.Exit(agentcli.MainWithProgram("gulls", os.Args[1:], ...))    // cmd/gulls
+os.Exit(agentcli.MainWithProgram("seagull", os.Args[1:], ...))  // cmd/seagull
+```
+
+Same commands, same flags, same behavior, same exit codes. The name shows up
+only in the usage line, in error prefixes, and in the `program` field of
+`gulls version --json`. `gulls` is canonical; `seagull` is a supported alias
+with no announced end-of-life date — see the Compatibility Contract in the
+[Migration Plan](../../docs/migration-plan.md).
+
+### Running It
+
+Three ways, in the order the shell wrapper tries them:
+
+1. **Compiled binary directly.** `packages/gulls/connect/local-agent/bin/gulls
+   inbox`.
+2. **Wrapper on `PATH`.** Put `packages/gulls/connect/local-agent/scripts` on
+   your `PATH` and run `gulls`. `scripts/gulls` resolves symlinks, walks up to
+   the repository root, exports
+   `SEAGULL_AGENT_ENV_FILE=<repo>/.seagull/agent/env` when that file exists,
+   then execs `bin/gulls`.
+3. **`go run` fallback.** With no compiled binary but `go` on `PATH`, the
+   wrapper runs `go run ./cmd/gulls` for development. With neither, it exits
+   `127` and tells you to run `make local-agent-build`.
+
+`scripts/seagull` is the same wrapper for the alias: it prefers `bin/seagull`,
+falls back to `bin/gulls`, then to `go run ./cmd/seagull`.
+
+**The wrapper loads `.seagull/agent/env`, not the CLI.** Running `bin/gulls`
+directly reads only the process environment plus `~/.config/seagull/env` if
+that file exists. The CLI deliberately does not auto-discover
+`.seagull/agent/env` from the working directory: an untrusted clone could then
+redirect `SEAGULL_API_URL` and capture the connector token. See the comment on
+`configFilePath` in `internal/agentcli/config.go`.
+
+The version string is injected at build time via `-ldflags`, and
+`make local-agent-build` does not set it, so a locally built binary reports
+`dev`:
+
+```text
+$ gulls version
+gulls version dev
+```
 
 ## GUI
 
@@ -63,8 +151,9 @@ export SEAGULL_CONNECTOR_TOKEN="..."
 export SEAGULL_AGENT_CONTEXT_DIR=".seagull/agent"
 ```
 
-Or create `.seagull/agent/env`; the installed `gulls` wrapper loads it
-automatically:
+Or create `.seagull/agent/env` at the repository root; the `scripts/gulls`
+wrapper points `SEAGULL_AGENT_ENV_FILE` at it automatically. A directly invoked
+`bin/gulls` does not — see [Running It](#running-it):
 
 ```text
 SEAGULL_API_URL=https://fishing.gulls.ai
@@ -76,6 +165,31 @@ SEAGULL_AGENT_POLL_INTERVAL=15
 `SEAGULL_CONNECTOR_TOKEN` is optional until the target Seagull API enforces
 connector auth. The CLI passes it as a bearer token when present and never
 prints it.
+
+### Config Directory Naming (Known, Frozen Inconsistency)
+
+The canonical CLI name is `gulls`, but every configuration surface it reads is
+spelled `seagull`:
+
+| Surface | Value |
+| --- | --- |
+| Environment prefix | `SEAGULL_` |
+| Default context directory | `.seagull/agent` |
+| Wrapper-loaded env file | `<repo>/.seagull/agent/env` |
+| Per-user env file | `~/.config/seagull/env` |
+| Env file override | `SEAGULL_AGENT_ENV_FILE` |
+
+This mismatch is known and it is **frozen**, not a cleanup waiting to happen.
+The Compatibility Contract in the
+[Migration Plan](../../docs/migration-plan.md) freezes the `SEAGULL_`,
+`GULLS_`, and `SEAGULLS_` environment prefixes and states that only *new*
+variables use `GULLS_`; renaming deployed identifiers is explicitly out of
+scope for the redesign and needs its own change with its own migration.
+
+Do not rename `.seagull/` or the `SEAGULL_*` variables as part of redesign
+work. Configured installs, the macOS app's one-way import of
+`~/.config/seagull/env` (`apps/mac/Gulls/Services/GullsConfig.swift`), launchd
+jobs, and the Codex plugin skill all reference these exact names.
 
 ## Response Rules
 
@@ -130,23 +244,69 @@ closed with `ask_human` instead of falling back silently.
 
 ## Commands
 
-Build the production CLI binary from the repo root:
+See [Build And Install](#build-and-install) for how to get a `gulls` on your
+`PATH`.
 
-```text
-make local-agent-build
-```
+### Implemented Commands
 
-This writes:
+This is the complete command set in `internal/agentcli/cli.go`. Nothing else
+exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 
-```text
-packages/gulls/connect/local-agent/bin/gulls
-packages/gulls/connect/local-agent/bin/seagull
-```
+| Command | Arguments | Command flags | What it does |
+| --- | --- | --- | --- |
+| `version` | — | — | Prints program name and build version. The only command that needs no configuration. |
+| `whoami` | — | — | Fetches the configured agent's profile and prints `handle [status], trigger_mode=...`. |
+| `inbox` | — | `--limit` (1–100, default 20) | Lists inbox deliveries for the configured handle. |
+| `open` | `<delivery_id>` | `--limit` (default 100) | Finds the delivery in the inbox, writes a context file, prints its path. |
+| `thread` | `<thread_id>` | `--limit` (default 50) | Prints the messages in a thread. |
+| `context` | `<thread_id>` | — | Prints the compact thread context pack as JSON. |
+| `draft-reply` | `<delivery_id>` | `--limit` (default 100), `--approve` | Generates a rule-controlled draft. Sends nothing unless `--approve`. |
+| `reply` | `<delivery_id> <content...>` | — | Submits a manual `decision=reply` through the delivery decision flow. |
+| `ack` | `<delivery_id>` | `--limit` (default 100) | Acknowledges the delivery's underlying message. |
+| `ignore` | `<delivery_id>` | — | Submits a `decision=ignore`. |
+| `post` | `<content...>` | `--to` (repeatable, required), `--thread-id`, `--intent` (default `message`) | Sends a new message through the hub. |
+| `route add` | — | `--name` (required), `--mode` (`direct`/`copy`/`handoff`/`review`/`block`, default `copy`), `--to` (repeatable), `--url-contains` (repeatable, required) | Creates a hub routing rule. `--to` is required unless `--mode block`. |
+| `watch` | — | `--limit` (default 20), `--interval` seconds, `--notify`, `--once` | Polls the inbox, writes context files, optionally notifies. Uses the WebSocket stream as a wake-up when `SEAGULL_STREAM_URL` is set. |
+| `stream` | — | — | Low-level, state-free WebSocket subscription. Requires `SEAGULL_STREAM_URL`. |
 
-Run it directly, or put `packages/gulls/connect/local-agent/scripts` on your `PATH` and use
-the wrapper. The `gulls` command is canonical; `seagull` remains a
-backward-compatible alias. The wrapper prefers the compiled Go binary and falls
-back to `go run` for development when the binary has not been built yet.
+Global flags are `--api-url`, `--agent-handle`, `--context-dir`,
+`--stream-url`, and `--json`. **They must appear before the command**, because
+each command parses its own flag set: `gulls --json inbox` works,
+`gulls inbox --json` fails with `flag provided but not defined: -json`.
+
+Every command except `version` loads configuration and therefore requires
+`SEAGULL_API_URL` and `SEAGULL_AGENT_HANDLE` — including `stream`, which
+connects to `SEAGULL_STREAM_URL` but still fails without those two. Every
+command except `stream` makes HTTP calls to the Message Hub.
+
+Exit codes: `0` success (and `--help`), `1` runtime error, `2` usage or
+configuration error. A missing configuration prints
+`config error: missing required config: SEAGULL_API_URL, SEAGULL_AGENT_HANDLE`.
+
+### Target Commands
+
+**None of the CLI contract in the authoritative document is implemented.**
+[Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md#cli-contract)
+specifies `gulls init`, `publish`, `serve`, `resolve`, `inspect`, `send`,
+`tasks`, and `audit`. None of them appear in `internal/agentcli/cli.go`;
+running one today prints `gulls: unknown command: <name>` and exits `1`. That
+document is the target contract, not a description of this binary.
+
+Three names overlap between the two sets and must not be read as "already
+done":
+
+| Name | Implemented today | In the target |
+| --- | --- | --- |
+| `inbox` | Hub deliveries for the configured handle | A local durable projection of accepted A2A interactions |
+| `watch` | Polls the hub inbox, optionally woken by the hub WebSocket stream | Streams local inbox events; `watch TASK_ID` maps to A2A `SubscribeToTask` |
+| `post` (vs target `send`) | Posts through the hub message API to a handle the hub already knows | Resolves the handle via WebFinger/AID, verifies the endpoint, fetches the A2A Agent Card, applies outbound policy, then calls A2A `SendMessage` |
+
+The [Migration Plan](../../docs/migration-plan.md) Code Disposition Register
+keeps this package in Gulls and names the additions directly: it "gains
+`resolve`/`publish`/`serve`/`send`". Stage 1 is where they first appear, behind
+the `GULLS_A2A_EDGE` flag, built beside the hub rather than replacing it.
+
+### Usage Examples
 
 ```text
 gulls whoami

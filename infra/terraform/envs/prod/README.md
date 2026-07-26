@@ -1,5 +1,9 @@
 # Prod Environment
 
+Status: Current.
+
+Last updated: 2026-06-22.
+
 Terraform root module for the production AWS environment.
 
 Do not build this before the dev environment is proven.

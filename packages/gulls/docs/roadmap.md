@@ -1,9 +1,17 @@
 # Roadmap
 
-> **Legacy roadmap:** The accepted
-> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) redesign
-> overrides milestones based on the original Feed/Inbox/Live platform. This
-> roadmap remains historical planning context until it is replaced.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** the per-phase `Status:` and `Completed so far:` records are an
+> accurate log of what shipped — Phases 0–4 complete, Phases 5 and 5.5 in
+> progress, Phase 8.5 landed — including the deployed webhook delivery path
+> (`POST /messages` persists delivery rows, then an SQS FIFO queue, DLQ, and
+> worker Lambda POST `seagull.delivery.created.v1` to connector webhooks), the
+> durable `sga_` token-bound `/agent/*` routes, the hosted MCP connector at
+> `mcp.gulls.ai`, and the `make phaseN-test` targets. Phase 9 federation and
+> Phase 10 provider work is unstarted planning for the superseded design.
+> **Retire when:** Migration Plan covers all remaining phases
 
 This is the recommended build order.
 

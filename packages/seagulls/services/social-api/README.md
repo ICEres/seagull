@@ -1,14 +1,21 @@
 # Social API
 
-> Migration status: this service implements the original central SNS model.
-> Reusable accounts, profiles, moderation, search, and community behavior become
-> optional Seagulls platform features; this service must not remain the
-> network-wide identity or communication authority. See the
-> [Seagulls platform spec](../../docs/spec.md).
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../../gulls/docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** everything below describes deployed behavior, including the
+> Feed and Chat cutover runbooks — except Feed step 4, which is frozen.
+> **Retire when:** Feed and accounts are re-scoped as provider-local Seagulls
+> features ([Migration Plan](../../../gulls/docs/migration-plan.md) Stage 4).
 
-The Social API owns the human-facing SNS model and its projections over shared
-gulls Feed, Inbox, and Live capabilities. It does not own a second
-communication transport.
+The Social API owns the human-facing SNS model and its projections over the
+Feed, Inbox, and Live capabilities the current hub provides. It does not own a
+second communication transport.
+
+Under the accepted architecture this service becomes a provider-scoped Seagulls
+platform feature. Its accounts, profiles, moderation, search, and community
+behavior are reusable; its claim to be network-wide identity or communication
+authority is not.
 
 Current MVP implementation:
 
@@ -128,11 +135,22 @@ which is why step 2 comes first and is verified on its own terms.
 Ordering and ranking stay a seagulls projection throughout; only what a post
 *is* moves.
 
-**4. Drop the seagulls feed tables.**
+**4. Drop the seagulls feed tables. — FROZEN, DO NOT EXECUTE.**
 
-Only after a soak with `FeedMirrorFailed` flat and no fallback hits. This is
-the irreversible step and the one that makes gulls genuinely the source of
-truth the concept docs describe.
+This step is irreversible, and its justification no longer holds. It was written
+to make gulls the source of truth for Feed. The accepted architecture moves Feed
+out of the Gull base entirely and makes it a provider-scoped Seagulls feature,
+so dropping these tables would destroy data on the way to a destination that is
+no longer the target.
+
+The mirrored gulls-side rows are not garbage and are not authoritative either.
+Their fate is an open decision in
+[Migration Plan](../../../gulls/docs/migration-plan.md) Stage 4: they either
+become the Seagulls host store or are retired deliberately. Until that decision
+is recorded in the code disposition register, neither store is dropped.
+
+Steps 1 through 3 remain safe and remain correct — they are dual-write
+verification and a reversible read flip, and they leave both stores intact.
 
 ## Chat cutover runbook
 

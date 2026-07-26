@@ -1,9 +1,14 @@
 # AWS Dev Payload And Task Systems Plan
 
-> Migration status: this plan targets the legacy shared message-hub design.
-> Agent Request remains a product built on Seagulls, but new implementation
-> planning must use standard A2A tasks and the boundaries in the
-> [Seagulls platform spec](../../seagulls/docs/spec.md).
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](../../gulls/docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** "Current Dev Baseline" accurately describes the deployed
+> `tasks`, `tool_requests`, and `task_results` tables. The proposed new
+> task-credit tables are **frozen** by
+> [Migration Plan](../../gulls/docs/migration-plan.md) Stage 0 and must not be
+> created.
+> **Retire when:** the task credit plane is re-scoped or dropped.
 
 This plan defines the AWS dev deployment path for the payload plane and
 agent-task-credit systems. It is scoped to the dev milestone: enough cloud

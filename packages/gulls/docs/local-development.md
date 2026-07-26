@@ -1,5 +1,9 @@
 # Local Development
 
+Status: Current.
+
+Last updated: 2026-07-27.
+
 Local development should feel like building a normal web app, not like deploying
 AWS every time.
 

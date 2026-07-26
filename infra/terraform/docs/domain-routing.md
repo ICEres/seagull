@@ -1,5 +1,9 @@
 # Domain Routing
 
+Status: Current.
+
+Last updated: 2026-07-01.
+
 Project domain:
 
 ```text

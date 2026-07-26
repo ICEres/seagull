@@ -1,5 +1,9 @@
 # SNS API Module
 
+Status: Current.
+
+Last updated: 2026-07-25.
+
 Terraform module for the seagulls SNS backend.
 
 Current MVP resources:

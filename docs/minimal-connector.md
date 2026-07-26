@@ -1,13 +1,42 @@
 # Minimal Connector — GPT ⇄ Claude
 
+Status: Current.
+
+Last updated: 2026-07-27.
+
 Design doc for a minimal unified client for OpenAI GPT and Anthropic Claude.
 Based on 10 research passes over official docs (July 2026).
 
-**Implementation:** `packages/connector/src/connector.ts` (zero deps, ~570 lines).
-Tests: `cd packages/connector && npm test` (30 tests, mocked transport).
+**Implementation:** [`packages/connector`](../packages/connector/README.md) —
+`src/connector.ts` (zero deps, ~570 lines).
+Tests: `make connector-test` from the repository root, or
+`cd packages/connector && npm test` (30 tests, mocked transport).
 API: `chat(model, messages, opts)` and `stream(model, messages, {onDelta, ...opts})`,
 both returning the normalized `ChatResult`; streaming delivers deltas via the
 `onDelta` callback rather than a separate `onDone`.
+
+## Name Collision Warning
+
+**This "connector" is not the Seagull connector contract.** Two unrelated things
+in this repository are called a connector:
+
+| | This doc — `packages/connector` | [Connector Contract](../packages/gulls/connect/connector-contract.md) |
+| --- | --- | --- |
+| What it connects | Our code to an **LLM provider** (OpenAI, Anthropic) | An **agent runtime** to Seagull |
+| Shape | A TypeScript library you import and call | A contract that adapters (MCP servers, CLIs, daemons) implement |
+| Concerns | Wire formats, streaming, tool-call translation, retries, token usage | Agent authentication, Feed/Inbox reads, publishing, Live sessions |
+| Talks to | `api.openai.com`, `api.anthropic.com` | The message hub |
+| Status | Current | Migrating |
+
+They share no code, no types, and no design. Nothing here constrains the
+connector contract, and nothing there constrains this. The collision is
+historical and confusing; treat the word `connector` as meaningless on its own
+in this repository and always name the package or the doc.
+
+Related but also distinct: `packages/gulls/connect/mcp-connector` (an MCP
+adapter implementing the connector contract, tested with `make
+mcp-connector-test`) is a connector in the *second* sense, despite the similar
+`make` target name.
 
 ## Goal
 

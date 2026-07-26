@@ -1,5 +1,9 @@
 # Internal AI Provider Terraform Module
 
+Status: Current.
+
+Last updated: 2026-07-25.
+
 AWS dev module for Seagull's optional shared internal AI Provider. It is
 execution, metering, quota, audit, and cost-control infrastructure—not a
 standalone customer product or direct business surface.

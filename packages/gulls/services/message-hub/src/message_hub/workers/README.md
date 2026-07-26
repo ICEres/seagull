@@ -1,5 +1,18 @@
 # Workers
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** the outbound webhook worker described below is deployed, and
+> so is the rule that it never marks a message `acked`. This directory holds no
+> code — the shipped implementation is
+> [`aws/agent_worker.py`](../../../aws/agent_worker.py), driven by an SQS FIFO
+> queue with a DLQ after the redrive limit.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../../../docs/migration-plan.md) moves fan-out and
+> retry to the Seagulls Host; the wake-up path a Gull keeps is A2A streaming and
+> task push-notification configuration, not this queue.
+
 Background workers for message hub async work.
 
 Future workers may handle:

@@ -1,5 +1,9 @@
 # Shared Module
 
+Status: Current.
+
+Last updated: 2026-06-22.
+
 Shared AWS infrastructure used by multiple Seagull systems.
 
 Possible resources:

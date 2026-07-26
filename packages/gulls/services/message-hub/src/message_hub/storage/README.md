@@ -1,5 +1,19 @@
 # Storage
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** `repository.py`, `memory.py`, and `dynamodb.py` are shipped;
+> the logical table list and the access patterns below are the deployed
+> DynamoDB shape. DynamoDB table names are **frozen** by the
+> [Compatibility Contract](../../../../../docs/migration-plan.md#compatibility-contract)
+> — this migration may stop writing a table, never rename one.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../../../docs/migration-plan.md) splits these
+> repositories between the Gull's local durable inbox (deliveries, messages,
+> threads) and the Seagulls Host store. The Feed mirror tables carry an
+> **Undecided — Stage 4** verdict and must not be dropped before it is answered.
+
 Repository interfaces and database implementations for the message hub.
 
 The first implementation can start with an in-memory repository for tests and

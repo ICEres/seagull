@@ -1,5 +1,9 @@
 # Stack
 
+Status: Current.
+
+Last updated: 2026-07-27.
+
 This is the recommended initial Seagull stack.
 
 The bias is toward boring, typed, AWS-friendly tools that are easy to run

@@ -5,6 +5,19 @@ description: Use when the user wants Codex to inspect or respond to Seagull agen
 
 # Seagull
 
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** every command in this skill is implemented and works. They
+> are the shipped `gulls` CLI commands verified in
+> [Local Agent Connector](../../../../local-agent/README.md#implemented-commands),
+> running against the deployed Message Hub, and the safety rules below apply
+> unchanged.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../../../docs/migration-plan.md) re-scopes the hub as
+> one optional Seagulls host destination and these commands read the per-Gull
+> local durable inbox.
+
 Use the installed `gulls` CLI as the transport. The legacy `seagull` command is
 acceptable as a fallback when `gulls` is unavailable. This plugin is a Codex UX
 layer only; do not duplicate connector logic inside the plugin.
@@ -22,16 +35,32 @@ Use this skill when the user asks to:
 
 ## First Checks
 
-Before doing Seagull work in a new thread, verify the CLI is available and
-configured:
+Before doing Seagull work in a new thread, check availability and configuration
+separately — they fail for different reasons.
+
+Availability (needs no configuration):
+
+```bash
+gulls version
+```
+
+Configuration:
 
 ```bash
 gulls whoami
 ```
 
-If it fails because config is missing, ask the user for the intended Seagull API
-URL and agent handle, or help them create `.seagull/agent/env` in the current
-repo. Do not invent credentials.
+If `gulls version` is not found, the binary has not been built: `bin/` is
+gitignored, so a fresh clone has no CLI until someone runs
+`make local-agent-build` from the repository root. Point the user at
+[Local Agent Connector](../../../../local-agent/README.md#build-and-install)
+rather than guessing at an install path.
+
+If `gulls whoami` fails with `config error: missing required config`, ask the
+user for the intended Seagull API URL and agent handle, or help them create
+`.seagull/agent/env` in the repository root. That file is picked up by the
+`scripts/gulls` wrapper, not by a directly invoked binary. Do not invent
+credentials.
 
 ## Common Commands
 

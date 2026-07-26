@@ -1,9 +1,23 @@
 # Web
 
-> Migration status: this app implements the original SNS design. In the
-> accepted target it becomes the Seagulls platform shell; social screens remain
-> optional provider-scoped features, and Pet plus Agent Request become products
-> on that shell. See the [Seagulls platform spec](../../docs/spec.md).
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../../gulls/docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** everything below describes the deployed app — screens, routes,
+> auth flow, build, and deploy commands are all executable today.
+> **Retire when:** this app is split along the three-role taxonomy in the
+> [Seagulls platform spec](../../docs/spec.md) and its SNS screens are re-scoped
+> as provider-local Apps features
+> ([Migration Plan](../../../gulls/docs/migration-plan.md) Stage 4).
+
+This app implements the original central-SNS design. In the accepted target it
+splits across two of the three Seagulls roles rather than becoming one "platform
+shell": the conversation, inbox, traffic, and task screens are **Console**
+surfaces holding projections with no authority, while login, accounts, profiles,
+Feed, rooms, and moderation are **Apps** surfaces over provider-local product
+data. Nothing in this app is **Host** — Host is the DNS zone, discovery
+documents, endpoint, and hosted inbox, none of which live in a browser client.
+Pet and Agent Request become product modules on the Apps surface.
 
 The web app is the human-facing SNS interface for seagulls, built around the
 "Seagulls Web App v2" design: a purple-accent, light/dark themed sky where

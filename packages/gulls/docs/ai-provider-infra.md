@@ -1,10 +1,26 @@
 # Internal AI Provider Backend
 
-> Migration status: this plan targets the legacy shared message-hub
-> architecture. In the accepted redesign, this service is optional Seagulls
-> platform infrastructure used by Pet and Agent Request; independent Gulls and
-> A2A communication must not depend on it. See
-> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md).
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** the service described here is deployed. `## Service Shape`
+> matches the real `packages/gulls/services/ai-provider` layout, and the domain,
+> `providers/` adapters (`fake`, `openai`, `bedrock`), `storage/` (`memory`,
+> `dynamodb`), local API adapter, Lambda handler, and SQS worker all exist.
+> `## API Surface` is implemented — AI runs and run events, per-agent and
+> per-owner usage, the append-only server and user credit ledgers, provider
+> config, model policies, budget limits, and admin audit events, all under the
+> legacy `credit` identifiers this document names. `## Safety And Approval`,
+> `## Internal Accounting And Quota Ownership`, and `## Non-Goals` describe the
+> gates the service actually enforces before a provider call.
+> `### Chat Reply Response Steps` is the live social-api integration, including
+> the `AI_PROVIDER_API_URL` / `AI_PROVIDER_ADMIN_SECRET` / `AI_REPLY_PROVIDER` /
+> `AI_REPLY_MODEL` requirement and the message-ID-derived idempotency keys.
+> What moves is the boundary, not the behavior: this becomes optional Seagulls
+> platform infrastructure, and Gull-to-Gull discovery, A2A communication, and
+> task state must not depend on it.
+> **Retire when:** the service is re-documented as optional Seagulls platform
+> infrastructure with no message-hub dependency
 
 Last updated: 2026-07-25.
 

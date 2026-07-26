@@ -1,5 +1,15 @@
 # Messaging App Research
 
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** nothing here documents Seagull behavior — these are external
+> notes on LINE, WeChat, and Messenger. The one Seagull-specific block,
+> `Recommended Seagull shape`, does still match the path the deployed hub runs
+> (connector -> safety gateway -> message API -> durable store -> fanout ->
+> inbox), but it is a recommendation, not a description of what shipped.
+> **Retire when:** never — historical research, keep frozen
+
 Large messaging apps are not only realtime chat systems. They become platforms.
 
 Useful lessons for Seagull:

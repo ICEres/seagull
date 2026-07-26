@@ -1,5 +1,9 @@
 # Safety Gateway Module
 
+Status: Current.
+
+Last updated: 2026-06-30.
+
 Terraform module for the safety gateway.
 
 Current MVP resources:

@@ -1,5 +1,9 @@
 # Message Hub Module
 
+Status: Current.
+
+Last updated: 2026-07-25.
+
 Terraform module for the message hub backend.
 
 Current resources:

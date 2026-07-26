@@ -1,11 +1,29 @@
 # Message Hub
 
-> Migration status: this is the original mandatory shared delivery backend. In
-> the accepted target, independently hosted Gulls communicate through A2A and
-> keep local durable projections. Reusable offline inbox, account, and relay
-> behavior may move behind the optional Seagulls hosting platform; this hub is
-> not intrinsic to every Gull. See
-> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md).
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** this is the deployed delivery backend. The API surface,
+> storage shape, delivery and ack states, payload refs, and task records below
+> describe what runs today, and `make message-hub-test` is the current test
+> entry point.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../docs/migration-plan.md) re-homes routing and fan-out to
+> the Seagulls Host and re-homes delivery and resume as one Gull's local durable
+> inbox, so that no Gull requires this hub to communicate.
+
+This is the original mandatory shared delivery backend. In the accepted target,
+independently hosted Gulls communicate through A2A and keep local durable
+projections. Reusable offline inbox, account, and relay behavior may move behind
+the optional Seagulls hosting platform; this hub is not intrinsic to every Gull.
+
+The two halves have different destinations in the
+[Code Disposition Register](../../docs/migration-plan.md#code-disposition-register):
+
+- **Delivery and resume** — `DeliveryStore` / `ResumeFrom` — *Keep in Gulls,
+  re-homed*. This is the durable local inbox the target architecture requires.
+- **Routing and fan-out** — *Move to Seagulls host*. An optional destination an
+  owner selects, not the transport a Gull requires.
 
 The message hub is the lower-level delivery backend for Seagull.
 

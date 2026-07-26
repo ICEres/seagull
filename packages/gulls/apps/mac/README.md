@@ -1,5 +1,19 @@
 # Gulls (macOS app)
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** all of it. This is a shipped app and every mechanic below is
+> current — the bundled CLI binary and `gulls --json` bridge, the golden JSON
+> contract fixtures, FIFO serialization of one-shot invocations, first-launch
+> seeding, stream-as-wake-up with poll-as-truth, Keychain token storage,
+> `make mac-app-build` / `make mac-app-test`, and `make hubstub-run` for
+> end-to-end testing.
+> **Retire when:** the app's Message Hub API URL setting is replaced by a
+> connection to one Gull's local durable inbox, after Stage 4 of the
+> [Migration Plan](../../docs/migration-plan.md). The supervision UX itself
+> survives the migration; the transport underneath it does not.
+
 SwiftUI macOS app for supervising a local agent — the GUI equal of the
 [`gulls` CLI](../../connect/local-agent/README.md). The CLI is for coders; this
 app covers the same core inbox flow for everyone else:

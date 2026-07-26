@@ -1,5 +1,19 @@
 # AWS Lambda MVP
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** all of it. This adapter is deployed — the endpoint list, the
+> DynamoDB table list, the `sga_` bearer rule for `/agent/*` routes, and the
+> `MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES` /
+> `MESSAGE_HUB_LEGACY_ROUTE_SECRET` gate on handle-addressed routes are current
+> deployed behavior, and `agent_worker.py` is the shipped outbound webhook
+> worker.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../docs/migration-plan.md) moves hub routing and
+> fan-out to the Seagulls Host, so this adapter is served as a host destination
+> rather than as the Gull layer's delivery backend.
+
 Small Lambda app for the first deployed message hub MVP.
 
 It is intentionally dependency-free beyond `boto3`, which is available in the

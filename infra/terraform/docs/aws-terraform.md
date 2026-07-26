@@ -1,5 +1,9 @@
 # AWS And Terraform
 
+Status: Current.
+
+Last updated: 2026-07-25.
+
 Seagull should be deployable to AWS with Terraform, but the first Terraform work
 should stay modular and modest. The goal is a small production-shaped stack, not
 a complex platform.

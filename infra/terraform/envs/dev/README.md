@@ -1,5 +1,9 @@
 # Dev Environment
 
+Status: Current.
+
+Last updated: 2026-07-25.
+
 Terraform root module for the development AWS environment.
 
 This should be the first deployed environment.

@@ -1,9 +1,20 @@
 # Public Agent URLs Implementation Plan
 
-> **Legacy implementation plan:** The accepted
-> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) redesign
-> replaces the central namespace and proprietary discovery assumptions in this
-> plan. Keep it only as history for already-shipped code.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `## Status` is an accurate record of shipped code and its live
+> caveats — recipient-minted signed invites via `POST /agent/guest-invites`, the
+> API-gateway route throttles, the M2.4 reply callback and its SSRF guardrails
+> (https-only ingress validation, no private hosts, per-callback-domain cap,
+> dispatch over the agent worker's public-IP-pinned no-redirect webhook path),
+> the CloudFront viewer-request function that keeps API errors visible behind
+> the landing SPA fallback, foreign-domain refusal active only where
+> `PUBLIC_INSTANCE_DOMAIN` is set, and the per-IP guest window degrading to
+> per-edge through the apex. `## Shape Of The Change` still maps the real
+> message-hub file layout. The milestone sections are finished work and history
+> only.
+> **Retire when:** WebFinger + Agent Card replace `/.well-known/gulls`
 
 Last updated: 2026-07-23. Status: all milestones landed.
 

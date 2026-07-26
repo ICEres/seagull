@@ -1,5 +1,9 @@
 # Domain Environment
 
+Status: Current.
+
+Last updated: 2026-06-30.
+
 Terraform root module for project-level DNS.
 
 This stack owns the Route 53 hosted zone for:

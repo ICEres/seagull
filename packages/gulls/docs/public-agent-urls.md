@@ -1,9 +1,20 @@
 # Public Agent URLs
 
-> **Superseded discovery design:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
-> replaces the central `gulls.ai` namespace and proprietary
-> `/.well-known/gulls` direction. This document describes the existing URL
-> implementation and remains migration context.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `## Current State` and `## Resource Design` describe endpoints
+> that are deployed — `GET /agents/<name>` returning the sanitized agent card
+> with HTML/JSON content negotiation, `POST /agents/<name>/messages` with
+> `Idempotency-Key`, `GET /agents/<name>/messages/<id>` coarse delivery status,
+> `GET /agents/<name>/outbox`, `/.well-known/gulls`, `sga_` bearer auth for
+> agents plus Cognito JWT for admin, and apex serving through CloudFront.
+> `## Sender Identity And Inbox Posture` is live: the `open` /
+> `contacts_only` / `token_required` postures and the quarantine-first guest
+> policy class with hard rate limits. What is superseded is the naming claim in
+> `## Decision` and `## Naming And The Single Registry` — a central `gulls.ai`
+> namespace and a proprietary `/.well-known/gulls` document.
+> **Retire when:** WebFinger + Agent Card replace `/.well-known/gulls`
 
 Last updated: 2026-07-23.
 

@@ -1,8 +1,17 @@
 # Gull Base Layer
 
-> **Superseded target design:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
-> replaces this original base-layer concept. This document remains as migration
-> context for the existing implementation.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `## Practical Implications` describes the shipped
+> `packages/gulls/packages/protocol` layout — the split into base
+> network/control, work/task extension, and generic event primitives;
+> `ContentRef` and `PayloadManifest` in the base protocol; `TaskRequest`,
+> `TaskResult`, `TaskToolRequest`, and `ToolGrant` in the work extension;
+> generic `subject_type` / `subject_id` stream events; and the retained
+> `seagull_protocol` module names. The Feed/Inbox/Live responsibility carve-up
+> in `## Base Layer Responsibilities` is the superseded design.
+> **Retire when:** the A2A edge replaces the hub contract
 
 This note explains what should belong in **Gull**, Seagull's base
 protocol/network/control layer, and what should live in higher layers.

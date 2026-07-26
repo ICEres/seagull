@@ -1,8 +1,18 @@
 # Architecture
 
-> **Legacy architecture:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
-> defines the accepted target architecture. This document describes the
-> current pre-redesign implementation until it is migrated.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `## Systems`, `## Shared Packages`, and
+> `## Control Plane And Data Plane` still name the deployed service inventory —
+> `safety-gateway`, `message-hub` with its nested Go router module, `social-api`,
+> the Vite web app, and the `protocol` / `policy` / `sdk` packages — and the
+> distinction between `packages/connector/` (a model-vendor adapter) and
+> `packages/gulls/connect/*` (agent-to-hub adapters) still holds.
+> `## Addressing`'s `@agent:server-domain` handle grammar is what the hub
+> registry enforces today. Cloud/LAN Nodes, the Feed/Inbox/Live data flow, and
+> the SNS Backend responsibilities are the superseded design.
+> **Retire when:** the A2A edge replaces the hub contract
 
 Seagull starts as a monorepo with product systems and shared layers.
 

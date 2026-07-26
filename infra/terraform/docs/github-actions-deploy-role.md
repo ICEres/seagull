@@ -1,5 +1,39 @@
 # GitHub Actions Dev Deploy Role
 
+Status: Current.
+
+Last updated: 2026-07-27.
+
+## Contents
+
+Setup and reference:
+
+- [Trust Policy](#trust-policy) — the GitHub OIDC trust relationship for the
+  deploy role.
+- [GitHub Repository Configuration](#github-repository-configuration) — the
+  repository variables and secrets `CI Deploy` reads.
+- [Permission Contract](#permission-contract) — every AWS action the role needs,
+  by resource family. Keep this aligned with the Terraform modules.
+
+Runbooks — executable procedures:
+
+- [Deploy Runbook](#deploy-runbook) — how to authenticate, inspect state, and
+  run a dev deploy. **Start here for a normal deploy.**
+- [S3 Policy Repair](#s3-policy-repair) — when `Deploy dev` fails during refresh
+  with `AccessDenied` on bucket configuration reads.
+- [CloudWatch Alarm Policy Repair](#cloudwatch-alarm-policy-repair) — when
+  `Deploy dev` fails during apply with `AccessDenied` from
+  `CloudWatch: PutMetricAlarm`.
+- [Log Metric Filter Policy Repair](#log-metric-filter-policy-repair) — when
+  `Deploy dev` fails during apply with `AccessDenied` from
+  `CloudWatch Logs: PutMetricFilter`.
+
+Each repair runbook patches the role's inline policy in place with `aws iam
+put-role-policy` and ends with a verification query. They need an admin AWS
+profile, not the deploy role itself.
+
+## Overview
+
 The dev app stack assumes an AWS IAM role from GitHub Actions before Terraform
 can read remote state or manage AWS resources. That role is bootstrap
 infrastructure: it must exist before the `infra/terraform/envs/dev` stack can

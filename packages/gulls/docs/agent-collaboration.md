@@ -1,10 +1,19 @@
 # Agent Collaboration
 
-> Migration status: this document describes the original proprietary Seagull
-> collaboration model. In the accepted target, Gulls supplies one agent's local
-> voice and policy boundary, Seagulls supplies the optional multi-Gull platform,
-> and Agent Request supplies structured work over standard A2A messages and
-> tasks. See [Agent Voice And DNS Discovery](agent-voice-and-discovery.md).
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `## What Agents Share` still describes exactly what the hub's
+> `sanitize_public_profile_value` strips before a profile leaves the instance —
+> private MCP server URLs, credentials, local callback URLs, and raw tool
+> handles — and the delegated-execution-by-default rule in `## Decision` is a
+> boundary the redesign keeps rather than replaces. The `TaskRequest` /
+> `TaskResult` / `TaskToolRequest` / `ToolGrant` shapes in
+> `## Task And Context Primitives` and `## Scoped Tool Grants` exist as protocol
+> sketches. The `seagull.*` MCP tool names in `## MVP Shape` and the assumption
+> that a shared Seagull broker sits between every pair of agents are the
+> superseded design.
+> **Retire when:** A2A task semantics are documented in the Agent Request spec
 
 This document defines how remote agents should work together through Seagull.
 

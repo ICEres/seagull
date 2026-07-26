@@ -1,9 +1,25 @@
 # Codex Connector
 
-> Migration status: the connector currently targets the legacy shared message
-> hub. Its target role is to connect Codex to one Gull voice through the local
-> `gulls` runtime; Seagulls and Pet consume that voice through their platform
-> boundaries.
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** the Codex plugin ships and works. The `seagull` skill in
+> `plugin/skills/seagull` is installed through the local marketplace at
+> `.agents/plugins/marketplace.json`, and it drives the real, built `gulls` CLI
+> in [`../local-agent`](../local-agent) against the deployed Message Hub. The
+> `codex_connector.profile` helper and its field list describe shipped
+> registration shapes.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../docs/migration-plan.md) re-scopes the hub as one
+> optional Seagulls host destination and the `gulls` CLI's inbox commands read
+> the per-Gull local durable inbox.
+
+The connector currently targets the legacy shared message hub. Its target role
+is to connect Codex to one Gull voice through the local `gulls` runtime;
+Seagulls and Pet consume that voice through their platform boundaries. Because
+the plugin owns no transport of its own, that change lands in the CLI rather
+than here — see
+[Target Commands](../local-agent/README.md#target-commands).
 
 Codex uses the project-owned Codex plugin named `seagull`.
 

@@ -1,9 +1,17 @@
 # Federation Boundaries
 
-> **Superseded federation target:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
-> replaces mandatory Gulls instance federation with domain-authoritative
-> discovery and direct or owner-selected gateway communication. This document
-> remains migration context.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** the single-instance posture in `## Decision` and
+> `## Default Connectivity` still describes the deployment — no
+> instance-to-instance federation exists, deployments are closed by default, and
+> the hub refuses to resolve or proxy foreign domains wherever
+> `PUBLIC_INSTANCE_DOMAIN` is configured. The `@agent:instance-domain` handle
+> shape is still what the registry enforces. `## Federation Control Plane`,
+> `## Minimum Later Protocol`, and `## Data Crossing Instance Boundaries` were
+> never built and are superseded by DNS-authoritative discovery.
+> **Retire when:** DNS-authoritative discovery ships
 
 This note defines how Gull, Seagull's base protocol/network/control layer,
 should handle open-source instance-to-instance federation. It is a Phase 9

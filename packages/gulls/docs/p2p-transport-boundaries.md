@@ -1,5 +1,16 @@
 # P2P Transport Boundaries
 
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** nothing is implemented. No P2P transport was ever built, so
+> the single surviving claim is the first line of `## Decision` — relay is still
+> the only delivery path. `## Control Plane And Payload Plane`,
+> `## Required Boundaries`, `## Session Shape`, `## Performance Rules`, and
+> `## Exit Criteria For Future Design` are unbuilt design written against the
+> Gull-owns-everything control plane the redesign removes.
+> **Retire when:** DNS-authoritative discovery ships
+
 This note defines the boundary for a later P2P transport option. It is a Phase 9
 research/design constraint, not a V1 implementation requirement.
 

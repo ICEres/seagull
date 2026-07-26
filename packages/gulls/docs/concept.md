@@ -1,12 +1,18 @@
 # Concept
 
-Status: accepted redesign.
+Status: Authoritative (product concept).
 
 Last updated: 2026-07-27.
 
-This is the high-level product concept. The authoritative protocol and security
-details are in
-[Agent Voice And DNS Discovery](agent-voice-and-discovery.md).
+> **Not implemented.** This describes a target. The running system is the
+> pre-redesign hub; see [Migration Plan](migration-plan.md).
+
+This is the high-level product concept.
+[Agent Voice And DNS Discovery](agent-voice-and-discovery.md) is authoritative
+and wins wherever this document conflicts with it — including on product
+boundaries, not only on protocol and security. [CONTEXT.md](../../../CONTEXT.md)
+and [Terminology](terminology.md) describe the legacy implementation and
+override neither.
 
 ## Core Idea
 
@@ -69,7 +75,9 @@ A Gull is the portable communication boundary for one agent. It includes:
 - A connector to Codex, Claude, another local runtime, MCP, CLI, webhook, or
   stdio.
 
-The `gulls` CLI is the owner and agent interface to that voice:
+The `gulls` CLI is the owner and agent interface to that voice. Of the commands
+below, only `inbox` and `watch` exist today, and both read the hub rather than a
+local A2A projection:
 
 ```text
 gulls resolve @weather:example.com
@@ -86,8 +94,17 @@ the owner publishes it independently.
 ## Seagulls: The Multi-Voice Platform
 
 Seagulls is a real platform, not merely a guide, directory, or dashboard. It
-adds shared product capabilities around hosted and independently published
-Gulls while preserving their open interfaces.
+adds shared product capabilities around hosted and independently published Gull
+voices while preserving their open interfaces.
+
+"Seagulls" names three separable roles, and a statement about one is usually
+false about another. **Host** provides provider-scoped identity, delivery, and
+optional runtime execution — a hosted Gull genuinely depends on it. **Console**
+is a multi-voice client holding projections only, deletable without affecting
+any Gull. **Apps** is the account and extension surface for Pet and Agent
+Request. "The platform is optional" is true of Console and Apps, and false of
+Host once an agent has chosen Host. See
+[Seagulls Is Three Roles](agent-voice-and-discovery.md#seagulls-is-three-roles).
 
 Core platform capabilities may include:
 
@@ -126,7 +143,7 @@ domain:
         |
         +-- WebFinger / AID / DNS-AID
         |
-        +-- https://agents.example.com/weather/a2a
+        +-- https://agents.example.com/agents/weather/a2a
 ```
 
 The Gull may be connected to Seagulls for product features without transferring
@@ -201,13 +218,29 @@ Each kind of truth has one clear owner:
 | State | Authority |
 | --- | --- |
 | Custom-domain identity and discovery | The owner's authoritative domain |
-| Hosted `@name:gulls.ai` identity | The selected Seagulls hosting service |
-| One agent's endpoint, local policy, and runtime connection | That Gull |
-| One agent's local inbox, task projection, and audit | That Gull |
+| Hosted `@name:gulls.ai` identity | The selected Seagulls Host |
+| One agent's endpoint, local policy, and runtime connection | That Gull — but for a hosted Gull the Host operates the endpoint, inbox, and provider policy, and the owner retains configuration authority only |
+| One agent's local inbox, task projection, and audit | Same qualification as above |
 | Remote A2A task state | The remote A2A task owner and its evidence |
+| Human account and ownership records | Seagulls Apps |
 | Multi-Gull views and provider features | The selected Seagulls platform |
-| Private owned-agent assets and owner posture | Pet |
+| Private owned-agent assets, and owner approval *inputs and defaults* | Pet — enforced by the Gull, never by Pet |
 | Request/task product workflow and presentation | Agent Request |
+| Provider execution cost, quota, and billing | Seagulls Host |
+
+The two qualified rows matter: for a hosted Gull, the Gull owns none of
+endpoint, inbox, policy execution, or audit storage. Saying otherwise would make
+the table read as a guarantee it cannot give.
+
+**Approval has one enforcement point.** Pet supplies owner posture, Agent
+Request supplies work-specific approval requirements, and a Host may add
+provider policy — but all of these are inputs the Gull compiles. The Gull
+evaluates them, and when they conflict it fails closed. Three documents
+previously each claimed to "own" approval; none of them enforce it.
+
+**Task state has one source of truth.** Remote A2A task state is authoritative.
+Agent Request may add states that A2A cannot express, but it must render them as
+visibly local rather than as remote status.
 
 An aggregate view is a projection, not permission to rewrite the source. A
 connected Gull does not surrender identity or private state merely because it
@@ -266,17 +299,41 @@ Reusable work should move to its new boundary:
 No migration should make Seagulls mandatory for independent Gull-to-Gull
 communication.
 
+The staged plan, freeze list, and per-module disposition are in
+[Migration Plan](migration-plan.md). Nothing above is scheduled work until it
+appears there.
+
 ## Placement Test
 
-When adding a feature, ask:
+When adding a feature, ask these in order and stop at the first match:
 
-1. Does it define one agent's public voice, local policy, persistence, or
-   runtime connection? Put it in Gulls.
-2. Does it host, connect, supervise, or present multiple voices? Put it in
-   Seagulls.
-3. Does it manage private owned-agent capabilities or owner posture? Put it in
-   Pet.
-4. Does it define structured work UX or business policy? Put it in Agent
-   Request.
-5. Does an existing open protocol already carry it? Reuse that protocol rather
-   than creating a Seagulls-only wire format.
+0. **Does an existing open protocol already carry it?** Reuse that protocol
+   rather than creating a Seagulls-only wire format. This is first, not last:
+   asked last, it never gets reached, and the earlier questions happily assign
+   a home to something A2A already defines.
+1. **Is it enforcement, or durable local state, for one agent?** Put it in the
+   Gull. This outranks every product claim.
+2. **Is it a projection or presentation of state a Gull or A2A already owns?**
+   Put it in Seagulls, read-only, never authoritative.
+3. **Is it private owner-supplied configuration that a Gull compiles into
+   policy?** Put it in Pet.
+4. **Is it work-specific vocabulary or UX that A2A cannot express?** Put it in
+   Agent Request.
+
+If two questions fire, the feature is two features. Split it into enforcement
+(the lower layer) and presentation (the higher layer), and name both. Most
+apparent boundary disputes are this: a contact list, a notification, a
+quarantine review screen, and a rate limit each have a decision half and a
+display half, and trying to place them whole is what makes the boundaries look
+arbitrary.
+
+Worked answers for the cases that previously had none:
+
+| Feature | Placement |
+| --- | --- |
+| Contact list | Split: outbound allowlist is Gull policy; the address book is Seagulls |
+| Notification | Q0 — A2A push-notification configuration; Seagulls presents |
+| Quarantine review | Split: the decision and states are the Gull; the review UI is Seagulls; the triggering posture is Pet |
+| Rate limit | Split: per-Gull limits at the edge; provider limits at the Host |
+| Public profile page | Q0 — the Agent Card is the profile; Seagulls may render it |
+| AI Provider billing | Seagulls Host |

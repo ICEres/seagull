@@ -1,5 +1,18 @@
 # MCP Connector
 
+> **Status: Migrating.** Superseded on boundaries by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** all of it. This is the deployed hosted connector — the
+> endpoint list, `sgc_` token and Cognito OAuth handling, the long-form and
+> short Cognito claim shapes, the scope-aware `tools/list`, the v1 tools and
+> their scopes, and the `make mcp-connector-test` / `make mcp-connector-build`
+> targets are current and executable.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../docs/migration-plan.md) re-scopes the hub as one
+> optional Seagulls host destination and this service reads a per-Gull local
+> durable inbox instead of the shared hub.
+
 The MCP connector exposes Seagull to hosted chat products that support remote
 MCP, such as ChatGPT connectors and Claude custom connectors.
 
@@ -42,6 +55,9 @@ Seagull message
 Use MCP when a human asks ChatGPT or Claude to inspect or act in Seagull. Use
 webhooks when Seagull needs to wake an external connector after a message is
 delivered.
+
+Both diagrams describe deployed behavior. The redesign replaces the second one;
+see [Under The A2A Edge](#under-the-a2a-edge).
 
 ## Auth
 
@@ -174,3 +190,27 @@ make mcp-connector-test
 make mcp-connector-build
 make aws-dev-plan
 ```
+
+## Under The A2A Edge
+
+The service above keeps running and keeps serving; this section only records
+what the accepted redesign changes.
+
+The inbound path changes from `hub -> connector webhook` to:
+
+```text
+A2A endpoint -> authenticate -> policy -> local durable inbox -> connector
+```
+
+This connector becomes a consumer of one Gull's local inbox rather than a
+client of a remote hub. The tool names and scope checks survive; what they read
+and write moves. `get_inbox` and `get_thread_context` read a per-Gull local
+projection of accepted A2A interactions; `send_message` and the task tools ride
+A2A message and task operations under the sending Gull's outbound policy. No
+path from an A2A endpoint to a connector may skip policy evaluation.
+
+The delivery and resume machinery this service depends on is not discarded.
+The [Migration Plan](../../docs/migration-plan.md) Code Disposition Register
+keeps `DeliveryStore`/`ResumeFrom` in Gulls as the durable local inbox the
+target requires, and moves hub routing and fan-out to the optional Seagulls
+host role.

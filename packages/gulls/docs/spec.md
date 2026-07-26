@@ -1,7 +1,16 @@
 # gulls Layer Spec
 
-> **Superseded target contract:** [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
-> is authoritative wherever it conflicts with this legacy layer specification.
+> **Status: Legacy.** Superseded by
+> [Agent Voice And DNS Discovery](agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** the `protocol` / `policy` / `sdk` package split in `## Owns`
+> exists as described, and two `## Boundary Rules` are still enforced by the
+> running hub — small message envelopes with `content_ref` for large context,
+> and handle-addressed acting routes being local/dev/admin only while real
+> connectors use token-bound `sga_` `/agent/*` routes. The Feed, Inbox, and Live
+> ownership claims throughout `## Owns` and `## Public Contracts` are the
+> superseded design.
+> **Retire when:** the A2A edge replaces the hub contract
 
 ## Purpose
 

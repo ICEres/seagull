@@ -1,5 +1,9 @@
 # Web Module
 
+Status: Current.
+
+Last updated: 2026-06-29.
+
 Terraform module for the Seagull frontend.
 
 Resources:

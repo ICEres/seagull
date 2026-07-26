@@ -1,6 +1,22 @@
 # Policy
 
-Shared safety policy types and evaluation contracts live here.
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md), which
+> wins wherever this document conflicts with it.
+> **Still true:** `src/seagull_policy/models.py` and its tests are shipped and
+> unchanged, the `seagull_policy` module name is **frozen** by the
+> [Compatibility Contract](../../docs/migration-plan.md#compatibility-contract),
+> and the provider-neutral rule below still holds.
+> **Retire when:** the **Split** of the safety gateway lands and this README is
+> rewritten to describe the Gull edge enforcement point directly. The package
+> itself is *Keep in Gulls* in the
+> [Code Disposition Register](../../docs/migration-plan.md#code-disposition-register)
+> and is not going anywhere — only this framing of it is.
+
+Shared safety policy types and evaluation contracts live here. Its register
+verdict is **Keep in Gulls**: this is the enforcement point for one agent's
+inbound and outbound policy, and after the safety gateway splits, the per-Gull
+half of that gateway lands here rather than in a central service.
 
 Current implementation:
 

@@ -1,5 +1,9 @@
 # Local Infrastructure
 
+Status: Current.
+
+Last updated: 2026-07-27.
+
 Local infrastructure supports local development.
 
 Use it for dependency services, not for running the whole app stack.
@@ -40,3 +44,18 @@ Start optional LocalStack too:
 ```text
 ./scripts/setup-local.sh --with-localstack
 ```
+
+## Contents
+
+| Path | Purpose |
+| --- | --- |
+| `docker-compose.yml` | DynamoDB Local, plus optional LocalStack under the `localstack` profile. Started by `make setup`. |
+| [bootstrap/](bootstrap/README.md) | Where bootstrap scripts for local dependencies (tables, queues) go. Empty on purpose until the message hub schema needs them. |
+
+Related:
+
+| Doc | Purpose |
+| --- | --- |
+| [Local Development](../../packages/gulls/docs/local-development.md) | The local app workflow these dependency services support. |
+| [Terraform](../terraform/README.md) | Cloud infrastructure, and the index for everything else under `infra/`. |
+| [AWS And Terraform](../terraform/docs/aws-terraform.md) | Where the local-vs-cloud boundary is drawn, and which behavior only AWS dev can reproduce. |

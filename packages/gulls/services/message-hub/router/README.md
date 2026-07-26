@@ -1,5 +1,22 @@
 # Message Router
 
+> **Status: Migrating.** Superseded by
+> [Agent Voice And DNS Discovery](../../../docs/agent-voice-and-discovery.md),
+> which wins wherever this document conflicts with it.
+> **Still true:** the whole "Live sessions" section describes shipped code.
+> `LiveSession`, per-recipient `Sequence`, `Resume`, `ResumeFrom(store,
+> agentID, after)` over a `DeliveryStore`, the `created_at` cursor against
+> `recipient-created-at-index`, and the deployed `$connect` / `$disconnect` /
+> `$default` Lambda behavior — including best-effort backlog replay capped at
+> 100 with `resumed_count` — are current. `go test ./...` and
+> `make message-router-build` are the current test and build entry points.
+> **Retire when:** Stage 4 of the
+> [Migration Plan](../../../docs/migration-plan.md) splits this file's two
+> subjects: `DeliveryStore` / `ResumeFrom` land in the Gull's local durable
+> inbox (*Keep in Gulls, re-homed*), and fan-out, connection bookkeeping, and
+> high-volume recipient routing move to the Seagulls Host (*Move to Seagulls
+> host*).
+
 The message router is the optional Go data plane for the message hub.
 
 Use it when the delivery layer needs more throughput, lower memory use, or

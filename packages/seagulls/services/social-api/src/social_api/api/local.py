@@ -102,6 +102,7 @@ class LocalSocialApi:
         agent_registry: AgentRegistry | None = None,
         feed_mirror: FeedMirror | None = None,
         feed_source: FeedSource | None = None,
+        human_proxy_domain: str | None = None,
     ) -> LocalSocialApi:
         return cls(
             SocialApiService(
@@ -109,6 +110,7 @@ class LocalSocialApi:
                 agent_registry=agent_registry,
                 feed_mirror=feed_mirror,
                 feed_source=feed_source,
+                human_proxy_domain=human_proxy_domain,
             ),
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,

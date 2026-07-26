@@ -158,6 +158,12 @@ DEFAULT_INBOX_POSTURE = "contacts_only"
 GUEST_HANDLE_PREFIX = "@guest_"
 GUEST_DISPLAY_NAME = "Guest sender"
 GUEST_AGENT_STATUS = "guest"
+# Human proxies: the network identity a signed-in human sends from when they
+# chat one of their own agents. Reserved for the same reason as @guest_ -- the
+# handle is derived from an owner id, so letting anyone register one would let
+# them mint another person's proxy and receive that person's chat replies.
+HUMAN_PROXY_HANDLE_PREFIX = "@me_"
+HUMAN_PROXY_AGENT_STATUS = "human_proxy"
 # Local names that may never be registered: each is (or may become) a path
 # segment or product surface in the public URL namespace
 # (gulls.ai/agents/<name> and sibling routes). Enforced at registration so
@@ -268,12 +274,21 @@ class MessageHubService:
         webhook_url: str | None = None,
         inbox_posture: str | None = None,
         _allow_reserved_guest_handle: bool = False,
+        _allow_reserved_human_proxy_handle: bool = False,
     ) -> Agent:
         normalized_handle = normalize_handle(handle)
         if normalized_handle.startswith(GUEST_HANDLE_PREFIX) and not _allow_reserved_guest_handle:
             raise InvalidMessageError(
                 f"agent handles starting with {GUEST_HANDLE_PREFIX} are reserved "
                 "for server-minted guest senders"
+            )
+        if (
+            normalized_handle.startswith(HUMAN_PROXY_HANDLE_PREFIX)
+            and not _allow_reserved_human_proxy_handle
+        ):
+            raise InvalidMessageError(
+                f"agent handles starting with {HUMAN_PROXY_HANDLE_PREFIX} are reserved "
+                "for server-minted human proxies"
             )
         if not _allow_reserved_guest_handle and agent_local_name(normalized_handle) in RESERVED_PUBLIC_AGENT_NAMES:
             raise InvalidMessageError(
@@ -331,6 +346,36 @@ class MessageHubService:
         guest = replace(agent, status=GUEST_AGENT_STATUS)
         self._repository.update_agent(guest)
         return guest
+
+    def ensure_human_proxy(self, handle: str, *, display_name: str | None = None) -> Agent:
+        """Get-or-create the network identity a human sends from.
+
+        gulls models senders as agents, but a person chatting their own agent
+        is not an agent. This is that person's stable network identity: one per
+        owner, reused across chats, so threads stay coherent and every message
+        remains attributable to the human who sent it.
+
+        Idempotent by handle, because callers reach it on every chat creation
+        and must not race each other into a duplicate.
+        """
+        normalized_handle = normalize_handle(handle)
+        if not normalized_handle.startswith(HUMAN_PROXY_HANDLE_PREFIX):
+            raise InvalidMessageError(
+                f"human proxy handles must start with {HUMAN_PROXY_HANDLE_PREFIX}"
+            )
+
+        existing = self._repository.get_agent_by_handle(normalized_handle)
+        if existing is not None:
+            return existing
+
+        agent = self.register_agent(
+            normalized_handle,
+            display_name=display_name,
+            _allow_reserved_human_proxy_handle=True,
+        )
+        proxy = replace(agent, status=HUMAN_PROXY_AGENT_STATUS)
+        self._repository.update_agent(proxy)
+        return proxy
 
     def set_inbox_posture(self, handle: str, inbox_posture: str) -> Agent:
         agent = self._require_agent_by_handle(handle)

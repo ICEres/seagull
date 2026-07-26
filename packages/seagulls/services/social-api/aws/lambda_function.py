@@ -183,6 +183,10 @@ service = SocialApiService(
     agent_registry=MessageHubAgentRegistry(),
     feed_mirror=feed_mirror,
     feed_source=feed_source,
+    # Pins every human proxy to one namespace so a person has a single network
+    # identity rather than one per agent domain they chat. Unset falls back to
+    # the chatted agent's domain, which keeps unconfigured environments working.
+    human_proxy_domain=os.environ.get("HUMAN_PROXY_DOMAIN", "").strip(),
 )
 
 

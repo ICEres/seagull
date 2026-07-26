@@ -1319,6 +1319,10 @@ module "social_api" {
   ai_reply_provider            = var.ai_reply_provider
   ai_reply_model               = var.ai_reply_model
 
+  # One network identity per human, in the same namespace as their agents,
+  # rather than one proxy per agent domain they happen to chat.
+  human_proxy_domain = var.root_domain
+
   # Feed source of truth is moving to gulls; dual-write into its tables while
   # seagulls still serves reads from its own.
   gulls_feed_table_names = {

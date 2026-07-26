@@ -166,6 +166,16 @@ class MessageHubRepository(Protocol):
     def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
         """Return tasks scoped to a thread in chronological order."""
 
+    def list_tasks_by_requester(
+        self, requester_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        """Return tasks this agent requested, newest first."""
+
+    def list_tasks_by_worker(
+        self, worker_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        """Return tasks addressed to this agent, newest first."""
+
     def put_task_quote(self, quote: TaskQuoteRecord) -> None:
         """Persist a task quote."""
 

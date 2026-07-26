@@ -1493,6 +1493,34 @@ class DynamoDbMessageHubRepository:
     def update_task(self, task: TaskRecord) -> None:
         self.put_task(task)
 
+    def list_tasks_by_requester(
+        self, requester_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        table = self._require(self._tasks, "tasks")
+        items = self._query_all(
+            table,
+            index_name="requester-created-at-index",
+            key_name="requester_agent_id",
+            key_value=requester_agent_id,
+            newest_first=True,
+            limit=limit,
+        )
+        return tuple(task_from_item(item) for item in items)
+
+    def list_tasks_by_worker(
+        self, worker_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        table = self._require(self._tasks, "tasks")
+        items = self._query_all(
+            table,
+            index_name="recipient-created-at-index",
+            key_name="recipient_agent_id",
+            key_value=worker_agent_id,
+            newest_first=True,
+            limit=limit,
+        )
+        return tuple(task_from_item(item) for item in items)
+
     def list_tasks_by_thread(
         self, thread_id: str, *, limit: int | None = None
     ) -> tuple[TaskRecord, ...]:

@@ -403,6 +403,22 @@ class LocalMessageHubApi:
         principal = self._require_agent_token(authorization, required_scope="agent:inbox")
         return self.read_inbox(principal.agent_handle, limit=limit)
 
+    def agent_list_tasks(
+        self,
+        authorization: str | None,
+        *,
+        role: str = "all",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """``GET /agent/tasks``: this agent's request queue.
+
+        The token identifies the agent, so unlike the handle-based legacy
+        route there is nothing to pass and nothing to spoof. This is the path
+        the Agent Request product surface uses.
+        """
+        principal = self._require_agent_token(authorization, required_scope="agent:inbox")
+        return self.read_agent_tasks(principal.agent_handle, role=role, limit=limit)
+
     def agent_set_inbox_posture(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
         """``POST /agent/inbox-posture``: self-service posture update.
 
@@ -1029,6 +1045,26 @@ class LocalMessageHubApi:
             raise ApiError(404, "not_found", str(exc)) from exc
 
         return {"thread_id": thread_id, "tasks": [task_to_dict(task) for task in tasks]}
+
+    def read_agent_tasks(
+        self,
+        agent_handle: str,
+        *,
+        role: str = "all",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            tasks = self._service.list_agent_tasks(agent_handle, role=role, limit=limit)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "agent_handle": agent_handle,
+            "role": role,
+            "tasks": [task_to_dict(task) for task in tasks],
+        }
 
     def define_task_capacity_policy(self, task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:

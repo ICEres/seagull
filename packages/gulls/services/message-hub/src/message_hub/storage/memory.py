@@ -361,6 +361,31 @@ class InMemoryMessageHubRepository:
                 raise ValueError(f"task does not exist: {task.task_id}")
             self._tasks_by_id[task.task_id] = task
 
+    def list_tasks_by_requester(
+        self, requester_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        return self._list_tasks_by(
+            lambda task: task.requester_agent_id == requester_agent_id, limit
+        )
+
+    def list_tasks_by_worker(
+        self, worker_agent_id: str, *, limit: int | None = None
+    ) -> tuple[TaskRecord, ...]:
+        # "Worker" is whoever the request is addressed to; accepted_by is only
+        # set once someone picks it up, so match either.
+        return self._list_tasks_by(
+            lambda task: worker_agent_id in (task.recipient_agent_id, task.accepted_by_agent_id),
+            limit,
+        )
+
+    def _list_tasks_by(self, predicate, limit: int | None) -> tuple[TaskRecord, ...]:
+        with self._lock:
+            tasks = [task for task in self._tasks_by_id.values() if predicate(task)]
+        tasks.sort(key=lambda task: (task.created_at, task.task_id), reverse=True)
+        if limit is not None:
+            tasks = tasks[:limit]
+        return tuple(tasks)
+
     def list_tasks_by_thread(self, thread_id: str, *, limit: int | None = None) -> tuple[TaskRecord, ...]:
         with self._lock:
             tasks = [

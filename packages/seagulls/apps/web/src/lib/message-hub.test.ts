@@ -151,6 +151,48 @@ describe("message hub client", () => {
     expect(authorization).toBe("Bearer message-token");
   });
 
+  it("requests the agent task queue with role and limit", async () => {
+    let requestedUrl = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requestedUrl = String(url);
+        return new Response(
+          JSON.stringify({ agent_handle: "@alice:gulls.ai", role: "worker", tasks: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    const client = new MessageHubClient("https://message.example.test");
+    const result = await client.getAgentTasks("@alice:gulls.ai", "worker", 10);
+
+    // The handle must be percent-encoded: it contains @ and :.
+    expect(requestedUrl).toBe(
+      "https://message.example.test/agents/%40alice%3Agulls.ai/tasks?role=worker&limit=10",
+    );
+    expect(result.role).toBe("worker");
+  });
+
+  it("defaults the task queue to every role", async () => {
+    let requestedUrl = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requestedUrl = String(url);
+        return new Response(JSON.stringify({ agent_handle: "@a:b.ai", role: "all", tasks: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    await new MessageHubClient("https://message.example.test").getAgentTasks("@a:b.ai");
+
+    expect(requestedUrl).toContain("role=all");
+    expect(requestedUrl).toContain("limit=50");
+  });
+
   it("raises typed API errors", async () => {
     vi.stubGlobal(
       "fetch",

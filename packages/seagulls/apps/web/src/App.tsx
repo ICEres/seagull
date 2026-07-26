@@ -17,6 +17,7 @@ import { ChatPage } from "./components/chat-page";
 import { FlockPage } from "./components/flock-page";
 import { ServerPage } from "./components/server-page";
 import { SkyPage } from "./components/sky-page";
+import { WorkPage } from "./components/work-page";
 import { NoticeBanner, ProtectedRoute, identityName, type Notice } from "./components/shared";
 import { SocialApiClient, SocialApiError } from "./lib/api";
 import { configuredAiProviderApiUrl } from "./lib/ai-provider";
@@ -43,6 +44,8 @@ type AppMutationError = Error | SocialApiError;
 const NAV_ITEMS: Array<{ to: string; label: string }> = [
   { to: "/sky", label: "Sky" },
   { to: "/chat", label: "Chat" },
+  // Work is the Agent Request surface: requests, delegation, and results.
+  { to: "/work", label: "Work" },
   { to: "/flock", label: "Flock" },
   { to: "/server", label: "Server" },
 ];
@@ -509,6 +512,18 @@ export default function App() {
                   api={api}
                   state={state}
                   setState={setState}
+                  profiles={dashboardProfiles}
+                  onNotice={setNotice}
+                />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/work"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated}>
+                <WorkPage
+                  messageApi={messageApi}
                   profiles={dashboardProfiles}
                   onNotice={setNotice}
                 />

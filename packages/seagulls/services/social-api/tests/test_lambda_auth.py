@@ -341,3 +341,36 @@ class SocialApiLambdaAuthTest(TestCase):
         payload = response_body(response)
         self.assertEqual(200, response["statusCode"])
         self.assertEqual(owner_user_id, payload["profile"]["owner_user_id"])
+
+
+class EnvFlagTest(TestCase):
+    """Every gulls cutover flag ships off.
+
+    An unset or unparseable value must read as False rather than enabling a
+    cutover by accident, so this pins the parse rather than trusting it.
+    """
+
+    def setUp(self) -> None:
+        self.module = load_lambda_module()
+
+    def test_only_explicit_truthy_values_enable_a_flag(self) -> None:
+        for value in ("1", "true", "TRUE", " yes ", "Yes"):
+            with patch.dict(os.environ, {"SOME_FLAG": value}, clear=False):
+                self.assertTrue(self.module._env_flag("SOME_FLAG"), f"{value!r} should enable")
+
+    def test_anything_else_leaves_a_flag_off(self) -> None:
+        for value in ("", "0", "false", "no", "maybe", "  "):
+            with patch.dict(os.environ, {"SOME_FLAG": value}, clear=False):
+                self.assertFalse(self.module._env_flag("SOME_FLAG"), f"{value!r} should not enable")
+
+    def test_an_unset_flag_is_off(self) -> None:
+        os.environ.pop("DEFINITELY_UNSET_FLAG", None)
+
+        self.assertFalse(self.module._env_flag("DEFINITELY_UNSET_FLAG"))
+
+    def test_require_agent_registry_is_off_unless_asked_for(self) -> None:
+        """The deployment decision PR #4 described but left unreachable."""
+        self.assertFalse(self.module._env_flag("REQUIRE_AGENT_REGISTRY"))
+
+        with patch.dict(os.environ, {"REQUIRE_AGENT_REGISTRY": "true"}, clear=False):
+            self.assertTrue(self.module._env_flag("REQUIRE_AGENT_REGISTRY"))

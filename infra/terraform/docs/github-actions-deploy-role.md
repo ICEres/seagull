@@ -152,6 +152,21 @@ Scope write and tag actions to the dev alarm prefix:
 arn:aws:cloudwatch:<region>:<account-id>:alarm:seagull-dev-*
 ```
 
+The Feed mirror alarm reads a metric produced by log metric filters, so the
+role also needs CloudWatch Logs metric-filter permissions:
+
+```text
+logs:PutMetricFilter
+logs:DeleteMetricFilter
+logs:DescribeMetricFilters
+```
+
+Scope them to the dev Lambda log groups:
+
+```text
+arn:aws:logs:<region>:<account-id>:log-group:/aws/lambda/seagull-dev-*
+```
+
 The web module resolves the AWS-managed `Managed-AllViewerExceptHostHeader`
 origin request policy by name. The CloudFront statement therefore needs:
 
@@ -282,6 +297,67 @@ aws iam get-role-policy \
   --role-name "$ROLE_NAME" \
   --policy-name "$POLICY_NAME" \
   --query 'PolicyDocument.Statement[?Sid==`DevCloudWatchAlarmRead` || Sid==`DevCloudWatchAlarms`].[Sid,Action,Resource]' \
+  --output json
+```
+
+## Log Metric Filter Policy Repair
+
+Use this when `Deploy dev` fails during apply with `AccessDenied` from
+`CloudWatch Logs: PutMetricFilter`, as it did when the Feed mirror metric
+filters were first added:
+
+```text
+User: .../seagull-github-actions-dev-deploy/GitHubActions is not authorized to
+perform: logs:PutMetricFilter on resource: .../seagull-dev-social-api
+```
+
+The alarm those filters feed is what makes the Feed dual-write verifiable, so
+the deploy cannot be considered done while this is failing.
+
+```sh
+export AWS_PROFILE=personal
+export AWS_REGION=ap-southeast-2
+export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export ROLE_NAME=seagull-github-actions-dev-deploy
+export POLICY_NAME=seagull-dev-terraform-deploy
+
+aws iam get-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --query PolicyDocument \
+  --output json > /tmp/seagull-dev-terraform-deploy-policy.json
+
+jq \
+  --arg log_group_arn "arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/seagull-dev-*" \
+  '(.Statement) =
+    ([.Statement[] | select(.Sid != "DevLogMetricFilters")] + [
+      {
+        "Sid": "DevLogMetricFilters",
+        "Effect": "Allow",
+        "Action": [
+          "logs:PutMetricFilter",
+          "logs:DeleteMetricFilter",
+          "logs:DescribeMetricFilters"
+        ],
+        "Resource": $log_group_arn
+      }
+    ])' \
+  /tmp/seagull-dev-terraform-deploy-policy.json \
+  > /tmp/seagull-dev-terraform-deploy-policy-updated.json
+
+aws iam put-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --policy-document file:///tmp/seagull-dev-terraform-deploy-policy-updated.json
+```
+
+Verify the scoped statement, then re-run `Deploy dev`:
+
+```sh
+aws iam get-role-policy \
+  --role-name "$ROLE_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --query 'PolicyDocument.Statement[?Sid==`DevLogMetricFilters`].[Sid,Action,Resource]' \
   --output json
 ```
 

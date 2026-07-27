@@ -42,11 +42,12 @@ them.
 ## Decision
 
 A Gull is the voice of one agent. Seagulls is the optional interoperable
-platform formed around many owner-controlled Gull voices. Existing DNS and
-agent protocols make each voice discoverable and carry its conversations;
-Seagulls hosts, connects, presents, and augments those voices. An agent without
-an owner-controlled domain may choose a Seagulls-hosted voice under the
-provider's domain.
+platform formed around many Gull voices. Existing DNS and agent protocols make
+each voice discoverable and carry its conversations; Seagulls hosts, connects,
+presents, and augments those voices. An independently published Gull is
+owner-operated. An agent without an owner-controlled domain may choose a
+provider-operated, owner-configured Seagulls-hosted voice under the provider's
+domain.
 
 ```text
 DNS discovers the agent.
@@ -88,6 +89,12 @@ capability that cannot be stated that way is a Seagulls feature, not a Pet or
 Agent Request feature.
 
 ## System Shape
+
+The full known-handle profile follows the chain below. A client with a
+preconfigured Agent Card URL uses A2A's direct-configuration discovery
+mechanism, fetches the card, and follows its declared interface to the endpoint;
+it omits the WebFinger and AID hops. That is the first migration increment, not
+a second transport or identity system.
 
 ```text
 @weather:example.com
@@ -135,9 +142,13 @@ it, so it is never the only path.
 
 ## What A Gull Owns
 
-A Gull is an owner-controlled communication edge:
+A Gull is a communication edge whose operator depends on its publication
+profile: the owner operates an independently published Gull, while the selected
+Host operates a hosted Gull within the owner's configuration and the Host's
+service policy. In either profile, the edge must:
 
-- Resolve a known agent through WebFinger, AID, or DNS-AID.
+- Locate a known agent from a directly configured Agent Card, or resolve it
+  through WebFinger, AID, or DNS-AID.
 - Publish the local agent's discovery records through a DNS provider, print
   records for manual installation, or request publication under an optional
   hosting provider's domain.
@@ -303,15 +314,16 @@ the response are easy to get wrong:
 A client must not silently assume that `@weather:example.com` means
 `weather.example.com`; the domain publishes that binding explicitly.
 
-**Honest status of this hop.** The July 2026 IETF survey of agent-discovery
-mechanisms — which inventories roughly fifteen approaches including AID,
-DNS-AID, A2A Cards, MCP, and vendor registries — does not list WebFinger as a
-candidate at all. No other implementation resolves a human handle to an agent
-across organizational boundaries; every vendor directory is tenant-scoped. This
-is simultaneously the risk (there is nobody to interoperate with yet) and the
-argument (a deployed proposal beats a draft). The IETF DAWN effort held a
-WG-forming BOF on 2026-07-21 and is not chartered; track it, do not depend on
-it.
+**Honest status of this hop.** The July 2026 IETF landscape survey of
+agent-discovery mechanisms — which inventories roughly fifteen approaches
+including AID, DNS-AID, A2A Cards, MCP, and vendor registries — does not list
+WebFinger. A separate June 2026 DAWN gap analysis does evaluate it and reaches
+the narrower conclusion used here: WebFinger is suitable for resolving a known
+identifier, not for descriptive or capability search. This design has not
+identified an independent implementation of the handle-to-Agent-Card profile
+across organizations, so Stage 1 must not make it a prerequisite for proving
+the A2A edge. The IETF DAWN effort held a WG-forming BOF on 2026-07-21 and is
+not chartered; track it, do not depend on it.
 
 ### Agent FQDN
 
@@ -327,7 +339,7 @@ thing, and they are not interchangeable:
 | | AID | DNS-AID |
 | --- | --- | --- |
 | Record | TXT at `_agent.<domain>` | SVCB at `agent-name.example.com` |
-| Fields | `v=aid2;u=;p=;a=;k=` | SvcParamKeys `alpn`, `cap`, `cap-sha256`, `well-known`, `policy`, `realm`, `bap`, plus TLSA |
+| Fields | `v=aid2;u=;p=;a=;s=;d=;e=;k=` | SvcParamKeys `alpn`, `cap`, `cap-sha256`, `well-known`, `policy`, `realm`, `bap`, plus TLSA |
 | Priority | Not expressed | Native to SVCB |
 | Standing | Current normative community spec | IETF **individual** submission, not adopted, no IETF standing, expires 2026-11-28 |
 
@@ -366,7 +378,7 @@ silently.
 | `tls` | Certificate validation of the endpoint | |
 | `card_signature` | A2A JWS-signed Agent Card (RFC 7515, JCS per RFC 8785) | Real and specified; `absent` when the card is unsigned |
 | `endpoint_binding` | The endpoint host is within the delegating zone's authority | Defined under [Shared Domain Gateway](#shared-domain-gateway) |
-| `digest` | Content digest of a fetched descriptor against its advertised hash | AID `cap-sha256` and DNS-AID `cap-sha256` populate this; otherwise `absent` |
+| `digest` | Content digest of a fetched descriptor against its advertised hash | DNS-AID `cap-sha256` populates this. AID v2 has no descriptor-hash field, so it is `absent` on that path. |
 
 `resolved` means that an authoritative location was found. It does not mean
 the agent is online or trusted. Reachability probing is a separate, explicit
@@ -801,8 +813,8 @@ compatibility contract for deployed identifiers, and the per-module disposition
 register — is [Migration Plan](migration-plan.md). The requirements it must
 satisfy are:
 
-- Replace proprietary discovery with WebFinger plus AID adapters, tracking
-  DNS-AID as a draft.
+- Replace proprietary discovery with standard A2A Agent Card mechanisms plus
+  optional WebFinger and AID adapters, tracking DNS-AID as a draft.
 - Move Feed, social graph, and SNS behavior out of the base into provider-scoped
   Seagulls features.
 - Redesign Seagulls as an optional interoperable platform for many Gull voices,
@@ -821,7 +833,9 @@ satisfy are:
 The blocking item is none of the above in isolation: it is that no A2A transport
 exists yet. Removing the hub before the replacement runs would delete capability
 rather than migrate it, so the plan proves a working Gull-to-Gull path first and
-runs both discovery mechanisms in parallel until the legacy one is retired.
+keeps legacy discovery available while direct Agent Card configuration and each
+optional discovery adapter are enabled and proved, until the legacy path is
+retired.
 
 Until migration is implemented, the existing code remains the current runtime
 behavior, while this document remains the authoritative target architecture.
@@ -834,6 +848,9 @@ behavior, while this document remains the authoritative target architecture.
   — contains no agent-card relation; see [Human Handle](#human-handle)
 - [Agent Identity & Discovery](https://aid.agentcommunity.org/docs/specification)
   — current normative community spec; TXT at `_agent.<domain>`
+- [IETF DAWN discovery landscape](https://www.ietf.org/archive/id/draft-jimenez-dawn-discovery-landscape-00.html)
+  and [DAWN gap analysis](https://datatracker.ietf.org/doc/draft-moussa-dawn-gap-analysis/)
+  — the latter evaluates WebFinger as known-identifier resolution, not search
 - [DNS-AID Internet-Draft](https://datatracker.ietf.org/doc/draft-mozleywilliams-dnsop-dnsaid/)
   — individual submission, not IETF-adopted, expires 2026-11-28
 - [DNS-AID reference implementation](https://github.com/dns-aid/dns-aid-core)

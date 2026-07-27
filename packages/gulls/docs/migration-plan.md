@@ -24,11 +24,12 @@ need their own change with its own migration.
 
 ## Definition Of Done
 
-Migration is complete when every one of these is demonstrated by a test or a
-metric, not by a document:
+Migration is complete when every one of these is demonstrated by a test, a
+metric, or an exercised operational drill, not by a document or untested
+runbook:
 
-1. Two independent Gulls discover and communicate with no common Seagulls
-   service.
+1. Two independent Gulls locate each other's Agent Cards and communicate with
+   no common Seagulls service.
 2. An agent with no owner-controlled domain publishes a resolvable public voice
    through optional Seagulls hosting.
 3. One person connects or hosts several Gulls and supervises them from one
@@ -38,9 +39,16 @@ metric, not by a document:
 6. Removing a Seagulls client leaves an independently published Gull
    discoverable and able to communicate.
 7. No network-wide Seagulls database is required for identity or delivery.
+8. Every consequential effect is covered by a standing policy decision or an
+   exact-action receipt bound to the payload that executed; a changed payload
+   is rejected and re-prompted.
+9. Unknown contact is quarantined before reaching a private runtime, and an
+   owner can pause, revoke, recover, and audit the edge without losing evidence.
 
-Criteria 1 and 6 are the ones that fail today, and they fail for the same
-reason: there is no transport except the hub.
+Criteria 1 and 6 fail because there is no transport except the hub. Criteria 8
+and 9 also fail: exact-action binding is not enforced by every approval surface,
+and the target edge, quarantine, revocation, recovery, and audit path does not
+exist.
 
 ## Stage 0 — Freeze
 
@@ -69,20 +77,39 @@ verification, the deploy-role IAM repairs, and durable delivery resume.
 
 Blast radius: none. Stage 0 is a decision, not a deploy.
 
-## Stage 1 — Prove The Vertical Slice
+## Stage 1 — Prove The Protected A2A Vertical Slice
 
-The single blocking item. Every other stage assumes a working Gull-to-Gull path
-that does not exist yet.
+Stage 1A is the single blocking implementation item. Every later stage assumes
+a protected Gull-to-Gull path that does not exist yet. Stage 1B can follow
+without blocking validation of that path.
 
-Build, additively and beside the hub, on one throwaway domain: WebFinger resolve
-→ AID or DNS-AID endpoint discovery → A2A Agent Card fetch → A2A `SendMessage`
-send and serve → local durable inbox projection.
+Build additively beside the hub in two increments:
+
+- **Stage 1A — direct A2A edge.** Start from preconfigured Agent Card URLs,
+  which A2A defines as a discovery mechanism. Implement Agent Card fetch, A2A
+  send and serve, caller authentication, unknown-contact quarantine, local
+  durable inbox projection, bounded context, idempotency, restart/resume, and
+  an exact-action approval receipt.
+- **Stage 1B — known-identity discovery adapters.** After the protected
+  transport passes, add the standard A2A well-known path, then WebFinger and AID
+  or DNS-AID behind the same resolution bundle. Discovery-adapter work must not
+  block testing the user workflow in Stage 1A.
 
 - **Precondition:** Stage 0.
 - **Flag:** `GULLS_A2A_EDGE` (new, default off).
-- **Acceptance:** an automated test resolves a handle it was not configured
-  with, sends a message, and reads it from the receiving side's local inbox.
-  That test is Definition-of-Done criterion 1.
+- **Stage 1A acceptance:** an automated test starts two independently configured
+  Gulls, sends a bounded task, quarantines an unknown caller before the private
+  runtime, approves an immutable action, restarts one side, and reads one result
+  plus its receipt from the local inbox without duplicate execution. Exercise
+  the supported binding with the official
+  [A2A Inspector](https://github.com/a2aproject/a2a-inspector) or
+  [Technology Compatibility Kit](https://github.com/a2aproject/a2a-tck), or an
+  independent implementation; two repository processes alone prove only
+  self-compatibility.
+- **Stage 1B acceptance:** a separate automated test starts with an unconfigured
+  known handle or FQDN, follows its authoritative resolution chain to the same
+  Agent Card, and completes the Stage 1A task. An adapter's absence does not
+  disable direct A2A configuration.
 - **Rollback:** turn the flag off. Nothing existing depends on the new path.
 - **Blast radius:** none while the flag is off.
 
@@ -94,17 +121,23 @@ capability before the replacement runs is how a migration becomes an outage.
 Publish `@name:gulls.ai` through the existing accounts, DNS, and hosting work:
 WebFinger document, Agent Card, A2A endpoint, durable hosted inbox.
 
-- **Precondition:** Stage 1 acceptance passes.
-- **Acceptance:** Definition-of-Done criterion 2. A hosted voice resolves and
-  receives from the Stage 1 slice with no shared code path.
-- **Rollback:** stop publishing the zone records; hosted Gulls become
-  unreachable but no other Gull is affected.
-- **Blast radius:** additive. This is the only no-regret stage — it reuses
-  shipped account and DNS work and gives Stage 1 a second endpoint to talk to.
+- **Precondition:** Stage 1A and the relevant Stage 1B hosted-handle profile
+  pass; the evidence and consent gates in
+  [Product Direction](../../../PRODUCT.md#not-yet-provider-hosting-and-broad-platform-expansion)
+  pass; and the hosted-identity ADR is accepted.
+- **Acceptance:** Definition-of-Done criterion 2, plus demonstrated owner-held
+  signing key, card history, recovery and rotation, handle tombstoning, export,
+  provider-exit behavior, and abuse/privacy/incident runbooks. A hosted voice
+  resolves and receives from the Stage 1 slice with no shared delivery path.
+- **Rollback:** execute the documented owner-exit and service-shutdown path.
+  Merely removing zone records makes every hosted Gull unreachable and is an
+  outage, not an adequate rollback.
+- **Blast radius:** all identities that choose Host, plus provider abuse,
+  privacy, support, recovery, availability, and incident-response duties.
 
-Stage 2 is deliberately early. It is cheap, it validates the host role against
-a real peer, and it is the stage that proves the platform is optional by making
-it visibly separable.
+Stage 2 is not a cheap or no-regret infrastructure task. It validates the Host
+role only after the local edge has evidence of repeat value and the provider
+obligations above have explicit owners.
 
 ## Stage 3 — Classify And Re-home
 
@@ -113,8 +146,10 @@ record the verdict in the
 [Code Disposition Register](#code-disposition-register). Move code to the
 package its verdict names. No behavior changes in this stage.
 
-- **Precondition:** Stage 2. The register cannot be filled honestly until a
-  working A2A edge shows what the Gull edge actually needs.
+- **Precondition:** Stage 1A. Stage 2 may proceed later or in parallel after its
+  own evidence gates; code classification does not require a hosted identity.
+  The register cannot be filled honestly until a working A2A edge shows what
+  the Gull edge actually needs.
 - **Acceptance:** every row in the register has a verdict and a landing package.
 - **Rollback:** moves are pure relocation; revert the commit.
 - **Blast radius:** import paths. Frozen identifiers are unaffected.
@@ -145,7 +180,7 @@ Move Pet and Agent Request onto A2A tasks. They are leaf consumers and go last.
   independently.
 - **Blast radius:** per product.
 
-## Stage 6 — Retire Dual Discovery
+## Stage 6 — Retire Legacy Discovery
 
 Turn off `/.well-known/gulls` after a deprecation window, and delete the
 documents whose `Retire when` condition Stage 4 and Stage 5 satisfied.
@@ -154,8 +189,11 @@ documents whose `Retire when` condition Stage 4 and Stage 5 satisfied.
 - **Acceptance:** no traffic on the legacy discovery path for the full window.
 - **Rollback:** re-enable the endpoint; it is a read path with no state.
 
-Both discovery mechanisms run in parallel from Stage 1 to Stage 6. There is no
-point at which a deployed agent has neither.
+The legacy `/.well-known/gulls` path stays available through Stage 6. Each
+Stage 1B discovery adapter runs beside it from the moment that adapter is
+enabled; direct Agent Card configuration remains available independently.
+There is no point at which a deployed agent loses its existing discovery path
+before a replacement has acceptance evidence.
 
 ## Compatibility Contract
 

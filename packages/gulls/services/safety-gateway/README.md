@@ -1,6 +1,6 @@
 # Safety Gateway
 
-> **Status: Legacy.** Superseded by
+> **Status: Migrating.** Superseded by
 > [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md), which
 > wins wherever this document conflicts with it.
 > **Still true:** the service described below is deployed and still the

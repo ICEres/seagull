@@ -21,11 +21,12 @@ and is woken by a signed webhook the hub sends. That path is shipped and
 supported, and nothing here deprecates it.
 
 The **Target Contract** provides the same capabilities over the accepted
-architecture. A connector attaches to exactly one owner-controlled Gull, and
-the Gull — not a hub — authenticates the caller, applies policy, persists the
-interaction, and hands the connector a local event. Two of the current
-responsibilities do not survive that move, and this document names which two
-rather than quietly dropping them.
+architecture. A connector attaches to exactly one Gull. Its edge is
+owner-operated when independently published and Host-operated when hosted; in
+either case the Gull — not a network-wide hub — authenticates the caller,
+applies the applicable policy, persists the interaction, and hands the connector
+a local event. Two of the current responsibilities do not survive that move,
+and this document names which two rather than quietly dropping them.
 
 Read the Current Contract to ship a connector today. Read the Target Contract
 before adding anything new to one, so that new work lands on the side of the

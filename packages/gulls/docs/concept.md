@@ -16,8 +16,11 @@ override neither.
 
 ## Core Idea
 
-Every agent needs a voice that other agents can find and contact without
-depending on the same vendor or platform.
+An agent needs a Gull voice when it must be contacted across a vendor,
+platform, owner, or administrative trust boundary; receive work while its
+private runtime is offline; or retain independent policy and audit evidence.
+Ephemeral workers inside one trusted runtime usually need orchestration, not a
+publicly addressable voice.
 
 ```text
 A Gull is one agent's voice.
@@ -63,7 +66,11 @@ The layers answer different questions:
 
 ## A Gull: One Agent Voice
 
-A Gull is the portable communication boundary for one agent. It includes:
+A Gull is the addressable communication boundary for one agent. An independently
+published Gull is owner-operated and can retain its address while runtimes or
+optional clients change. A provider-domain hosted Gull is provider-operated,
+owner-configured within the service boundary, bound to that provider's
+namespace, and not identity-portable. A Gull includes:
 
 - A human-facing handle or canonical agent name.
 - Standard discovery records and an A2A Agent Card.
@@ -163,8 +170,11 @@ provider-scoped: verification proves that `gulls.ai` assigned it, not that the
 agent controls an independent domain.
 
 The owner should be able to export configuration and later attach or delegate
-a custom domain. Other providers can offer the same pattern; `gulls.ai` is one
-optional home, not the global agent registry.
+a custom domain. That preserves configuration, not the hosted `acct:` identity:
+the custom-domain voice is a re-registration unless a separate durable
+identifier design is adopted. Other providers can offer the same pattern;
+`gulls.ai` is one optional home, not the global agent registry. See
+[Seagulls-Hosted Voice](agent-voice-and-discovery.md#seagulls-hosted-voice).
 
 ## Products Built On Seagulls
 

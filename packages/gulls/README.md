@@ -13,8 +13,8 @@
 > every module here and Stage 4 has re-homed hub routing, so the Current
 > Implementation Map and the target layout are the same list.
 
-`gulls` is the runtime and CLI that gives one agent a portable,
-owner-controlled voice. It resolves known agents through WebFinger and AID or
+`gulls` is the runtime and CLI that gives one agent an addressable,
+policy-governed voice. It resolves known agents through WebFinger and AID or
 DNS-AID, communicates through A2A, applies local policy, persists local inbox
 and task projections, and connects those interactions to the owner's runtime.
 
@@ -66,18 +66,17 @@ See the authoritative
 
 ## Contents
 
-Every Markdown file in this package is listed below. Status values are defined
-in [Doc Status](../../docs/doc-status.md): **Authoritative** is the accepted
-target contract, **Current** describes deployed behavior with executable
-instructions, **Migrating** is accurate today with boundaries that will move,
-and **Legacy** is reference only — its instructions must not be executed.
+Every Markdown file in this package is listed below. Status and precedence
+rules are defined in [Doc Status](../../docs/doc-status.md). A superseded file's
+banner names the target that wins and the behavior that remains true;
+instructions in a **Legacy** file must not be executed.
 
 ### Design And Delivery — `docs/`
 
 | Doc | Purpose | Status |
 | --- | --- | --- |
 | [Agent Voice And DNS Discovery](docs/agent-voice-and-discovery.md) | The accepted target architecture: DNS discovery, A2A transport, what a Gull owns, and what it does not. Wins over every other document in this repository. | Authoritative |
-| [Concept](docs/concept.md) | The product concept: why every agent needs a findable voice that does not depend on one vendor. | Authoritative (product concept) |
+| [Concept](docs/concept.md) | The product concept: when an agent crossing vendor or administrative boundaries needs an addressable voice and owner-side policy edge. | Authoritative (product concept) |
 | [Migration Plan](docs/migration-plan.md) | The route from the deployed hub to the target — stages, freezes, the compatibility contract, and the Code Disposition Register. | Authoritative (delivery) |
 | [Terminology](docs/terminology.md) | The naming boundary between the base layer and the product surfaces built on it. | Authoritative (glossary) |
 | [Local Development](docs/local-development.md) | Running the stack on a developer machine instead of deploying AWS for every change. | Current |
@@ -132,7 +131,7 @@ and **Legacy** is reference only — its instructions must not be executed.
 | [Message Hub Storage](services/message-hub/src/message_hub/storage/README.md) | Repository interfaces, the in-memory implementation, and the deployed DynamoDB table shape. | Migrating |
 | [Message Hub Workers](services/message-hub/src/message_hub/workers/README.md) | Async delivery work; the shipped outbound webhook worker and why it never marks a message acked. | Migrating |
 | [Message Hub Tests](services/message-hub/tests/README.md) | Domain-first test ordering and the targets the suite covers. | Migrating |
-| [Safety Gateway](services/safety-gateway/README.md) | The deployed central policy and trust layer. Verdict **Split**: per-Gull policy to the Gull edge, provider policy to the Seagulls Host. | Legacy |
+| [Safety Gateway](services/safety-gateway/README.md) | The deployed central policy and trust layer. Verdict **Split**: per-Gull policy to the Gull edge, provider policy to the Seagulls Host. | Migrating |
 | [AI Provider](services/ai-provider/README.md) | Hosted AI run execution and internal credit accounting. Verdict **Move to Seagulls**; a Gull with an owner-supplied runtime never calls it. | Migrating |
 
 ### Apps — `apps/`

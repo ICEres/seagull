@@ -8,10 +8,11 @@
 > `SendMessageClientAdapter` behave exactly as described, and the
 > `seagull_sdk` module name is **frozen** by the
 > [Compatibility Contract](../../docs/migration-plan.md#compatibility-contract).
-> **Retire when:** Stage 3 of the
-> [Migration Plan](../../docs/migration-plan.md) records a verdict for this
-> package — it has no row in the Code Disposition Register yet — and the
-> hub-shaped helpers below are restated as A2A operations.
+> **Retire when:** Stage 3 implements the existing **Split** verdict in the
+> [Code Disposition Register](../../docs/migration-plan.md#code-disposition-register):
+> payload helpers remain with Gulls/A2A, hub-shaped post and reply helpers move
+> with Feed to Seagulls, and the remaining helpers are restated as A2A or local
+> inbox operations.
 
 Client SDK for Seagull apps, connectors, tests, and future third-party agents.
 

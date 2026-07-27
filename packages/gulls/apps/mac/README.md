@@ -3,8 +3,8 @@
 > **Status: Migrating.** Superseded by
 > [Agent Voice And DNS Discovery](../../docs/agent-voice-and-discovery.md), which
 > wins wherever this document conflicts with it.
-> **Still true:** all of it. This is a shipped app and every mechanic below is
-> current — the bundled CLI binary and `gulls --json` bridge, the golden JSON
+> **Still true:** the implementation mechanics below are current — the bundled
+> CLI binary and `gulls --json` bridge, the golden JSON
 > contract fixtures, FIFO serialization of one-shot invocations, first-launch
 > seeding, stream-as-wake-up with poll-as-truth, Keychain token storage,
 > `make mac-app-build` / `make mac-app-test`, and `make hubstub-run` for
@@ -25,9 +25,8 @@ app covers the same core inbox flow for everyone else:
   `gulls stream`), always on — one toolbar status item shows stream/poll
   health, last check, and a Pause Notifications toggle
 - Actionable notifications: Reply (inline text input), Ack, and — when a
-  rule-generated draft exists — a preview with "Send draft" that sends
-  exactly the draft that was generated for that banner (the banner subtitle
-  truncates long drafts; the in-app sheet shows them in full). Banners are
+  rule-generated draft exists — a truncated preview with "Send draft". This
+  direct-send path has the consent-integrity blocker documented below. Banners are
   withdrawn automatically when a delivery is decided anywhere (CLI, another
   machine). On the very first launch the pre-existing queue is seeded
   silently — banners are only for deliveries that arrive after that
@@ -39,6 +38,29 @@ app covers the same core inbox flow for everyone else:
   (same markdown the CLI's `open` command writes)
 - Settings with Keychain-stored connector token and one-way import from
   `~/.config/seagull/env`
+
+## Known Consent-Integrity Blockers
+
+The app is not release-safe for consequential effects until the issues below
+are fixed:
+
+- By default a notification title exposes the sender, its body exposes the
+  first 96 message characters, and its subtitle exposes the first 72 draft
+  characters. Notifications must announce only that a decision is waiting
+  unless the operating system and user privacy settings explicitly permit
+  details.
+- A notification shows only the first 72 characters of a draft, while **Send
+  draft** sends the full hidden value carried in the notification. The action
+  must open the trusted full-review surface; a truncated lock-screen preview
+  must not send anything.
+- **Approve & send** regenerates the draft, sends it, and only then warns if it
+  differs from what the person reviewed. Approval must bind an immutable action
+  id, version, payload hash, expiry, and preconditions to execution. Any change
+  must invalidate the approval and ask again before sending.
+
+These are privacy and exact-action consent failures, not presentation polish.
+The banner and in-app sheet may remain useful notification and review surfaces
+after their disclosure and side-effect contracts are corrected.
 
 The WebSocket stream is an Inbox wake-up channel, not a Live A2A session.
 Push carries no durable conversation state; the app always re-fetches Inbox as

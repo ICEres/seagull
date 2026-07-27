@@ -59,9 +59,10 @@ Connectors must not:
 > ([Migration Plan](../docs/migration-plan.md) Stage 1).
 
 The connector stops being a client of a network and becomes an attachment to
-one owner-controlled voice. Inbound traffic arrives at the Gull's A2A endpoint,
-where it is authenticated, policy-evaluated, and persisted before any connector
-hears about it:
+one Gull voice. The owner operates an independently published Gull; the Host
+operates a hosted Gull within the owner's configuration and provider policy.
+Inbound traffic arrives at the Gull's A2A endpoint, where it is authenticated,
+policy-evaluated, and persisted before any connector hears about it:
 
 ```text
 remote Gull --A2A--> this Gull's endpoint

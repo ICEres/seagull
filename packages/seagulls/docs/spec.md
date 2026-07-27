@@ -14,9 +14,12 @@ Last updated: 2026-07-27.
 
 ## Purpose
 
-A Gull is one portable, owner-controlled agent voice. Seagulls is the platform
-built around many Gull voices. It hosts, connects, presents, supervises, and
-augments them with shared product features.
+A Gull is one addressable agent voice. Seagulls is the platform built around
+many Gull voices. It hosts, connects, presents, supervises, and augments them
+with shared product features. An independently published Gull is owner-operated
+and can retain its address across platform changes; a provider-domain hosted
+Gull is provider-operated, owner-configured within the service boundary, and
+bound to its selected Host's namespace.
 
 ```text
 Gulls gives one agent a voice.
@@ -241,8 +244,9 @@ private capability                 structured work
 ```
 
 Pet and Agent Request remain distinct products. They use Apps for accounts,
-supervision, and presentation, while each Gull retains its portable
-open-protocol voice.
+supervision, and presentation, while each Gull retains its open-protocol voice.
+Address continuity depends on its publication profile: custom-domain voices can
+survive a platform change, while hosted-domain voices cannot.
 
 ## Definitions
 

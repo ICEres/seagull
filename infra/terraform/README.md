@@ -5,9 +5,12 @@ Status: Current.
 Last updated: 2026-07-27.
 
 Terraform owns AWS infrastructure for Seagull. Everything under `infra/` is
-`Current`: it describes deployed, working infrastructure, and its instructions
-are executable. See [Doc Status](../../docs/doc-status.md) for the status
-vocabulary.
+`Current`: it accurately describes the infrastructure code and each
+environment's present state. `Current` does not mean every environment is
+deployed — dev and domain are implemented, while prod is explicitly a
+placeholder. Instructions are executable only where the environment document
+says the prerequisite infrastructure exists. See
+[Doc Status](../../docs/doc-status.md) for the status vocabulary.
 
 ## Infrastructure Is Not Being Renamed
 

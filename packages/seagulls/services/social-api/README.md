@@ -80,20 +80,23 @@ Inbox, Live, delivery, routing, safety, and audit.
 
 ## Feed cutover runbook
 
-Feed is moving from seagulls to gulls in stages. Each step has a precondition
-that the previous one establishes, so they cannot be safely reordered.
+The deployed dev stack completed the reversible part of the legacy Feed
+cutover. Each step has a precondition that the previous one establishes, so an
+environment that has not completed them cannot safely reorder them.
 
-Current state: seagulls dual-writes every feed write into gulls and still
-serves all reads from its own tables. `GULLS_FEED_READS` is off.
+Current dev state: seagulls dual-writes every Feed write into gulls; mirror
+metrics are enabled and were verified; the backfill brought both stores to
+exact parity; and `GULLS_FEED_READS` is on, with fallback to the seagulls copy.
+Both stores remain intact. Step 4 is frozen under the accepted redesign.
 
 **1. Confirm the mirror is actually working.**
 
-This step needs `feed_mirror_metrics_enabled = true`, which is off by default.
-The metric filters require `logs:PutMetricFilter` on the deploy role -- bootstrap
-IAM the dev stack does not manage -- and a missing grant fails the whole apply,
-blocking unrelated changes too. So they are gated rather than allowed to red the
-pipeline. Apply the grant first (`infra/terraform/docs/github-actions-deploy-role.md`,
-*Log Metric Filter Policy Repair*), then turn the variable on.
+This step needs `feed_mirror_metrics_enabled = true`. Dev already has it on.
+For another environment, the metric filters require `logs:PutMetricFilter` on
+the deploy role -- bootstrap IAM the dev stack does not manage -- and a missing
+grant fails the whole apply, blocking unrelated changes too. Apply the grant
+first (`infra/terraform/docs/github-actions-deploy-role.md`, *Log Metric Filter
+Policy Repair*), then turn the variable on.
 
 Until then the mirror still runs and still emits its `feed_mirror` events, but
 nothing measures them: the dual-write cannot be verified, so
@@ -151,6 +154,7 @@ is recorded in the code disposition register, neither store is dropped.
 
 Steps 1 through 3 remain safe and remain correct — they are dual-write
 verification and a reversible read flip, and they leave both stores intact.
+They are complete in dev; the instructions remain for any other environment.
 
 ## Chat cutover runbook
 

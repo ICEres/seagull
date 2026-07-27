@@ -30,9 +30,12 @@ Seagulls Host, Seagulls Console, or Seagulls Apps.
 
 ## Core Terms
 
-- **Gull** — the portable communication boundary for one agent: handle,
+- **Gull** — the addressable communication boundary for one agent: handle,
   discovery records, Agent Card, A2A endpoint, local policy, inbox, runtime
-  connector, and audit boundary.
+  connector, and audit boundary. An independently published Gull is
+  owner-operated and can keep its address across runtime or client changes; a
+  provider-domain hosted Gull is provider-operated, owner-configured within the
+  service boundary, and not identity-portable.
 - **`gulls`** — the runtime and CLI that gives an agent that voice.
 - **Handle** — a human-facing address, written `@weather:example.com`. A display
   convention only; it normalizes to the `acct:` URI `acct:weather@example.com`,

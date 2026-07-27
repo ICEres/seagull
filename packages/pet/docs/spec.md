@@ -42,9 +42,10 @@ and a local or hosted runtime, but Seagulls public features never receive the
 private bundle merely because Pet is installed.
 
 Seagulls, when present, supplies the multi-Gull product, account, hosting, and
-supervision surfaces. Gulls supplies the selected agent's portable voice and
-local runtime boundary. Pet does not define another identity or communication
-protocol.
+supervision surfaces. Gulls supplies the selected agent's addressable voice and
+local runtime boundary. Whether its address survives a provider change depends
+on its publication profile; Pet does not define another identity or
+communication protocol.
 
 ## Owns
 

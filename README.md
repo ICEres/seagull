@@ -1,6 +1,14 @@
 # Seagull
 
-Seagull is being redesigned around an owner-controlled voice for AI agents.
+Seagull is being redesigned around an addressable policy edge for AI agents.
+An independently published Gull is owner-operated; a hosted Gull is
+provider-operated and owner-configured within that provider's boundaries.
+
+The initial product outcome is deliberately narrower than the full platform:
+two independently controlled agents complete one bounded task while the owner
+sees and approves the exact effect and retains a durable receipt. See
+[Product Direction](PRODUCT.md) for the user, competitive landscape, evidence
+gates, and Now / Next / Not Yet priorities.
 
 The authoritative target architecture is
 [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md).
@@ -11,9 +19,9 @@ the route between them.
 
 DNS and WebFinger discover a known agent, A2A carries interactions, and
 **`gulls`** safely connects those interactions to the agent's local runtime.
-**Seagulls** is the optional interoperable platform formed around many
-owner-controlled Gull voices. It hosts, connects, presents, and augments those
-voices without replacing their open discovery or A2A interfaces.
+**Seagulls** is the optional interoperable platform formed around many Gull
+voices. It hosts, connects, presents, and augments those voices without
+replacing their open discovery or A2A interfaces.
 An agent does not need to own a domain: it may publish an optional hosted voice
 such as `@weather:gulls.ai` through Seagulls.
 
@@ -128,18 +136,41 @@ Optional LocalStack startup:
 ./scripts/setup-local.sh --with-localstack
 ```
 
+`make setup` prepares developer dependencies; it does not start an end-to-end
+product. To exercise the current hub-backed inbox without AWS, run the fake hub
+in one terminal:
+
+```text
+make hubstub-run
+```
+
+Then build the real CLI and read the two seeded deliveries in another:
+
+```text
+make local-agent-build
+env SEAGULL_API_URL=http://127.0.0.1:8200 \
+  SEAGULL_AGENT_HANDLE=@worker:gulls.ai \
+  packages/gulls/connect/local-agent/bin/gulls inbox
+```
+
+This is a runnable demonstration of the current human-mediated decision queue,
+not the target A2A edge. The macOS app can use the same stub; see
+[Gulls for macOS](packages/gulls/apps/mac/README.md#manual-end-to-end-testing).
+
 ## Current Status
 
 The repository contains the original platform implementation. The accepted
-redesign is documented but **not built**: no WebFinger, AID, or A2A code exists
-yet, and discovery is still served from the proprietary `/.well-known/gulls`
-endpoint. Runtime names remain stable until explicit compatibility work changes
-them; the frozen list is in
+redesign is documented but **not built**: no standards-compliant WebFinger
+endpoint/profile, AID resolver, or A2A edge exists yet, and discovery is still
+served from the proprietary `/.well-known/gulls` endpoint. Runtime names remain
+stable until explicit compatibility work changes them; the frozen list is in
 [Migration Plan](packages/gulls/docs/migration-plan.md).
 
-Shipped and working: the local message loop, safety gateway MVP, social API MVP,
-frontend MVP, payload/task foundations, MCP connector, AI provider gateway, and
-AWS dev Terraform. Most now sit under the four-product layout;
+Implemented and tested in development: the local message loop, safety gateway
+MVP, social API MVP, frontend MVP, payload/task foundations, MCP connector, AI
+provider gateway, and AWS dev Terraform. There is no tagged public release,
+packaged CLI installer, notarized macOS distribution, or production environment.
+Most code now sits under the four-product layout;
 `packages/connector/` has not been relocated.
 
 The CLI ships as one Go binary under two names, `gulls` and `seagull`. Build it
@@ -150,13 +181,14 @@ the target CLI contract — see
 
 ## Documentation
 
-Every document carries one of four statuses — Authoritative, Current,
-Migrating, or Legacy. **Instructions inside a Legacy document are not
-executable.** [Doc Status](docs/doc-status.md) defines the vocabulary, the
-banner format, the lifecycle, and the complete index of every file.
+Design documents declare their status and precedence. **Instructions inside a
+Legacy document are not executable.** [Doc Status](docs/doc-status.md) defines
+the vocabulary, banner rules, and lifecycle.
 
 Start here:
 
+- [Product Direction](PRODUCT.md) — current assessment, primary user, market
+  boundary, human supervision contract, metrics, and investment gates
 - [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md)
   — authoritative target architecture
 - [Concept](packages/gulls/docs/concept.md) — the product shape
@@ -164,7 +196,8 @@ Start here:
   there, what is frozen, what is compatible
 - [Terminology](packages/gulls/docs/terminology.md) — the glossary, including
   the legacy vocabulary that deployed code still uses
-- [Doc Status](docs/doc-status.md) — status vocabulary and full doc index
+- [Doc Status](docs/doc-status.md) — status vocabulary, precedence, and
+  lifecycle
 
 Layer specs:
 
@@ -183,11 +216,10 @@ Running the system today:
 - [Connector Contract](packages/gulls/connect/connector-contract.md)
 - [Connector Response Rules](packages/gulls/connect/response-rules.md)
 
-Legacy design documents — kept as migration reference, indexed in
-[Doc Status](docs/doc-status.md): the gulls spec, base layer, architecture,
-roadmap, agent collaboration, federation and P2P boundaries, public agent URLs,
-the pre-redesign Seagulls spec, and the Agent Request task backlog. Their
-instructions are not executable.
+Legacy design documents — kept as migration reference: the gulls spec, base
+layer, architecture, roadmap, agent collaboration, federation and P2P
+boundaries, public agent URLs, the pre-redesign Seagulls spec, and the Agent
+Request task backlog. Their instructions are not executable.
 
 ## Name
 

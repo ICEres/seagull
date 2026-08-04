@@ -1,10 +1,11 @@
 import SwiftUI
 
 // Rule-based draft-reply flow. Mirrors the CLI's two-step safety design:
-// generate first (no side effects), send only on an explicit approve. Note
-// `draft-reply --approve` re-generates the draft server-rules-fresh, so after
-// sending we compare the sent draft with the one that was displayed and warn
-// if they differ.
+// generate first (no side effects), send only on an explicit approve.
+// `draft-reply --approve` re-generates from the message as it stands now, so
+// the approval carries the digest of the draft that was displayed and the CLI
+// refuses to send anything that no longer matches it. What was reviewed is
+// what is sent, or nothing is.
 struct DraftReplyView: View {
     @Bindable var store: InboxStore
     let deliveryID: String
@@ -119,7 +120,7 @@ struct DraftReplyView: View {
         switch phase {
         case .generated(let result) where result.draft != nil:
             Button("Approve & send") {
-                Task { await approve(displayedDraft: result.draft) }
+                Task { await approve() }
             }
             .keyboardShortcut(.defaultAction)
         case .approving:
@@ -144,14 +145,18 @@ struct DraftReplyView: View {
         }
     }
 
-    private func approve(displayedDraft: String?) async {
+    private func approve() async {
         guard case .generated(let current) = phase else { return }
         phase = .approving(current)
         do {
-            let result = try await store.draftReply(for: deliveryID, approve: true)
-            if let sentDraft = result.draft, let displayedDraft, sentDraft != displayedDraft {
-                draftMismatchWarning = "The sent draft differs from the one shown: response rules changed between generate and approve."
-            }
+            // Approve the draft that is on screen, not whatever regenerating
+            // produces now: the digest travels with the approval and the CLI
+            // refuses to send if the two no longer agree.
+            let result = try await store.draftReply(
+                for: deliveryID,
+                approve: true,
+                expectDraft: current.draftSha256
+            )
             if !result.draftSent {
                 draftMismatchWarning = "No draft was sent — the outcome on approve was “\(result.outcome)”."
             }

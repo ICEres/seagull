@@ -46,14 +46,23 @@ class DynamoDbConnectorTokenStore(ConnectorTokenStore):
         return item_to_record(attributes)
 
     def list_tokens(self, owner_user_id: str) -> tuple[ConnectorTokenRecord, ...]:
-        result = self._table.query(
-            IndexName="owner-created-at-index",
-            KeyConditionExpression="#owner = :owner",
-            ExpressionAttributeNames={"#owner": "owner_user_id"},
-            ExpressionAttributeValues={":owner": owner_user_id},
-            ScanIndexForward=False,
-        )
-        return tuple(item_to_record(item) for item in result.get("Items", []))
+        items = []
+        query_kwargs: dict[str, Any] = {
+            "IndexName": "owner-created-at-index",
+            "KeyConditionExpression": "#owner = :owner",
+            "ExpressionAttributeNames": {"#owner": "owner_user_id"},
+            "ExpressionAttributeValues": {":owner": owner_user_id},
+            "ScanIndexForward": False,
+        }
+        while True:
+            result = self._table.query(**query_kwargs)
+            items.extend(result.get("Items", []))
+            last_key = result.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            query_kwargs["ExclusiveStartKey"] = last_key
+
+        return tuple(item_to_record(item) for item in items)
 
 
 def record_to_item(record: ConnectorTokenRecord) -> dict[str, Any]:

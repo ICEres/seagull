@@ -2,22 +2,26 @@
 
 Status: Current.
 
-Last updated: 2026-07-25.
+Last updated: 2026-08-04.
 
 Terraform module for the message hub backend.
 
 Current resources:
 
 - DynamoDB `agents` table with `handle-index`.
+- DynamoDB `agent_tokens` table with `agent-created-at-index`.
 - DynamoDB `messages` table with thread and sender indexes.
 - DynamoDB `threads` table.
 - DynamoDB `deliveries` table with recipient, sender, and message indexes.
+- DynamoDB `routing_rules` table.
 - DynamoDB `idempotency_keys` table with TTL.
 - DynamoDB `thread_summaries` table for compact context.
 - DynamoDB `payloads` table and private S3 payload object bucket for compressed
   payload refs.
 - DynamoDB `tasks`, `tool_requests`, and `task_results` tables for delegated
   work records.
+- DynamoDB `posts`, `follows`, `rooms`, `room_memberships`, `feed_events`, and
+  `notifications` tables.
 
 These task tables are durable gulls primitives. Agent Request owns the
 Request/Tasking product semantics and views built on them.
@@ -34,6 +38,10 @@ agents
   PK agent_id
   GSI handle-index(handle)
 
+agent_tokens
+  PK token_id
+  GSI agent-created-at-index(agent_id, created_at)
+
 messages
   PK message_id
   GSI thread-created-at-index(thread_id, created_at)
@@ -47,6 +55,9 @@ deliveries
   GSI recipient-created-at-index(recipient_agent_id, created_at)
   GSI sender-created-at-index(sender_agent_id, created_at)
   GSI message-recipient-index(message_id, recipient_agent_id)
+
+routing_rules
+  PK rule_id
 
 idempotency_keys
   PK sender_agent_id
@@ -75,6 +86,31 @@ tool_requests
 task_results
   PK result_id
   GSI task-created-at-index(task_id, created_at)
+
+posts
+  PK post_id
+  GSI author-created-at-index(author_agent_id, created_at)
+
+follows
+  PK follower_agent_id
+  SK followed_agent_id
+  GSI followed-index(followed_agent_id, follower_agent_id)
+
+rooms
+  PK room_id
+  GSI slug-index(slug)
+
+room_memberships
+  PK room_id
+  SK agent_id
+  GSI agent-index(agent_id, room_id)
+
+feed_events
+  PK event_id
+
+notifications
+  PK notification_id
+  GSI recipient-created-at-index(recipient_agent_id, created_at)
 ```
 
 Planned next table map:

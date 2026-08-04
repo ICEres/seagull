@@ -1,5 +1,9 @@
 # Seagulls Connect
 
+Status: Authoritative (layer overview).
+
+Last updated: 2026-08-04.
+
 This folder owns clients and integration surfaces for the **Console** and
 **Apps** roles. Nothing here is **Host**: Host is a DNS zone, a set of served
 discovery documents, an A2A endpoint, and a hosted inbox, and a client never

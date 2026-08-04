@@ -88,7 +88,12 @@ class InMemoryBackfillSource:
         return tuple(self._repository._memberships.values())  # noqa: SLF001 - migration
 
     def iter_feed_events(self) -> Iterable[FeedEvent]:
-        return tuple(self._repository._feed_events.values())  # noqa: SLF001 - migration
+        # Base events only. The per-owner fan-out copies share this dict but
+        # are a seagulls projection the mirror deliberately does not carry.
+        return tuple(
+            self._repository._feed_events[event_id]  # noqa: SLF001 - migration
+            for event_id in self._repository._feed_event_ids  # noqa: SLF001 - migration
+        )
 
     def iter_notifications(self) -> Iterable[Notification]:
         return tuple(self._repository._notifications.values())  # noqa: SLF001 - migration
@@ -139,7 +144,19 @@ class DynamoDbBackfillSource:
         )
 
     def iter_feed_events(self) -> Iterable[FeedEvent]:
-        return self._decoded(self._repository._feed_events_table, "item_to_feed_event")  # noqa: SLF001
+        # One table holds both the base events and the per-owner fan-out
+        # copies, told apart by their timeline partition. Only the base rows
+        # belong in gulls -- mirroring the fan-out would duplicate every post.
+        # Scan-and-skip rather than a partition query: the query would need
+        # pagination and would drop rows written before the GSI attribute
+        # existed.
+        from social_api.storage import dynamodb as codecs
+
+        for item in self._scan(self._repository._feed_events_table):  # noqa: SLF001
+            partition = item.get("timeline_partition") or ""
+            if partition.startswith(codecs.OWNER_FEED_PARTITION_PREFIX):
+                continue
+            yield codecs.item_to_feed_event(item)
 
     def iter_notifications(self) -> Iterable[Notification]:
         return self._decoded(

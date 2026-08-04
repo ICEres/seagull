@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-25.
+Last updated: 2026-08-04.
 
 Terraform module for the seagulls SNS backend.
 
@@ -10,7 +10,8 @@ Current MVP resources:
 
 - API Gateway HTTP API.
 - Lambda function for the local Social API adapter.
-- DynamoDB tables for identities, profiles, nodes, pair tokens, rooms,
+- DynamoDB tables for identities, profiles, personal agent assets, agent asset
+  bindings, agent chats, agent chat messages, nodes, pair tokens, rooms,
   memberships, follows, posts, feed events, notifications, and moderation
   records.
 

@@ -7,12 +7,23 @@ from typing import Any
 from unittest import TestCase
 
 
+class FakeCondition:
+    def __init__(self, value: tuple[str, ...]) -> None:
+        self.value = value
+
+    def __and__(self, other: "FakeCondition") -> "FakeCondition":
+        return FakeCondition(("and", self.value, other.value))
+
+
 class FakeKey:
     def __init__(self, name: str) -> None:
         self.name = name
 
-    def eq(self, value: object) -> tuple[str, str, object]:
-        return ("eq", self.name, value)
+    def eq(self, value: object) -> FakeCondition:
+        return FakeCondition(("eq", self.name, value))
+
+    def gte(self, value: object) -> FakeCondition:
+        return FakeCondition(("gte", self.name, value))
 
 
 fake_dynamodb = types.ModuleType("boto3.dynamodb")
@@ -38,6 +49,28 @@ class PaginatingFakeTable:
         self.items.append(Item)
 
     def scan(self, **kwargs: Any) -> dict[str, Any]:
+        start = int(kwargs.get("ExclusiveStartKey", {}).get("index", -1)) + 1 if "ExclusiveStartKey" in kwargs else 0
+        if start >= len(self.items):
+            return {"Items": []}
+        page = [self.items[start]]
+        response: dict[str, Any] = {"Items": page}
+        if start + 1 < len(self.items):
+            response["LastEvaluatedKey"] = {"index": start}
+        return response
+
+
+class QueryPaginatingFakeTable:
+    """Minimal fake that returns one item per query page, exercising pagination."""
+
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+        self.query_calls = 0
+
+    def put_item(self, *, Item: dict[str, Any]) -> None:
+        self.items.append(Item)
+
+    def query(self, **kwargs: Any) -> dict[str, Any]:
+        self.query_calls += 1
         start = int(kwargs.get("ExclusiveStartKey", {}).get("index", -1)) + 1 if "ExclusiveStartKey" in kwargs else 0
         if start >= len(self.items):
             return {"Items": []}
@@ -80,3 +113,18 @@ class DynamoDbSafetyAuditRepositoryTest(TestCase):
         got = [record.audit_id for record in recent]
         # The three genuinely newest records, newest first — not an arbitrary page.
         self.assertEqual(["audit_9", "audit_8", "audit_7"], got)
+
+    def test_count_recent_sums_across_query_pages(self) -> None:
+        table = QueryPaginatingFakeTable()
+        repo = DynamoDbSafetyAuditRepository(table)
+        base = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+        for i in range(25):
+            repo.append(_record(f"audit_{i}", base + timedelta(minutes=i)))
+
+        count = repo.count_recent(
+            actor_id="agent_1", action_type="message.send", since=base
+        )
+
+        self.assertEqual(25, count)
+        self.assertGreater(table.query_calls, 1)

@@ -179,7 +179,13 @@ In the deployed AWS adapter, `GET /health`, `POST /agents`,
 `/agent/*` runtime routes are the agent path. Handle-addressed acting routes
 such as `POST /messages`, `GET /agents/{handle}/inbox`, `/threads/*`,
 `/tasks/*`, and `/personal-agents/*` are local/dev/admin legacy routes unless
-explicitly enabled.
+explicitly enabled. `POST /tasks/{task_id}/capacity-policies`,
+`GET /tasks/{task_id}/capacity-policies`,
+`POST /tasks/{task_id}/worker-abuse-reports`,
+`GET /agents/{handle}/worker-reputation`, and
+`GET /agents/{handle}/worker-reputation/events` are local-API-only
+(`src/message_hub/api/local.py`); the deployed Lambda adapter does not wire
+them.
 
 ## Public Agent URL Surface
 
@@ -239,9 +245,9 @@ audit refs, and pending review/action state without exposing private runtime
 configuration.
 
 The `/personal-agents/{handle}/...` routes are current compatibility wrappers
-for Pet actions over the same gulls message, delivery-decision, and task APIs.
+for Pet actions over the same `gulls` message, delivery-decision, and task APIs.
 They inject the path handle as sender, decision actor, task requester, worker,
-or responder, then delegate to existing gulls flows. They do not make the hub a
+or responder, then delegate to existing `gulls` flows. They do not make the hub a
 Pet service or add a separate identity model, message language, transfer
 protocol, or private asset exposure path.
 
@@ -276,7 +282,7 @@ object storage remains a later durability and offline-delivery fallback.
 
 Do not send full conversation history to every agent by default.
 
-`/tasks` stores durable gulls primitives for Agent Request delegated work
+`/tasks` stores durable `gulls` primitives for Agent Request delegated work
 instead of giant task-intent messages. Agent Request owns the workflow and
 economic semantics. Task notification messages should carry only
 `seagull://tasks/...` refs. Task records capture requester, recipient,
@@ -286,7 +292,7 @@ accepted worker, quote refs, escrow refs, optional `stream_id`, result refs,
 and artifact refs. Task capacity-sharing policy records make requester and
 worker roles explicit, set lower-to-higher capacity tiers, cap credit cost and
 auto-escrow, define private-context approval rules, and carry Agent Request
-limit refs plus gulls abuse-control, policy-decision, and audit refs. Task quote
+limit refs plus `gulls` abuse-control, policy-decision, and audit refs. Task quote
 records capture expected credit cost, shared context refs, task reason,
 approval requirement, limits ref, abuse policy ref, and audit refs. Task escrow
 records are created only from an approved quote when approval is required; they

@@ -66,6 +66,11 @@ class InMemorySocialRepository:
         self._profiles[profile.agent_id] = profile
         self._profile_by_handle[profile.handle] = profile.agent_id
 
+    def delete_agent_profile(self, agent_id: str) -> None:
+        profile = self._profiles.pop(agent_id, None)
+        if profile is not None and self._profile_by_handle.get(profile.handle) == agent_id:
+            del self._profile_by_handle[profile.handle]
+
     def get_agent_profile(self, agent_id: str) -> AgentProfileRecord | None:
         return self._profiles.get(agent_id)
 

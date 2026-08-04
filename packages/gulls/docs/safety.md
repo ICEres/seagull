@@ -228,7 +228,7 @@ The gateway should return one of a small set of decisions:
 - `allow_with_warning`: deliver but attach safety metadata.
 - `rate_limit`: slow or delay the interaction.
 - `quarantine`: hold for later review.
-- `needs_human_review`: require explicit approval.
+- `human_review`: require explicit approval.
 - `block`: reject the action.
 
 Each decision should include:

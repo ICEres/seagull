@@ -7,17 +7,19 @@ from urllib import parse
 
 from seagull_mcp.auth import (
     ALL_SCOPES,
+    ConnectorTokenRecord,
     InMemoryConnectorTokenStore,
     TokenVerificationError,
     issue_connector_token,
     parse_connector_token,
     verify_bearer_token,
 )
-from seagull_mcp.client import SeagullHttpClient
+from seagull_mcp.client import SeagullClientError, SeagullHttpClient
 from seagull_mcp.cognito import CognitoJwtVerifier, CognitoPrincipalResolver
 from seagull_mcp.oauth_proxy import CognitoOAuthProxy
 from seagull_mcp.server import McpConnectorApp
 from seagull_mcp.server import allowed_origin_for
+from seagull_mcp.storage import DynamoDbConnectorTokenStore, record_to_item
 
 
 class FakeSeagullClient:
@@ -613,6 +615,27 @@ class McpConnectorTest(TestCase):
         self.assertEqual(["5"], query["max_payload_refs"])
         self.assertEqual(["1000"], query["token_budget_estimate"])
 
+    def test_http_client_list_agents_treats_404_as_unknown_and_propagates_other_errors(self) -> None:
+        class FailingHttpClient(SeagullHttpClient):
+            def __init__(self) -> None:
+                super().__init__(message_api_url="https://message.example.com")
+
+            def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object]:
+                if "missing" in path:
+                    raise SeagullClientError(404, "not found")
+                if "down" in path:
+                    raise SeagullClientError(502, "bad gateway")
+                return {"agent": {"handle": path, "status": "active"}}
+
+        client = FailingHttpClient()
+
+        agents = client.list_agents(("@missing:gulls.ai",))
+        self.assertEqual([{"handle": "@missing:gulls.ai", "status": "unknown"}], agents)
+
+        with self.assertRaises(SeagullClientError) as ctx:
+            client.list_agents(("@down:gulls.ai",))
+        self.assertEqual(502, ctx.exception.status_code)
+
     def test_http_client_sends_ref_only_messages_and_payload_requests(self) -> None:
         client = RecordingHttpClient()
 
@@ -989,6 +1012,52 @@ class McpConnectorTest(TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIsInstance(response.body, dict)
         return response.body
+
+
+class QueryPaginatingFakeTable:
+    """Minimal fake that returns one item per query page, exercising pagination."""
+
+    def __init__(self, items: list[dict[str, object]]) -> None:
+        self.items = items
+        self.query_calls = 0
+
+    def query(self, **kwargs: object) -> dict[str, object]:
+        self.query_calls += 1
+        start_key = kwargs.get("ExclusiveStartKey")
+        start = int(start_key["index"]) + 1 if isinstance(start_key, dict) else 0
+        if start >= len(self.items):
+            return {"Items": []}
+        page = [self.items[start]]
+        response: dict[str, object] = {"Items": page}
+        if start + 1 < len(self.items):
+            response["LastEvaluatedKey"] = {"index": start}
+        return response
+
+
+class DynamoDbConnectorTokenStoreTest(TestCase):
+    def test_list_tokens_collects_all_items_across_query_pages(self) -> None:
+        items = [
+            record_to_item(
+                ConnectorTokenRecord(
+                    token_id=f"token_{i}",
+                    token_hash=f"hash_{i}",
+                    name="test connector",
+                    owner_user_id="user_alice",
+                    scopes=ALL_SCOPES,
+                    agent_handles=("@alice:gulls.ai",),
+                    created_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                )
+            )
+            for i in range(7)
+        ]
+        table = QueryPaginatingFakeTable(items)
+        store = DynamoDbConnectorTokenStore(table)
+
+        records = store.list_tokens("user_alice")
+
+        self.assertEqual(7, len(records))
+        self.assertEqual({f"token_{i}" for i in range(7)}, {record.token_id for record in records})
+        self.assertGreater(table.query_calls, 1)
 
 
 def json_rpc(method: str, params: dict[str, object]) -> str:

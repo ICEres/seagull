@@ -2,6 +2,8 @@ package agentcli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -59,8 +61,19 @@ func (r DraftResult) ToMap() map[string]any {
 	}
 	if r.Draft != "" {
 		result["draft"] = r.Draft
+		result["draft_sha256"] = DraftDigest(r.Draft)
 	}
 	return result
+}
+
+// DraftDigest names one exact draft. Approving is a decision about the bytes a
+// reviewer actually read, so the approval carries this digest back: `--approve`
+// regenerates from the current message and refuses to send when the digest no
+// longer matches. Without that binding, a message edited between generate and
+// approve would be answered with a draft nobody reviewed.
+func DraftDigest(draft string) string {
+	sum := sha256.Sum256([]byte(draft))
+	return hex.EncodeToString(sum[:])
 }
 
 func ResolveConnectorResponseRules(rulesFile string, rulesJSON string) ResponseRuleResolution {

@@ -106,6 +106,17 @@ _REQUESTER_ONLY_TASK_STATES = frozenset(
         TaskState.COMPLETED,
     }
 )
+# Returning a result is the worker's own act, so it may drive the task to the
+# states a result can produce -- and only those. RESULT_ACCEPTED/RELEASED are
+# settlement the requester alone decides, and canceled/refused through this
+# path would let a worker permanently strand work it was merely asked to do.
+_WORKER_RESULT_TASK_STATES = frozenset(
+    {
+        TaskState.RESULT_READY,
+        TaskState.COMPLETED,
+        TaskState.FAILED,
+    }
+)
 
 
 class ForbiddenPayloadError(MessageHubError):
@@ -130,6 +141,11 @@ DeliveryEventPublisher = Callable[[dict[str, Any]], None]
 DEFAULT_CONTEXT_MAX_INLINE_CHARS = 4000
 DEFAULT_CONTEXT_MAX_RECENT_MESSAGES = 10
 DEFAULT_CONTEXT_MAX_PAYLOAD_REFS = 20
+# Held (human-review) deliveries are dropped AFTER the repository query, so a
+# burst of holds would otherwise evict real deliveries from the inbox window.
+# get_inbox re-queries with a widening window until it has `limit` visible rows;
+# this caps that widening so a hold backlog cannot turn one read into a scan.
+INBOX_HOLD_SCAN_MULTIPLIER = 16
 MAX_ENVELOPE_INLINE_CHARS = 4000
 DEFAULT_CONTACT_RELATIONSHIP = "needs_approval"
 CONTACT_EXPLANATION_SUMMARY_CHARS = 280
@@ -880,15 +896,31 @@ class MessageHubService:
 
     def get_inbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
         agent = self._require_agent_by_handle(handle)
-        deliveries = self._repository.list_deliveries_by_recipient(agent.agent_id, limit=limit)
         # Deliveries held for human review must not surface their content to the
         # recipient agent until a human releases them; otherwise the review gate
         # is advisory only. The human-facing review surface reads them directly.
-        return tuple(
-            self._inbox_item_for_delivery(delivery)
-            for delivery in deliveries
-            if delivery.status != DeliveryStatus.NEEDS_REVIEW
-        )
+        # The hold filter runs after the query, so the query window is widened
+        # until `limit` visible rows are collected -- otherwise held deliveries
+        # (which nothing ages out) permanently push real ones off the inbox.
+        max_scan_limit = limit * INBOX_HOLD_SCAN_MULTIPLIER
+        scan_limit = limit
+        while True:
+            deliveries = self._repository.list_deliveries_by_recipient(
+                agent.agent_id, limit=scan_limit
+            )
+            visible = tuple(
+                delivery
+                for delivery in deliveries
+                if delivery.status != DeliveryStatus.NEEDS_REVIEW
+            )
+            if (
+                len(visible) >= limit
+                or len(deliveries) < scan_limit
+                or scan_limit >= max_scan_limit
+            ):
+                break
+            scan_limit = min(scan_limit * 2, max_scan_limit)
+        return tuple(self._inbox_item_for_delivery(delivery) for delivery in visible[:limit])
 
     def get_outbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
         agent = self._require_agent_by_handle(handle)
@@ -1932,6 +1964,11 @@ class MessageHubService:
         worker = self._require_agent_by_handle(worker_handle)
         if worker.agent_id != task.recipient_agent_id:
             raise ForbiddenDeliveryError("only the recipient agent can accept this task")
+        # Accepting is a lifecycle transition like any other, so a settled task
+        # cannot be reopened through this path. ACCEPTED is not requester-only.
+        self._require_valid_task_transition(
+            task, TaskState.ACCEPTED, worker, requester_only_settlement=False
+        )
 
         now = self._clock()
         updated = replace(
@@ -2022,8 +2059,18 @@ class MessageHubService:
 
         task_state = normalize_task_state(state)
         # The worker returns the result, so it may drive the task to its own
-        # completion states directly; but it must not re-open or overwrite a task
-        # that has already reached a terminal state.
+        # completion states directly; but it must never self-award settlement --
+        # that credits its own reputation and releases the requester's funds.
+        if task_state in {TaskState.RESULT_ACCEPTED, TaskState.RELEASED}:
+            raise ForbiddenDeliveryError(
+                f"only the task requester can set task state {task_state.value}"
+            )
+        if task_state not in _WORKER_RESULT_TASK_STATES:
+            raise InvalidTaskTransitionError(
+                f"a task result cannot set task state {task_state.value}"
+            )
+        # Nor may it re-open or overwrite a task that has already reached a
+        # terminal state.
         if task.state in TASK_INACTIVE_STATES:
             raise InvalidTaskTransitionError(
                 f"cannot return a result for a task in terminal state {task.state.value}"
@@ -2262,6 +2309,7 @@ class MessageHubService:
         recipient_handle: str,
     ) -> Delivery:
         delivery = self._require_delivery_for_recipient(delivery_id, recipient_handle)
+        self._require_delivery_not_held(delivery)
         now = self._clock()
         updated = replace(
             delivery,
@@ -2373,12 +2421,7 @@ class MessageHubService:
         note: str | None = None,
     ) -> AgentDecisionResult:
         delivery = self._require_delivery_for_recipient(delivery_id, agent_handle)
-        if delivery.status == DeliveryStatus.NEEDS_REVIEW:
-            # The recipient must not reply to, act on, or ack a delivery that is
-            # being held for human review until a human releases it.
-            raise ForbiddenDeliveryError(
-                "delivery is held for human review and cannot be acted on until released"
-            )
+        self._require_delivery_not_held(delivery)
         normalized_decision = normalize_agent_decision(decision)
         normalized_refs = tuple(normalize_message_ref(ref) for ref in refs)
         now = self._clock()
@@ -2562,6 +2605,14 @@ class MessageHubService:
         if delivery.recipient_agent_id != recipient.agent_id:
             raise ForbiddenDeliveryError("agent cannot decide another recipient's delivery")
         return delivery
+
+    def _require_delivery_not_held(self, delivery: Delivery) -> None:
+        # The recipient must not reply to, act on, or ack a delivery that is
+        # being held for human review until a human releases it.
+        if delivery.status == DeliveryStatus.NEEDS_REVIEW:
+            raise ForbiddenDeliveryError(
+                "delivery is held for human review and cannot be acted on until released"
+            )
 
     def _require_task(self, task_id: str) -> TaskRecord:
         task = self._repository.get_task(task_id)

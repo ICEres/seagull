@@ -2,7 +2,7 @@
 
 Status: Authoritative (process).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 This repository documents two systems at once: the implementation that runs
 today, and the accepted redesign that has not been built yet. Without a rule for
@@ -112,18 +112,22 @@ Current — deployed behavior, executable instructions:
 Migrating — accurate today, boundaries moving. A Migrating document is
 **rewritten** at its retire condition, not deleted:
 
-| Doc | Rewritten when |
+| Doc | Retire when |
 | --- | --- |
 | [Domain Context](../CONTEXT.md) | Terminology is consolidated into one glossary |
+| [gulls Package Overview](../packages/gulls/README.md) | Migration Plan Stage 3 has recorded a landing package for every module there and Stage 4 has re-homed hub routing |
 | [Safety](../packages/gulls/docs/safety.md) | Per-Gull policy replaces the central gateway and the threat model is ported |
 | [AI Provider Infrastructure](../packages/gulls/docs/ai-provider-infra.md) | The service is re-documented as Seagulls Host infrastructure with no hub dependency |
-| [Message Hub](../packages/gulls/services/message-hub/README.md) | Migration Plan Stage 4 splits delivery from routing |
+| [Message Hub](../packages/gulls/services/message-hub/README.md) | Migration Plan Stage 3 splits delivery from routing |
 | [Social API](../packages/seagulls/services/social-api/README.md) | Migration Plan Stage 4 re-scopes Feed as provider-local |
 | [Connect Overview](../packages/gulls/connect/README.md) | The A2A edge is the only inbound path |
 | [Connector Contract](../packages/gulls/connect/connector-contract.md) | The A2A edge is the only inbound path |
 | [Connector Response Rules](../packages/gulls/connect/response-rules.md) | Rule authority is local Gull policy everywhere |
 | [Local Agent CLI](../packages/gulls/connect/local-agent/README.md) | The target CLI contract ships |
+| [Policy](../packages/gulls/packages/policy/README.md) | The Split of the safety gateway lands and this README is rewritten to describe the Gull edge enforcement point directly |
+| [SDK](../packages/gulls/packages/sdk/README.md) | Migration Plan Stage 3 implements the Split verdict: payload helpers remain with Gulls/A2A and hub-shaped post and reply helpers move with Feed to Seagulls |
 | [Safety Gateway](../packages/gulls/services/safety-gateway/README.md) | Per-Gull policy replaces the central gateway. Migrating, not Legacy, per rule 4 — the service is deployed and is still the chokepoint |
+| [Gulls for macOS](../packages/gulls/apps/mac/README.md) | Migration Plan Stage 4 replaces the app's Message Hub API URL setting with a connection to one Gull's local durable inbox |
 | Per-runtime connector READMEs under `packages/gulls/connect/` | Their runtime consumes the local inbox instead of the hub |
 
 Legacy — reference only, instructions not executable:
@@ -154,10 +158,10 @@ index does not enumerate them:
 
 | Class | Status | Rewritten or retired when |
 | --- | --- | --- |
-| `packages/<product>/README.md` — the four product overviews plus `packages/connector/` | Authoritative (layer overview) | Their layer spec changes |
+| `packages/<product>/README.md` — the seagulls, pet, and agent-request overviews plus `packages/connector/` | Authoritative (layer overview) | Their layer spec changes |
 | `connect/README.md` for seagulls, pet, agent-request | Authoritative (layer overview) | Their layer spec changes |
-| Everything under `packages/gulls/connect/<runtime>/` — claude, chatgpt, codex (including its plugin `SKILL.md`), mcp and `mcp/self-hosted`, mcp-connector, local-agent | Migrating | That runtime consumes the local inbox instead of the hub |
-| `packages/gulls/packages/*/README.md` — common, protocol, policy, sdk | Current | The package changes |
+| Everything under `packages/gulls/connect/<runtime>/` — claude, chatgpt, codex (including its plugin `SKILL.md`), mcp and `mcp/self-hosted`, mcp-connector | Migrating | That runtime consumes the local inbox instead of the hub |
+| `packages/gulls/packages/*/README.md` — common, protocol | Current | The package changes |
 | `packages/gulls/services/*/README.md` and their subtrees | Migrating | Migration Plan Stage 3 or 4 re-homes the service |
 | `packages/seagulls/apps/*/README.md` | Migrating | Stage 4 re-scopes the platform surface |
 | `infra/**/README.md` | Current | The infrastructure changes |

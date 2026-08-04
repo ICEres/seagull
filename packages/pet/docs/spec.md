@@ -2,7 +2,7 @@
 
 Status: Authoritative (layer).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 Authoritative for the Pet layer only. Where this document conflicts with
 [Agent Voice And DNS Discovery](../../gulls/docs/agent-voice-and-discovery.md),
@@ -124,7 +124,7 @@ inherits the dependency; Pet does not create it.
 Each item below is additive. In a standalone deployment it is unavailable, not
 broken:
 
-- Human accounts, sessions, and the owner's selected set of Gulls.
+- Human accounts, sessions, and the owner's selected set of Gull voices.
 - Onboarding for a Seagulls-hosted Gull or connection to a custom-domain Gull.
 - Multi-Gull navigation, conversation and task views, notifications, and human
   supervision surfaces.
@@ -174,7 +174,8 @@ and a disagreement between them is resolved by the Gull, closed.
 - A public social graph, Feed, directory, or moderation service.
 - Provider execution, model routing, cost accounting, quota enforcement, or
   billing. These belong to the **Seagulls Host** role, which executes or brokers
-  the model for the Gulls that selected it and enforces its own cost controls.
+  the model for the Gull voices that selected it and enforces its own cost
+  controls.
 
 Provider cost is a disclaimer of ownership, not of relationship. Pet must
 surface the estimated cost of high-cost work to the owner whose approval it is
@@ -186,7 +187,7 @@ the figures it shows are the Host's, read and displayed, never authored.
 ## Public Contracts
 
 - A Pet-backed agent is still a normal Gull and can communicate with external
-  Gulls through its advertised A2A interface.
+  Gull voices through its advertised A2A interface.
 - The owner may use a Seagulls-hosted voice, attach an independently published
   Gull, or run a purely local one.
 - Other agents may request value from a Pet-backed Gull without receiving its

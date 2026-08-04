@@ -34,6 +34,13 @@ const connectionTTL = 24 * time.Hour
 // durable Inbox for the agent to pull.
 const resumeBacklogLimit = 100
 
+// isoMillis matches the fixed 3-digit-millisecond layout the Python hub's
+// to_iso writes for created_at (storage/dynamodb.py). RFC3339Nano strips
+// trailing fractional zeros, which would otherwise make the resume cursor's
+// lexicographic comparison against the stored value disagree with real time
+// ordering for any instant landing on a whole millisecond, tenth, or second.
+const isoMillis = "2006-01-02T15:04:05.000Z"
+
 type handler struct {
 	ddb              *dynamodb.Client
 	awsConfig        aws.Config
@@ -55,11 +62,17 @@ type deliveryRecord struct {
 	CreatedAt        string `dynamodbav:"created_at"`
 }
 
+// dynamoQueryAPI is the subset of *dynamodb.Client dynamoDeliveryStore needs,
+// narrowed so tests can supply a fake Query implementation.
+type dynamoQueryAPI interface {
+	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+}
+
 // dynamoDeliveryStore backs routecore.DeliveryStore with the hub's deliveries
 // table, querying the recipient-created-at-index the table already carries.
 type dynamoDeliveryStore struct {
 	ctx   context.Context
-	ddb   *dynamodb.Client
+	ddb   dynamoQueryAPI
 	table string
 }
 
@@ -71,47 +84,71 @@ func (s dynamoDeliveryStore) DeliveriesForAgent(agentID string, after time.Time)
 	keyCondition := "recipient_agent_id = :agent"
 	values := map[string]types.AttributeValue{
 		":agent": &types.AttributeValueMemberS{Value: agentID},
+		":acked": &types.AttributeValueMemberS{Value: string(routecore.DeliveryAcked)},
 	}
 	// Range on created_at so the index does the filtering rather than a scan.
 	if !after.IsZero() {
 		keyCondition += " AND created_at > :after"
 		values[":after"] = &types.AttributeValueMemberS{
-			Value: after.UTC().Format(time.RFC3339Nano),
+			// Round down to millisecond precision so a sub-millisecond cursor
+			// can never lexicographically skip a stored row.
+			Value: after.UTC().Truncate(time.Millisecond).Format(isoMillis),
 		}
 	}
 
-	out, err := s.ddb.Query(s.ctx, &dynamodb.QueryInput{
-		TableName:                 aws.String(s.table),
-		IndexName:                 aws.String("recipient-created-at-index"),
-		KeyConditionExpression:    aws.String(keyCondition),
-		ExpressionAttributeValues: values,
-		Limit:                     aws.Int32(resumeBacklogLimit),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	deliveries := make([]routecore.Delivery, 0, len(out.Items))
-	for _, item := range out.Items {
-		var record deliveryRecord
-		if err := attributevalue.UnmarshalMap(item, &record); err != nil {
+	// Acked rows must be dropped server-side, not after Limit has already
+	// truncated the page: an agent with more than resumeBacklogLimit lifetime
+	// (mostly acked) deliveries would otherwise see the query cut off before
+	// it ever reaches the outstanding ones. DynamoDB still applies Limit to
+	// items *evaluated* rather than items returned, so the filter alone is not
+	// enough -- this pages with ExclusiveStartKey until it has gathered
+	// resumeBacklogLimit unacked deliveries or the index is exhausted.
+	deliveries := make([]routecore.Delivery, 0, resumeBacklogLimit)
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.ddb.Query(s.ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.table),
+			IndexName:                 aws.String("recipient-created-at-index"),
+			KeyConditionExpression:    aws.String(keyCondition),
+			FilterExpression:          aws.String("#status <> :acked"),
+			ExpressionAttributeNames:  map[string]string{"#status": "status"},
+			ExpressionAttributeValues: values,
+			Limit:                     aws.Int32(resumeBacklogLimit),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
 			return nil, err
 		}
-		createdAt, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
-		if err != nil {
-			// A row we cannot place in the stream is worse than one we skip:
-			// replaying it out of order would corrupt the agent's view.
-			continue
+
+		for _, item := range out.Items {
+			var record deliveryRecord
+			if err := attributevalue.UnmarshalMap(item, &record); err != nil {
+				return nil, err
+			}
+			createdAt, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
+			if err != nil {
+				// A row we cannot place in the stream is worse than one we skip:
+				// replaying it out of order would corrupt the agent's view.
+				continue
+			}
+			deliveries = append(deliveries, routecore.Delivery{
+				DeliveryID:       record.DeliveryID,
+				MessageID:        record.MessageID,
+				ThreadID:         record.ThreadID,
+				SenderAgentID:    record.SenderAgentID,
+				RecipientAgentID: record.RecipientAgentID,
+				Status:           routecore.DeliveryStatus(record.Status),
+				CreatedAt:        createdAt,
+			})
+			if len(deliveries) >= resumeBacklogLimit {
+				return deliveries[:resumeBacklogLimit], nil
+			}
 		}
-		deliveries = append(deliveries, routecore.Delivery{
-			DeliveryID:       record.DeliveryID,
-			MessageID:        record.MessageID,
-			ThreadID:         record.ThreadID,
-			SenderAgentID:    record.SenderAgentID,
-			RecipientAgentID: record.RecipientAgentID,
-			Status:           routecore.DeliveryStatus(record.Status),
-			CreatedAt:        createdAt,
-		})
+
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		startKey = out.LastEvaluatedKey
 	}
 	return deliveries, nil
 }
@@ -302,7 +339,7 @@ func (h handler) replayBacklog(
 			"sender_agent_id":    delivery.SenderAgentID,
 			"recipient_agent_id": delivery.RecipientAgentID,
 			"status":             string(delivery.Status),
-			"created_at":         delivery.CreatedAt.UTC().Format(time.RFC3339Nano),
+			"created_at":         delivery.CreatedAt.UTC().Format(isoMillis),
 		})
 		if err != nil {
 			continue

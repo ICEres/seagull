@@ -30,6 +30,7 @@ from social_api.api.local import (
     room_to_dict,
 )
 from social_api.domain import (
+    AgentRegistryUnavailableError,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     HumanIdentity,
@@ -466,6 +467,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             message = deliver_agent_chat_message(owner_user_id, chat, message)
             reply = None
             if ai_reply_enabled():
+                # Re-read: delivery stamps hub_thread_id on the session, and the
+                # reply has to land in that same thread rather than opening a new one.
+                chat = service.get_agent_chat(owner_user_id=owner_user_id, chat_id=chat.chat_id)
                 message, reply = generate_agent_chat_reply(
                     service,
                     AiProviderRunClient(),
@@ -473,6 +477,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     chat=chat,
                     message=message,
                 )
+                if reply is not None:
+                    reply = deliver_agent_chat_reply(owner_user_id, chat, reply)
             return response(
                 200,
                 {
@@ -599,6 +605,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response(404, {"error": "not_found", "message": str(exc)})
     except (DuplicateAgentHandleError, DuplicateRoomSlugError) as exc:
         return response(409, {"error": "conflict", "message": str(exc)})
+    except AgentRegistryUnavailableError as exc:
+        # gulls is the authority on handles; when it is unreachable the caller
+        # should retry, not read this as a bug on our side.
+        return response(503, {"error": "service_unavailable", "message": str(exc)})
     except Exception as exc:
         print(json.dumps({"level": "error", "message": str(exc), "event": redacted_event(event)}, default=str))
         return response(500, {"error": "internal_error"})
@@ -643,15 +653,50 @@ class AiProviderRunClient:
 
 
 def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> Any:
-    if not chat.sender_handle:
+    return deliver_chat_message_to_hub(
+        owner_user_id,
+        chat,
+        message,
+        sender_handle=chat.sender_handle,
+        recipient_handle=chat.agent_handle,
+    )
+
+
+def deliver_agent_chat_reply(owner_user_id: str, chat: Any, reply: Any) -> Any:
+    """Carry the agent's reply back through the shared Inbox.
+
+    Inbox is addressed delivery in both directions. Mirroring only the human's
+    side would leave gulls holding half of every conversation, which is exactly
+    what reading chat from gulls would then surface. Sender and recipient are
+    reversed relative to the inbound message, and the existing hub thread is
+    reused so both sides share one thread.
+    """
+    return deliver_chat_message_to_hub(
+        owner_user_id,
+        chat,
+        reply,
+        sender_handle=chat.agent_handle,
+        recipient_handle=chat.sender_handle,
+    )
+
+
+def deliver_chat_message_to_hub(
+    owner_user_id: str,
+    chat: Any,
+    message: Any,
+    *,
+    sender_handle: str | None,
+    recipient_handle: str | None,
+) -> Any:
+    if not sender_handle or not recipient_handle:
         return message
     message_api_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
     if not message_api_url:
         return message
 
     payload = {
-        "sender_handle": chat.sender_handle,
-        "recipient_handles": [chat.agent_handle],
+        "sender_handle": sender_handle,
+        "recipient_handles": [recipient_handle],
         "content": message.content,
         "thread_id": chat.hub_thread_id,
         "intent": "chat",

@@ -52,6 +52,30 @@ class DynamoDbAiProviderRepository:
         self._model_policies_table = model_policies_table
         self._budget_limits_table = budget_limits_table
 
+    @staticmethod
+    def _scan_all(table: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        while True:
+            result = table.scan(**kwargs)
+            items.extend(result.get("Items", []))
+            last_key = result.get("LastEvaluatedKey")
+            if last_key is None:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return items
+
+    @staticmethod
+    def _query_all(table: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        while True:
+            result = table.query(**kwargs)
+            items.extend(result.get("Items", []))
+            last_key = result.get("LastEvaluatedKey")
+            if last_key is None:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return items
+
     def put_run(self, run: AiRun) -> None:
         self._runs_table.put_item(Item=run_to_item(run))
 
@@ -76,40 +100,43 @@ class DynamoDbAiProviderRepository:
         self._run_events_table.put_item(Item=run_event_to_item(event))
 
     def list_run_events(self, run_id: str) -> tuple[AiRunEvent, ...]:
-        result = self._run_events_table.query(
+        items = self._query_all(
+            self._run_events_table,
             IndexName="run-created-at-index",
             KeyConditionExpression=Key("run_id").eq(run_id),
             ScanIndexForward=True,
         )
-        return tuple(item_to_run_event(item) for item in result.get("Items", []))
+        return tuple(item_to_run_event(item) for item in items)
 
     def put_usage_record(self, record: UsageRecord) -> None:
         self._usage_table.put_item(Item=usage_record_to_item(record))
 
     def list_usage_records(self) -> tuple[UsageRecord, ...]:
-        result = self._usage_table.scan()
+        items = self._scan_all(self._usage_table)
         return tuple(
             sorted(
-                (item_to_usage_record(item) for item in result.get("Items", [])),
+                (item_to_usage_record(item) for item in items),
                 key=lambda record: record.created_at,
             )
         )
 
     def list_usage_by_owner(self, owner_user_id: str) -> tuple[UsageRecord, ...]:
-        result = self._usage_table.query(
+        items = self._query_all(
+            self._usage_table,
             IndexName="owner-created-at-index",
             KeyConditionExpression=Key("owner_user_id").eq(owner_user_id),
             ScanIndexForward=True,
         )
-        return tuple(item_to_usage_record(item) for item in result.get("Items", []))
+        return tuple(item_to_usage_record(item) for item in items)
 
     def list_usage_by_agent(self, agent_id: str) -> tuple[UsageRecord, ...]:
-        result = self._usage_table.query(
+        items = self._query_all(
+            self._usage_table,
             IndexName="agent-created-at-index",
             KeyConditionExpression=Key("agent_id").eq(agent_id),
             ScanIndexForward=True,
         )
-        return tuple(item_to_usage_record(item) for item in result.get("Items", []))
+        return tuple(item_to_usage_record(item) for item in items)
 
     def append_user_credit_ledger_entry(
         self,
@@ -134,14 +161,15 @@ class DynamoDbAiProviderRepository:
             raise
 
     def list_user_credit_ledger_by_owner(self, owner_user_id: str) -> tuple[UserCreditLedgerEntry, ...]:
-        result = self._user_credit_ledger_table.query(
+        items = self._query_all(
+            self._user_credit_ledger_table,
             IndexName="owner-created-at-index",
             KeyConditionExpression=Key("owner_user_id").eq(owner_user_id),
             ScanIndexForward=True,
         )
         return tuple(
             item_to_user_credit_ledger_entry(item)
-            for item in result.get("Items", [])
+            for item in items
             if "entry_type" in item
         )
 
@@ -176,12 +204,12 @@ class DynamoDbAiProviderRepository:
             raise
 
     def list_server_credit_ledger(self) -> tuple[ServerCreditLedgerEntry, ...]:
-        result = self._server_credit_ledger_table.scan()
+        items = self._scan_all(self._server_credit_ledger_table)
         return tuple(
             sorted(
                 (
                     item_to_server_credit_ledger_entry(item)
-                    for item in result.get("Items", [])
+                    for item in items
                     if "entry_type" in item
                 ),
                 key=lambda entry: entry.created_at,
@@ -234,17 +262,17 @@ class DynamoDbAiProviderRepository:
         return None if item is None else item_to_provider_config(item)
 
     def list_provider_configs(self) -> tuple[ProviderConfig, ...]:
-        result = self._provider_configs_table.scan()
-        return tuple(sorted((item_to_provider_config(item) for item in result.get("Items", [])), key=lambda config: config.provider))
+        items = self._scan_all(self._provider_configs_table)
+        return tuple(sorted((item_to_provider_config(item) for item in items), key=lambda config: config.provider))
 
     def append_admin_audit_event(self, event: AdminAuditEvent) -> None:
         self._admin_audit_events_table.put_item(Item=admin_audit_event_to_item(event))
 
     def list_admin_audit_events(self) -> tuple[AdminAuditEvent, ...]:
-        result = self._admin_audit_events_table.scan()
+        items = self._scan_all(self._admin_audit_events_table)
         return tuple(
             sorted(
-                (item_to_admin_audit_event(item) for item in result.get("Items", [])),
+                (item_to_admin_audit_event(item) for item in items),
                 key=lambda event: event.created_at,
             )
         )
@@ -253,23 +281,25 @@ class DynamoDbAiProviderRepository:
         self._model_policies_table.put_item(Item=model_policy_to_item(policy))
 
     def list_model_policies_by_scope(self, scope_key: str) -> tuple[ModelPolicy, ...]:
-        result = self._model_policies_table.query(
+        items = self._query_all(
+            self._model_policies_table,
             IndexName="scope-updated-at-index",
             KeyConditionExpression=Key("scope_key").eq(scope_key),
             ScanIndexForward=True,
         )
-        return tuple(item_to_model_policy(item) for item in result.get("Items", []))
+        return tuple(item_to_model_policy(item) for item in items)
 
     def put_budget_limit(self, limit: BudgetLimit) -> None:
         self._budget_limits_table.put_item(Item=budget_limit_to_item(limit))
 
     def list_budget_limits_by_scope(self, scope_key: str) -> tuple[BudgetLimit, ...]:
-        result = self._budget_limits_table.query(
+        items = self._query_all(
+            self._budget_limits_table,
             IndexName="scope-updated-at-index",
             KeyConditionExpression=Key("scope_key").eq(scope_key),
             ScanIndexForward=True,
         )
-        return tuple(item_to_budget_limit(item) for item in result.get("Items", []))
+        return tuple(item_to_budget_limit(item) for item in items)
 
 def run_to_item(run: AiRun) -> dict[str, Any]:
     return without_none(

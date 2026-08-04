@@ -1,6 +1,6 @@
 # Product Direction
 
-Last reviewed: 2026-07-27.
+Last reviewed: 2026-08-04.
 
 > This is a product-priority brief, not a second architecture authority.
 > [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md)
@@ -220,15 +220,17 @@ as a north star. Each can rise while user value or safety falls.
 
 ## Immediate Product Risks
 
-1. **Consent is not currently exact.** The macOS
-   [notification](packages/gulls/apps/mac/Gulls/Services/Notifier.swift#L65)
-   displays only a draft prefix while its action sends the hidden full draft;
-   the [in-app approval](packages/gulls/apps/mac/Gulls/Views/DraftReplyView.swift#L147)
-   regenerates a draft and reports a mismatch only after sending. The
-   [generic web action](packages/seagulls/apps/web/src/components/sky-page.tsx#L782)
-   also lacks a sufficiently explicit effect summary. The notification title,
-   body, and subtitle can expose the sender, the first 96 message characters,
-   and the first 72 draft characters on the lock screen.
+1. **Consent is not yet exact everywhere.** Two of the three defects here are
+   closed. The in-app approval path is bound: `draft-reply --approve` takes
+   `--expect-draft <draft_sha256>` and the macOS approval passes the digest of
+   the draft it displayed, so a draft that changed after review is refused
+   rather than sent. The macOS notification no longer performs a consequential
+   effect from a truncated preview — its draft action opens the app, and the
+   draft text is not carried in the notification. Message and draft text are now
+   omitted from banners unless the owner opts in, though the title still names
+   the sender. The remaining defect is the
+   [generic web action](packages/seagulls/apps/web/src/components/sky-page.tsx#L782),
+   which still lacks a sufficiently explicit effect summary.
 2. **The identity promise is conditional.** A custom-domain voice can retain
    its address across runtime or platform changes. A hosted-domain voice cannot.
 3. **There is no cold-start mechanism.** Known-handle resolution does not help a

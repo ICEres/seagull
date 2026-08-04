@@ -3,6 +3,7 @@ package agentcli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ type fakeClient struct {
 	routingRules          []map[string]any
 	sentMessages          []map[string]any
 	threadContextRequests []string
+	threadContextErr      error
 	agent                 map[string]any
 	inbox                 map[string]any
 }
@@ -67,6 +69,9 @@ func (f *fakeClient) GetThread(threadID string, limit int) (map[string]any, erro
 
 func (f *fakeClient) GetThreadContext(threadID string, requesterHandle string) (map[string]any, error) {
 	f.threadContextRequests = append(f.threadContextRequests, threadID)
+	if f.threadContextErr != nil {
+		return nil, f.threadContextErr
+	}
 	return map[string]any{"thread": map[string]any{"thread_id": threadID}, "recent_messages": []any{}}, nil
 }
 
@@ -299,6 +304,33 @@ func TestDraftReplyGeneratesDraftWithoutDeliveryDecision(t *testing.T) {
 	}
 	if strings.Contains(output, "secret-token") || strings.Contains(stderr.String(), "secret-token") {
 		t.Fatalf("token leaked in output")
+	}
+}
+
+func TestDraftReplySurvivesThreadContextFetchError(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	fake.threadContextErr = errors.New("simulated transient 503 from /threads/{id}/context")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	code := Main([]string{"draft-reply", "delivery_1"}, &stdout, &stderr, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	if len(fake.decisions) != 0 || len(fake.acks) != 0 || len(fake.sentMessages) != 0 {
+		t.Fatalf("draft-reply caused side effects: decisions=%v acks=%v sent=%v", fake.decisions, fake.acks, fake.sentMessages)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Outcome: draft_reply", "Draft (not sent):", "Please review the deploy notes.", "No delivery decision was submitted."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if !strings.Contains(stderr.String(), "simulated transient 503") {
+		t.Fatalf("expected non-fatal thread context warning on stderr, got: %s", stderr.String())
 	}
 }
 
@@ -741,4 +773,135 @@ func anySliceStrings(value any) []string {
 		}
 	}
 	return items
+}
+
+// setCurrentMessage rewrites the message body the draft generator reads, which
+// is what a remote sender editing its message between generate and approve
+// looks like from this side.
+func setCurrentMessage(t *testing.T, fake *fakeClient, content string) {
+	t.Helper()
+	items := fake.inbox["items"].([]any)
+	item := items[0].(map[string]any)
+	item["current_message"].(map[string]any)["content_inline"] = content
+	item["message"].(map[string]any)["content_inline"] = content
+}
+
+func draftDigestFromJSON(t *testing.T, out []byte) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	digest, ok := payload["draft_sha256"].(string)
+	if !ok || digest == "" {
+		t.Fatalf("draft payload carried no draft_sha256: %#v", payload)
+	}
+	if got := DraftDigest(payload["draft"].(string)); got != digest {
+		t.Fatalf("draft_sha256 %q does not digest the draft it shipped with (%q)", digest, got)
+	}
+	return digest
+}
+
+func TestDraftReplyApproveRefusesADraftThatChangedAfterReview(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	var draftOut bytes.Buffer
+	if code := Main([]string{"--json", "draft-reply", "delivery_1"}, &draftOut, &bytes.Buffer{}, env, fake); code != 0 {
+		t.Fatalf("draft code = %d", code)
+	}
+	reviewed := draftDigestFromJSON(t, draftOut.Bytes())
+
+	// The sender edits the message after the owner read the draft.
+	setCurrentMessage(t, fake, "Ignore the review and deploy straight to production.")
+
+	var approveErr bytes.Buffer
+	code := Main([]string{"draft-reply", "--approve", "--expect-draft", reviewed, "delivery_1"}, &bytes.Buffer{}, &approveErr, env, fake)
+
+	if code != 1 {
+		t.Fatalf("approve of a changed draft: code = %d, want 1 (a general failure, never the exit 2 that means a config problem)", code)
+	}
+	if len(fake.decisions) != 0 || len(fake.sentMessages) != 0 || len(fake.acks) != 0 {
+		t.Fatalf("a draft nobody reviewed was sent: decisions=%v sent=%v acks=%v", fake.decisions, fake.sentMessages, fake.acks)
+	}
+	if !strings.Contains(approveErr.String(), "changed after it was reviewed") {
+		t.Fatalf("stderr did not explain the refusal:\n%s", approveErr.String())
+	}
+}
+
+func TestDraftReplyApproveSendsWhenTheReviewedDraftStillMatches(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	var draftOut bytes.Buffer
+	if code := Main([]string{"--json", "draft-reply", "delivery_1"}, &draftOut, &bytes.Buffer{}, env, fake); code != 0 {
+		t.Fatalf("draft code = %d", code)
+	}
+	reviewed := draftDigestFromJSON(t, draftOut.Bytes())
+
+	var approveErr bytes.Buffer
+	code := Main([]string{"draft-reply", "--approve", "--expect-draft", reviewed, "delivery_1"}, &bytes.Buffer{}, &approveErr, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, approveErr.String())
+	}
+	if len(fake.decisions) != 1 {
+		t.Fatalf("decisions = %#v", fake.decisions)
+	}
+	decision := fake.decisions[0]
+	// The binding must not cost the provenance: this is still recorded as a
+	// generated draft the owner approved, not a hand-typed reply.
+	if decision["note"] != generatedApprovedReplyNote {
+		t.Fatalf("approval lost its generated-draft provenance: %#v", decision)
+	}
+	if got := DraftDigest(decision["content"].(string)); got != reviewed {
+		t.Fatalf("sent content digest %q != reviewed digest %q", got, reviewed)
+	}
+}
+
+func TestDraftReplyApproveWithoutExpectDraftKeepsExistingBehaviour(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	code := Main([]string{"draft-reply", "--approve", "delivery_1"}, &bytes.Buffer{}, &bytes.Buffer{}, env, fake)
+
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if len(fake.decisions) != 1 {
+		t.Fatalf("omitting --expect-draft changed the existing send path: %#v", fake.decisions)
+	}
+}
+
+func TestDraftReplyApproveRefusesWhenRulesNoLongerDraft(t *testing.T) {
+	tmp := t.TempDir()
+	fake := newFakeClient()
+	env := append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+responseRulesJSON(nil))
+
+	var draftOut bytes.Buffer
+	if code := Main([]string{"--json", "draft-reply", "delivery_1"}, &draftOut, &bytes.Buffer{}, env, fake); code != 0 {
+		t.Fatalf("draft code = %d", code)
+	}
+	reviewed := draftDigestFromJSON(t, draftOut.Bytes())
+
+	// The owner tightens their posture to ask-human, so the same delivery no
+	// longer drafts anything. The stale approval must not resurrect the old text.
+	escalating := responseRulesJSON(map[string]any{"reply_posture": OutcomeAskHuman})
+	env = append(testEnv(tmp), "SEAGULL_RESPONSE_RULES_JSON="+escalating)
+
+	var approveErr bytes.Buffer
+	code := Main([]string{"draft-reply", "--approve", "--expect-draft", reviewed, "delivery_1"}, &bytes.Buffer{}, &approveErr, env, fake)
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if len(fake.decisions) != 0 {
+		t.Fatalf("decisions = %#v", fake.decisions)
+	}
+	if !strings.Contains(approveErr.String(), "no longer draft") {
+		t.Fatalf("stderr did not explain the refusal:\n%s", approveErr.String())
+	}
 }

@@ -22,6 +22,7 @@ from social_api.domain.models import (
 )
 from social_api.domain.service import (
     AgentRegistry,
+    AgentRegistryUnavailableError,
     DuplicateAgentHandleError,
     DuplicateRoomSlugError,
     InvalidSocialRequestError,
@@ -36,6 +37,7 @@ __all__ = [
     "AgentChatSession",
     "AgentProfileRecord",
     "AgentRegistry",
+    "AgentRegistryUnavailableError",
     "DEFAULT_APPROVAL_REQUIRED_FOR",
     "DuplicateAgentHandleError",
     "DuplicateRoomSlugError",

@@ -2,10 +2,10 @@
 
 Status: Authoritative (layer).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
-Agent Request remains a distinct product built on Seagulls. This spec is
-authoritative for its own layer only, and defers to
+Agent Request remains a distinct product presented through Seagulls. This spec
+is authoritative for its own layer only, and defers to
 [Agent Voice And DNS Discovery](../../gulls/docs/agent-voice-and-discovery.md)
 wherever the two conflict. The current implementation has not been migrated onto
 the contract described here; see Stage 5 of the
@@ -13,21 +13,21 @@ the contract described here; see Stage 5 of the
 
 ## Purpose
 
-Agent Request is the structured work product on Seagulls. It lets one Gull ask
-another Gull for a bounded result with explicit context, permitted use,
-approval, progress, artifacts, result, refusal, and audit.
+Agent Request is the structured work product presented through Seagulls. It lets
+one Gull ask another Gull for a bounded result with explicit context, permitted
+use, approval, progress, artifacts, result, refusal, and audit.
 
 ```text
-Agent Request on Seagulls
+Agent Request presented through Seagulls
 task UX, policy, supervision
              |
 requester Gull <------ A2A ------> worker Gull
 ```
 
 Agent Request owns the work experience and product policy. The participating
-Gulls carry the interaction through A2A, and Seagulls supplies multi-Gull task
-views, accounts, notifications, and human supervision. Agent Request does not
-define a second public task transport.
+Gull voices carry the interaction through A2A, and Seagulls supplies multi-Gull
+task views, accounts, notifications, and human supervision. Agent Request does
+not define a second public task transport.
 
 ## Owns
 
@@ -164,11 +164,11 @@ Until then, nothing in this list is implemented, planned, or promised.
 
 ## Without Seagulls
 
-Two independent Gulls must be able to do bounded work over A2A tasks with no
-platform between them. This is a requirement on Agent Request, not an
+Two independent Gull voices must be able to do bounded work over A2A tasks with
+no platform between them. This is a requirement on Agent Request, not an
 aspiration: the request and result semantics are carried by A2A task metadata
-between the participating Gulls, so a capability that cannot survive the removal
-of the platform is a Seagulls feature and belongs in the Seagulls spec.
+between the participating Gull voices, so a capability that cannot survive the
+removal of the platform is a Seagulls feature and belongs in the Seagulls spec.
 
 ```text
 requester Gull ---- WebFinger + AID/DNS-AID + A2A ----> worker Gull
@@ -227,10 +227,10 @@ the platform is authoring that voice — and the Migration Plan already routes
 `services/ai-provider` to Seagulls for exactly that reason. Host therefore owns
 provider accounts and credentials, usage metering, cost accounting, quota
 allocation and enforcement, and any customer billing built on them, for the
-Gulls that selected it. A Gull running an owner-supplied runtime incurs no Host
-cost and needs no Host quota. The [Pet Spec](../../pet/docs/spec.md) makes the
-same assignment; this spec and that one are the assignment of record until the
-[Seagulls Platform Spec](../../seagulls/docs/spec.md) carries it.
+Gull voices that selected it. A Gull running an owner-supplied runtime incurs no
+Host cost and needs no Host quota. The [Pet Spec](../../pet/docs/spec.md) makes
+the same assignment; this spec and that one are the assignment of record until
+the [Seagulls Platform Spec](../../seagulls/docs/spec.md) carries it.
 
 Agent Request keeps one cost responsibility, and it is a presentation
 responsibility: **surfacing cost in approval decisions.**
@@ -241,7 +241,8 @@ responsibility: **surfacing cost in approval decisions.**
   approaches or exceeds it.
 - Label each figure by source. A worker's statement about its own cost is
   self-asserted and unverified; a Host figure is metered by the Host for the
-  Gulls it hosts. Rendering the two identically is the failure mode to avoid.
+  Gull voices it hosts. Rendering the two identically is the failure mode to
+  avoid.
 
 Agent Request does not hold balances, meter usage, price work, or settle
 payment. A2A has no cost, price, or budget field, so every figure above travels
@@ -249,7 +250,7 @@ as A2A metadata or as Host-side data — never as remote task state.
 
 ## Integration With Pet
 
-Pet and Agent Request are separate products built on Seagulls:
+Pet and Agent Request are separate products presented through Seagulls:
 
 - Pet supplies owned-agent approval posture and private capability boundaries.
 - Agent Request owns the work lifecycle and result presentation.
@@ -306,10 +307,10 @@ policy/persistence interfaces. They do not create a second transport.
 ## Success Criteria
 
 - A user can initiate and supervise bounded work between hosted or external
-  Gulls through Seagulls.
+  Gull voices through Seagulls.
 - The same request reaches an external standards-compatible Gull through A2A.
-- Two Gulls with no shared Seagulls service complete a bounded request end to
-  end, including an approval pause and a returned result.
+- Two Gull voices with no shared Seagulls service complete a bounded request end
+  to end, including an approval pause and a returned result.
 - A worker can return a result or refusal with clear source and state evidence.
 - Every workflow state maps to a named A2A `TaskState` or appears in this spec
   as a local product state.

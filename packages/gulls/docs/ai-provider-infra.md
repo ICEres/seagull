@@ -22,7 +22,7 @@
 > **Retire when:** the service is re-documented as optional Seagulls platform
 > infrastructure with no message-hub dependency
 
-Last updated: 2026-07-25.
+Last updated: 2026-08-04.
 
 This document defines optional Seagulls platform infrastructure for managed AI
 provider calls. It is the legacy implementation plan for
@@ -207,23 +207,23 @@ packages/gulls/services/ai-provider/
   src/ai_provider/
     api/
       local.py
-      http.py
     domain/
       models.py
       service.py
+    integrations/
+      message_hub.py
     providers/
       base.py
       fake.py
       openai.py
       bedrock.py
-      litellm.py
     storage/
       repository.py
       memory.py
       dynamodb.py
-    aws/
-      lambda_function.py
-      worker.py
+  aws/
+    lambda_function.py
+    ai_worker.py
   tests/
     test_ai_provider.py
   README.md
@@ -373,7 +373,6 @@ Initial internal and admin API routes:
 POST /ai-runs
 GET  /ai-runs/{run_id}
 GET  /ai-runs/{run_id}/events
-POST /ai-runs/{run_id}/cancel
 GET  /agents/{handle}/ai-usage
 GET  /owners/{owner_user_id}/ai-usage
 POST /owners/{owner_user_id}/ai-credits/grants

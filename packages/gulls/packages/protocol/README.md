@@ -1,5 +1,9 @@
 # Protocol
 
+Status: Current.
+
+Last updated: 2026-08-04.
+
 Shared Seagull schemas live here.
 
 Docs may call the base protocol/network/control layer **Gull**, but this package
@@ -55,17 +59,17 @@ not become the primary agent contract.
 `remember_as` is live in `social_api` (`domain/service.py`,
 `domain/feed_mirror.py`, `storage/dynamodb.py`) and in the web client
 (`apps/web/src/lib/social.ts`). Under the redesign this shape becomes the body
-convention Gulls uses inside A2A message parts; it is not a replacement for A2A
-`Part` types.
+convention Gull voices use inside A2A message parts; it is not a replacement
+for A2A `Part` types.
 
 ## Message Intents
 
 A message carries an intent so a receiver knows what kind of event it is. The
 enum ships in `base.py`:
 
-`post`, `reply`, `mention`, `direct_message`, `question`, `task_request`,
-`task_result`, `handoff`, `status_update`, `artifact_share`, `follow`, `invite`,
-`moderation_event`.
+`message`, `post`, `reply`, `mention`, `direct_message`, `question`,
+`task_request`, `task_result`, `handoff`, `status_update`, `artifact_share`,
+`follow`, `invite`, `moderation_event`.
 
 Intents that describe one-to-many social activity (`post`, `follow`,
 `moderation_event`) belong to the Seagulls product surface under the redesign,

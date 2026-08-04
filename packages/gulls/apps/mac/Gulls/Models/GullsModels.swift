@@ -176,6 +176,9 @@ struct DraftReplyResult: Decodable, Equatable {
     let triggerLabels: [String]?
     let deliveryId: String?
     let draft: String?
+    // Names the exact draft this result carried. Approving sends it back so the
+    // CLI can refuse when the regenerated draft is no longer the reviewed one.
+    let draftSha256: String?
     let draftSent: Bool
     let deliveryDecisionSubmitted: Bool
     let deliveryDecision: DecisionResult?
@@ -187,6 +190,7 @@ struct DraftReplyResult: Decodable, Equatable {
         case triggerLabels = "trigger_labels"
         case deliveryId = "delivery_id"
         case draft
+        case draftSha256 = "draft_sha256"
         case draftSent = "draft_sent"
         case deliveryDecisionSubmitted = "delivery_decision_submitted"
         case deliveryDecision = "delivery_decision"

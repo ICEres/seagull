@@ -56,6 +56,12 @@ final class StreamController {
                         self.terminateProcess = nil
                         self.state = .failed(failure.localizedDescription)
                         self.onError?(failure.localizedDescription)
+                        // The cause is recoverable from Settings, so release
+                        // `task`: start()'s `task == nil` guard would otherwise
+                        // refuse every later restart until the app relaunches.
+                        // The cancellation paths below already return with
+                        // stop() having cleared it.
+                        self.task = nil
                         return
                     default:
                         self.onError?(failure.localizedDescription)

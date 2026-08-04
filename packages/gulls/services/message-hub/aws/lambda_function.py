@@ -15,6 +15,7 @@ gating, task lifecycle, payload retention, token verification) lives in the
 from __future__ import annotations
 
 import base64
+import binascii
 import hmac
 import json
 import os
@@ -1173,7 +1174,10 @@ def parse_body(event: dict[str, Any], *, default: dict[str, Any] | None = None) 
     if not raw_body:
         return default if default is not None else {}
     if event.get("isBase64Encoded"):
-        raw_body = base64.b64decode(raw_body).decode("utf-8")
+        try:
+            raw_body = base64.b64decode(raw_body).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ApiError(400, "bad_request", "request body is not valid base64 or utf-8") from exc
     try:
         body = json.loads(raw_body)
     except json.JSONDecodeError as exc:

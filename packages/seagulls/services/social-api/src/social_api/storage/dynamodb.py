@@ -97,6 +97,9 @@ class DynamoDbSocialRepository:
     def put_agent_profile(self, profile: AgentProfileRecord) -> None:
         self._profiles_table.put_item(Item=agent_profile_to_item(profile))
 
+    def delete_agent_profile(self, agent_id: str) -> None:
+        self._profiles_table.delete_item(Key={"agent_id": agent_id})
+
     def get_agent_profile(self, agent_id: str) -> AgentProfileRecord | None:
         return optional_item(
             self._profiles_table.get_item(Key={"agent_id": agent_id}).get("Item"),

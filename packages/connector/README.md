@@ -1,8 +1,8 @@
 # Connector — LLM Provider Shim
 
-Status: Current.
+Status: Authoritative (layer overview).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 A minimal, zero-dependency TypeScript client that talks to both OpenAI and
 Anthropic through one call. Package name `@seagull/connector`; private, not

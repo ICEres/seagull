@@ -26,6 +26,9 @@ final class InboxStore {
     var lastRefresh: Date?
     var isRefreshing = false
     var notificationsPaused = false
+    // Banners are readable on a locked screen, so message and draft text are
+    // shown there only when the owner asks for it.
+    var showContentInNotifications = false
     var filter: InboxFilter = .awaiting
     var searchText = ""
 
@@ -103,12 +106,6 @@ final class InboxStore {
         notifier.onAck = { [weak self] deliveryID in
             Task { await self?.ack(deliveryID) }
         }
-        notifier.onSendDraft = { [weak self] deliveryID, draft in
-            // Sends exactly the draft text carried by the notification — the
-            // full generated draft, never a regenerated one.
-            Task { await self?.reply(to: deliveryID, content: draft) }
-        }
-
         streamController.onStateChange = { [weak self] state in
             self?.streamState = state
         }
@@ -244,15 +241,17 @@ final class InboxStore {
         }
     }
 
-    // Best-effort: try to generate the rule-based draft so the banner can
-    // preview it and offer "Send draft". Any failure degrades to a plain
-    // notification — generation has no server-side side effects.
+    // Best-effort: generate the rule-based draft only to learn whether one
+    // exists, so the banner can offer "Review draft". The text is not passed
+    // to the notification. Any failure degrades to a plain notification —
+    // generation has no server-side side effects.
     private func postNotification(for item: InboxItem) async {
         var draft: String?
         if let result = try? await draftReply(for: item.id, approve: false),
            result.outcome == "draft_reply" {
             draft = result.draft
         }
+        notifier.showsContentPreview = showContentInNotifications
         notifier.notifyNewDelivery(
             id: item.id,
             sender: item.senderDisplay,
@@ -283,9 +282,18 @@ final class InboxStore {
         }
     }
 
-    func draftReply(for deliveryID: String, approve: Bool) async throws -> DraftReplyResult {
+    func draftReply(
+        for deliveryID: String,
+        approve: Bool,
+        expectDraft: String? = nil
+    ) async throws -> DraftReplyResult {
         guard let cli else { throw GullsCLI.Failure.launch("bundled gulls binary is missing") }
-        let result = try await cli.draftReply(id: deliveryID, approve: approve, environment: config.cliEnvironment())
+        let result = try await cli.draftReply(
+            id: deliveryID,
+            approve: approve,
+            expectDraft: expectDraft,
+            environment: config.cliEnvironment()
+        )
         if approve {
             await refresh()
         }

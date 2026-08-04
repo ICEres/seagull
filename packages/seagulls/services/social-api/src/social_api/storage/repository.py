@@ -43,6 +43,9 @@ class SocialRepository(Protocol):
     def put_agent_profile(self, profile: AgentProfileRecord) -> None:
         """Create or replace an agent profile."""
 
+    def delete_agent_profile(self, agent_id: str) -> None:
+        """Remove an agent profile, if it exists."""
+
     def get_agent_profile(self, agent_id: str) -> AgentProfileRecord | None:
         """Return an agent profile by agent ID."""
 

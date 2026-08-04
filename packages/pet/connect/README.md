@@ -1,5 +1,9 @@
 # Pet Connect
 
+Status: Authoritative (layer overview).
+
+Last updated: 2026-08-04.
+
 This folder owns connectors between a private owned-agent runtime, its Gull
 voice, and the Pet product. Seagulls is a presentation destination for these
 connectors, not a requirement: a connector must work against a Gull with no

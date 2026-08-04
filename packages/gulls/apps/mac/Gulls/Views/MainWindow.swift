@@ -5,9 +5,17 @@ struct MainWindow: View {
     @Bindable var store: InboxStore
     @Environment(\.openSettings) private var openSettings
 
-    @State private var showReplyComposer = false
+    // A sheet acts on the delivery captured when it opened, never on whatever
+    // is selected when its button is pressed: a notification arriving
+    // mid-compose moves the selection out from under an open sheet.
+    private struct SheetTarget: Identifiable {
+        let id: String
+        let senderDisplay: String
+    }
+
+    @State private var replyTarget: SheetTarget?
     @State private var replyText = ""
-    @State private var showDraftSheet = false
+    @State private var draftTarget: SheetTarget?
     @State private var isBusy = false
 
     var body: some View {
@@ -34,11 +42,9 @@ struct MainWindow: View {
                 errorBar(error)
             }
         }
-        .sheet(isPresented: $showReplyComposer) { replyComposer }
-        .sheet(isPresented: $showDraftSheet) {
-            if let item = store.selectedItem {
-                DraftReplyView(store: store, deliveryID: item.id)
-            }
+        .sheet(item: $replyTarget) { target in replyComposer(target) }
+        .sheet(item: $draftTarget) { target in
+            DraftReplyView(store: store, deliveryID: target.id)
         }
         // Keyed on isConfigured so finishing first-run Settings starts
         // polling/streaming right away — a plain .task would only ever run
@@ -64,7 +70,9 @@ struct MainWindow: View {
         ToolbarItem(id: "reply", placement: .primaryAction) {
             Button {
                 replyText = ""
-                showReplyComposer = true
+                replyTarget = store.selectedItem.map {
+                    SheetTarget(id: $0.id, senderDisplay: $0.senderDisplay)
+                }
             } label: {
                 Label("Reply", systemImage: "arrowshape.turn.up.left")
             }
@@ -75,7 +83,9 @@ struct MainWindow: View {
 
         ToolbarItem(id: "draft-reply", placement: .primaryAction) {
             Button {
-                showDraftSheet = true
+                draftTarget = store.selectedItem.map {
+                    SheetTarget(id: $0.id, senderDisplay: $0.senderDisplay)
+                }
             } label: {
                 Label("Draft reply", systemImage: "wand.and.stars")
             }
@@ -153,6 +163,8 @@ struct MainWindow: View {
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
             Toggle("Pause Notifications", isOn: $store.notificationsPaused)
+            Toggle("Show Message Text in Notifications", isOn: $store.showContentInNotifications)
+                .help("Off by default: notification banners are readable on a locked screen.")
         } label: {
             Label("Status", systemImage: statusSymbol)
                 .foregroundStyle(statusColor)
@@ -199,6 +211,10 @@ struct MainWindow: View {
 
     private func runOnSelection(_ action: @escaping (String) async -> Void) {
         guard let id = store.selectedItem?.id else { return }
+        runOnDelivery(id, action)
+    }
+
+    private func runOnDelivery(_ id: String, _ action: @escaping (String) async -> Void) {
         isBusy = true
         Task {
             await action(id)
@@ -206,9 +222,9 @@ struct MainWindow: View {
         }
     }
 
-    private var replyComposer: some View {
+    private func replyComposer(_ target: SheetTarget) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Reply to \(store.selectedItem?.senderDisplay ?? "delivery")")
+            Text("Reply to \(target.senderDisplay)")
                 .font(.headline)
             TextEditor(text: $replyText)
                 .font(.body)
@@ -216,12 +232,12 @@ struct MainWindow: View {
                 .border(.separator)
             HStack {
                 Spacer()
-                Button("Cancel") { showReplyComposer = false }
+                Button("Cancel") { replyTarget = nil }
                     .keyboardShortcut(.cancelAction)
                 Button("Send reply") {
                     let content = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    showReplyComposer = false
-                    runOnSelection { _ = await store.reply(to: $0, content: content) }
+                    replyTarget = nil
+                    runOnDelivery(target.id) { _ = await store.reply(to: $0, content: content) }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

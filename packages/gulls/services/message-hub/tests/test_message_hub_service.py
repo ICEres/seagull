@@ -143,6 +143,49 @@ class MessageHubServiceTest(TestCase):
                 content="acting on unreviewed content",
             )
 
+        # Acking is acting on it: the ack must not un-hide the held content.
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.ack_delivery(held.delivery_id, recipient_handle="@reviewer:gulls.ai")
+        self.assertEqual(
+            DeliveryStatus.NEEDS_REVIEW,
+            self.repository.get_delivery(held.delivery_id).status,
+        )
+        self.assertEqual((), self.service.get_inbox("@reviewer:gulls.ai"))
+
+    def test_held_deliveries_do_not_evict_real_ones_from_the_inbox(self) -> None:
+        self.service.add_routing_rule(
+            name="Hold for review",
+            route_to_handles=["@map-reader:gulls.ai"],
+            mode="review",
+            url_contains=["maps.google.com"],
+        )
+
+        delivered = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Real work that must stay visible.",
+        )
+        for index in range(25):
+            self.service.send_message(
+                sender_handle="@researcher:gulls.ai",
+                recipient_handles=["@reviewer:gulls.ai"],
+                content=f"Held flood {index}.",
+                refs=(
+                    MessageRef(
+                        type="url",
+                        url="https://maps.google.com/example",
+                        find="identify_place",
+                    ),
+                ),
+            )
+
+        # The holds are all newer than the real delivery, so filtering after the
+        # row limit would push the real one out of every allowed window.
+        inbox = self.service.get_inbox("@reviewer:gulls.ai", limit=5)
+
+        self.assertEqual(1, len(inbox))
+        self.assertEqual(delivered.message.message_id, inbox[0].message.message_id)
+
     def test_task_state_transitions_are_enforced_and_settlement_is_requester_only(self) -> None:
         task = self.service.create_task(
             requester_handle="@researcher:gulls.ai",
@@ -167,6 +210,36 @@ class MessageHubServiceTest(TestCase):
                 task.task_id, actor_handle="@reviewer:gulls.ai", state="result_accepted"
             )
 
+        # ...and it must not reach around update_task_state to do the same thing
+        # by naming a settlement state on its own result.
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.return_task_result(
+                task.task_id,
+                responder_handle="@reviewer:gulls.ai",
+                state="result_accepted",
+                content="Self-awarding my own acceptance.",
+            )
+        with self.assertRaises(ForbiddenDeliveryError):
+            self.service.return_task_result(
+                task.task_id,
+                responder_handle="@reviewer:gulls.ai",
+                state="released",
+                content="Self-releasing the escrow.",
+            )
+        # Nor may it strand the task in a state a result cannot produce.
+        with self.assertRaises(InvalidTaskTransitionError):
+            self.service.return_task_result(
+                task.task_id,
+                responder_handle="@reviewer:gulls.ai",
+                state="canceled",
+                content="Locking the requester out.",
+            )
+        self.assertEqual(TaskState.RESULT_READY, self.service.get_task(task.task_id).state)
+        self.assertEqual(
+            (),
+            self.repository.list_task_worker_reputation_events_by_task(task.task_id),
+        )
+
         # The requester (counterparty) can accept and complete it.
         accepted = self.service.update_task_state(
             task.task_id, actor_handle="@researcher:gulls.ai", state="result_accepted"
@@ -179,6 +252,40 @@ class MessageHubServiceTest(TestCase):
             self.service.update_task_state(
                 task.task_id, actor_handle="@reviewer:gulls.ai", state="running"
             )
+        # ...through accept_task either, which is the same lifecycle edge.
+        with self.assertRaises(InvalidTaskTransitionError):
+            self.service.accept_task(task.task_id, worker_handle="@reviewer:gulls.ai")
+        self.assertEqual(TaskState.COMPLETED, self.service.get_task(task.task_id).state)
+
+    def test_worker_can_still_settle_its_own_result_as_completed_or_failed(self) -> None:
+        completed_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Complete the work and return the result.",
+        )
+        failed_task = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Fail the work and say so.",
+        )
+
+        # The default state of return_task_result is the worker's own contract.
+        completed = self.service.return_task_result(
+            completed_task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            content="Done.",
+        )
+        failed = self.service.return_task_result(
+            failed_task.task_id,
+            responder_handle="@reviewer:gulls.ai",
+            state="failed",
+            error="Worker could not finish.",
+        )
+
+        self.assertEqual(TaskState.COMPLETED, completed.state)
+        self.assertEqual(TaskState.COMPLETED, self.service.get_task(completed_task.task_id).state)
+        self.assertEqual(TaskState.FAILED, failed.state)
+        self.assertEqual(TaskState.FAILED, self.service.get_task(failed_task.task_id).state)
 
     def test_agent_token_issue_stores_hash_and_validates_scope(self) -> None:
         issued = self.service.issue_agent_token(

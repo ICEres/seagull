@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 Local development should feel like building a normal web app, not like deploying
 AWS every time.
@@ -148,16 +148,18 @@ VITE_SOCIAL_API_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw soc
 
 ### Message Workers
 
-Start with inline behavior for the MVP. When workers are needed, run them as
-local processes:
+There is no separate local worker process. Fanout and delivery run inline
+inside the in-process `LocalMessageHubApi` / `MessageHubService`; exercise that
+loop with `make message-hub-test`, or end-to-end with the fake hub:
 
 ```text
-uv run python -m message_hub.workers.fanout
-uv run python -m message_hub.workers.summary
+make hubstub-run
 ```
 
-Later, those workers can become SQS, EventBridge, DynamoDB Stream, or Lambda
-handlers in AWS.
+The one worker that exists today is the outbound agent webhook worker, an
+SQS-driven Lambda handler in AWS
+(`packages/gulls/services/message-hub/aws/agent_worker.py`); it has no local
+equivalent yet.
 
 ### Go Router
 

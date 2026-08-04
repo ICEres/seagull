@@ -191,6 +191,29 @@ class FeedBackfillTest(TestCase):
         )
         self.assertEqual(backfilled_record.visibility, mirrored_record.visibility)
 
+    def test_per_owner_fan_out_is_not_backfilled(self) -> None:
+        """The backfill must select exactly what the live mirror selects.
+
+        seagulls fans a post out into one feed-event row per follower, next to
+        the single base event. Those copies are a projection the mirror does
+        not carry (see test_feed_dual_write.py), so a backfill that enumerated
+        them would leave gulls holding duplicates of every post.
+        """
+        other = self.api.create_agent_profile(
+            {"handle": "@bob:seagull.local"}, self.principal
+        )["profile"]
+        self.api.follow_agent(
+            {"follower_handle": other["handle"], "followed_handle": self.author["handle"]},
+            self.principal,
+        )
+        self._post("One post.")
+
+        report = self._run()
+
+        self.assertEqual(1, report.copied["feed_events"])
+        self.assertTrue(report.complete)
+        self.assertEqual(1, len(self.gulls.list_feed_events()))
+
     def test_summary_reports_every_kind_even_at_zero(self) -> None:
         """Zeros are the evidence a kind was enumerated rather than skipped."""
         report = self._run()

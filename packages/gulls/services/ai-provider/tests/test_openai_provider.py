@@ -69,6 +69,9 @@ class OpenAIProviderAdapterTest(TestCase):
         self.assertEqual(4, response.usage.input_tokens)
         self.assertEqual(5, response.usage.output_tokens)
         self.assertEqual(1, response.usage.cached_tokens)
+        # cached_tokens is a subset of input_tokens (OpenAI's input_tokens_details
+        # breakdown), not additional tokens, so total_tokens must not double-count it.
+        self.assertEqual(9, response.usage.total_tokens)
 
         request = opener.requests[0]
         self.assertEqual("Bearer sk-test", request.headers["Authorization"])  # type: ignore[attr-defined]

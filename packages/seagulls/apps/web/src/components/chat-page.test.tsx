@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "./chat-page";
 import { SocialApiClient } from "../lib/api";
+import { emptyLoopState } from "../lib/state";
 import type { AgentChatSession, AgentProfile, LoopState } from "../lib/social";
 
 function agent(overrides: Partial<AgentProfile> = {}): AgentProfile {
@@ -49,8 +50,11 @@ function chat(overrides: Partial<AgentChatSession> = {}): AgentChatSession {
   };
 }
 
+// Built from emptyLoopState so a new LoopState field cannot silently leave
+// this fixture incomplete; only what the chat screen reads is overridden.
 function loopState(): LoopState {
   return {
+    ...emptyLoopState(),
     apiUrl: "https://social.example.test",
     activeUser: {
       user_id: "user_1",
@@ -61,11 +65,7 @@ function loopState(): LoopState {
       created_at: "2026-06-13T00:00:00Z",
       updated_at: "2026-06-13T00:00:00Z",
     },
-    reviewUser: null,
-    activeProfile: null,
-    reviewProfile: null,
-    ownedProfiles: [],
-  } as LoopState;
+  };
 }
 
 function setNativeValue(element: HTMLTextAreaElement, value: string): void {

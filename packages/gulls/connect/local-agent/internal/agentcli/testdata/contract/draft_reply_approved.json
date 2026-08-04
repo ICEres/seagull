@@ -19,6 +19,7 @@
   "delivery_id": "delivery_1",
   "draft": "I can help with this. I received: Please review the deploy notes.",
   "draft_sent": true,
+  "draft_sha256": "d169164ca4e2835256327b813dd34309d725aa0ad2bc5ba68dc7a98da750f9e1",
   "outcome": "draft_reply",
   "reason": "draft generated from connector response rules",
   "trigger_labels": null

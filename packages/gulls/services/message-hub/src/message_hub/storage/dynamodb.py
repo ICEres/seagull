@@ -1085,6 +1085,37 @@ class DynamoDbMessageHubRepository:
             items = items[:limit]
         return items
 
+    @classmethod
+    def _query_recent(
+        cls,
+        table: Any,
+        *,
+        index_name: str | None,
+        key_name: str,
+        key_value: str,
+        limit: int | None,
+    ) -> list[dict[str, Any]]:
+        """Return items in chronological order, truncated to the newest ``limit``."""
+        if limit is None:
+            return cls._query_all(
+                table,
+                index_name=index_name,
+                key_name=key_name,
+                key_value=key_value,
+                newest_first=False,
+                limit=None,
+            )
+        items = cls._query_all(
+            table,
+            index_name=index_name,
+            key_name=key_name,
+            key_value=key_value,
+            newest_first=True,
+            limit=limit,
+        )
+        items.reverse()
+        return items
+
     @staticmethod
     def _scan_all(table: Any, **kwargs: Any) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -1178,12 +1209,11 @@ class DynamoDbMessageHubRepository:
     def list_thread_messages(
         self, thread_id: str, *, limit: int | None = None
     ) -> tuple[Message, ...]:
-        items = self._query_all(
+        items = self._query_recent(
             self._messages,
             index_name="thread-created-at-index",
             key_name="thread_id",
             key_value=thread_id,
-            newest_first=False,
             limit=limit,
         )
         return tuple(message_from_item(item) for item in items)
@@ -1217,9 +1247,24 @@ class DynamoDbMessageHubRepository:
         payload_id = content_ref.removeprefix("payload://")
         return f"payloads/{payload_id}.gz"
 
+    def _discard_payload_content(self, record: PayloadRecord) -> str | None:
+        """Drop retained object bytes for a payload whose content is being cleared."""
+        table = self._require(self._payloads, "payloads")
+        item = table.get_item(Key={"content_ref": record.content_ref}).get("Item")
+        if item is None:
+            return record.storage_ref
+        stored_ref = str(item.get("storage_ref") or "")
+        if not stored_ref.startswith("s3://"):
+            return record.storage_ref
+        if self._s3 is not None:
+            _, _, remainder = stored_ref.partition("s3://")
+            bucket, _, key = remainder.partition("/")
+            self._s3.delete_object(Bucket=bucket, Key=key)
+        return None if record.storage_ref == stored_ref else record.storage_ref
+
     def _write_payload_content(self, payload: StoredPayload) -> str | None:
         if payload.compressed_content is None:
-            return payload.record.storage_ref
+            return self._discard_payload_content(payload.record)
         if self._s3 is None or not self._payload_objects_bucket:
             raise RepositoryTableNotConfiguredError("payload_objects_bucket")
         object_key = self._payload_object_key(payload.record.content_ref)
@@ -1525,12 +1570,11 @@ class DynamoDbMessageHubRepository:
         self, thread_id: str, *, limit: int | None = None
     ) -> tuple[TaskRecord, ...]:
         table = self._require(self._tasks, "tasks")
-        items = self._query_all(
+        items = self._query_recent(
             table,
             index_name="thread-created-at-index",
             key_name="thread_id",
             key_value=thread_id,
-            newest_first=False,
             limit=limit,
         )
         return tuple(task_from_item(item) for item in items)

@@ -1,8 +1,8 @@
 # Migration Plan
 
-Status: Authoritative (delivery plan).
+Status: Authoritative (delivery).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) defines the target
 architecture. This document defines how the repository gets there from what is

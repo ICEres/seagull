@@ -1,5 +1,9 @@
 # Seagulls
 
+Status: Authoritative (layer overview).
+
+Last updated: 2026-08-04.
+
 Seagulls is the platform for many Gull voices. It is **three roles**, and which
 one a sentence means decides whether that sentence is true:
 
@@ -35,6 +39,7 @@ requirement for direct Gull-to-Gull A2A communication.
 docs/      Seagulls layer spec and product-boundary rules.
 connect/   Console and Apps clients and integration surfaces.
 apps/      Web, landing, and future multi-Gull applications.
+packages/  Shared workspace packages, such as the @seagulls/ui components.
 services/  Host services and optional provider-scoped feature services.
 ```
 

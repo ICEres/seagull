@@ -2,7 +2,7 @@
 
 Status: Authoritative.
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 > **None of this is implemented yet.** This document describes a target
 > architecture. The running system is the pre-redesign hub, and every command,
@@ -83,7 +83,7 @@ availability, authorization, or reputation.
 The two product rows deliberately do not read "on Seagulls". Pet's asset
 bundle, bindings, and owner-approval posture are Gull-side state that works
 through `gulls` with no platform; Agent Request's request and result semantics
-ride A2A task metadata between two Gulls with no platform. Seagulls adds
+ride A2A task metadata between two Gull voices with no platform. Seagulls adds
 accounts, multi-voice supervision, hosting, and presentation on top. A
 capability that cannot be stated that way is a Seagulls feature, not a Pet or
 Agent Request feature.
@@ -224,10 +224,10 @@ document must say which role it means:
 | **Seagulls Apps** | The account and extension surface Pet and Agent Request are presented through. | Yes. |
 
 Console explicitly disclaims authority; Host is a delivery authority for the
-Gulls that selected it, and has none over any other. Conflating the two is what
-makes "the platform is optional" sound like a contradiction. It is not: a Gull
-does not need to join any Seagulls service to communicate with another Gull
-through A2A, and a Gull that chose Host has a real dependency on it.
+Gull voices that selected it, and has none over any other. Conflating the two
+is what makes "the platform is optional" sound like a contradiction. It is not:
+a Gull does not need to join any Seagulls service to communicate with another
+Gull through A2A, and a Gull that chose Host has a real dependency on it.
 
 Seagulls is a real product platform, not merely a guide or dashboard. It does
 not author an agent's voice: the agent runtime, owner policy, and optional Pet
@@ -248,8 +248,8 @@ layer, but neither requires it to function:
   custom-domain Gull, or a purely local one.
 - **Agent Request / Tasking** owns the human and agent workflow for bounded
   requests, acceptance, approval, progress, artifacts, results, and refusal.
-  It uses A2A message and task operations through the participating Gulls and
-  presents durable projections through Seagulls.
+  It uses A2A message and task operations through the participating Gull voices
+  and presents durable projections through Seagulls.
 
 Neither product defines a new public identity, discovery, or message protocol.
 Pet and Agent Request may integrate — for example, Pet owner policy may approve
@@ -618,8 +618,8 @@ local agent connector
 
 ## Threat Model
 
-The legacy [Safety](safety.md) document has the repository's only threat model,
-and it was written for a Feed, rooms, and a social graph. Several of its threats
+The [Safety](safety.md) document has the repository's only threat model, and it
+was written for a Feed, rooms, and a social graph. Several of its threats
 survive — spam, loops, unsafe delegation chains, impersonation — but the assets
 and boundaries changed, so the model is restated here for this architecture.
 
@@ -672,7 +672,8 @@ Normative rules:
   **MUST** be published only under the `open` posture.
 - Inbox posture stays the three-value ladder from
   [Public Agent URLs](public-agent-urls.md): `open`, `contacts_only`,
-  `token_required`. New Gulls default to `contacts_only`. `open` is opt-in.
+  `token_required`. New Gull voices default to `contacts_only`. `open` is
+  opt-in.
 - Bearer tokens **MUST** be recipient-minted, scoped to one sender identity and
   one recipient Gull, expiring, and revocable. A token shared across senders is
   not an identity and **MUST NOT** be treated as one.
@@ -763,8 +764,8 @@ position where it can select an action.
   per-context token and spend budget. Budgets are accounted at the Gull.
 - Reaching any limit **MUST** produce `ask_human` locally. It **MUST NOT**
   produce an error reply to the sender; error replies are amplification.
-- Two Gulls in autonomous mode **MUST NOT** be able to sustain a conversation
-  without an owner turn. Depth is the hard stop, not a heuristic.
+- Two Gull voices in autonomous mode **MUST NOT** be able to sustain a
+  conversation without an owner turn. Depth is the hard stop, not a heuristic.
 
 ### Callback And Push-Notification Targets
 

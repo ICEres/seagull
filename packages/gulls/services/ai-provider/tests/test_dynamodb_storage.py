@@ -36,9 +36,12 @@ class FakeConditionalError(Exception):
 
 
 class FakeTable:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, page_size: int | None = None) -> None:
         self.name = name
         self.items: dict[str, dict[str, object]] = {}
+        self.page_size = page_size
+        self.scan_calls = 0
+        self.query_calls = 0
 
     def put_item(self, *, Item: dict[str, object], ConditionExpression: str | None = None) -> None:
         entry_id = str(Item["entry_id"])
@@ -68,15 +71,34 @@ class FakeTable:
     def get_item(self, *, Key: dict[str, object]) -> dict[str, object]:
         return {"Item": self.items.get(str(Key["entry_id"]))}
 
-    def scan(self) -> dict[str, object]:
-        return {"Items": list(self.items.values())}
+    def scan(self, **kwargs: object) -> dict[str, object]:
+        self.scan_calls += 1
+        return self._paginate(list(self.items.values()), kwargs)
 
     def query(self, **kwargs: object) -> dict[str, object]:
+        self.query_calls += 1
         expression = kwargs.get("KeyConditionExpression")
         if not (isinstance(expression, tuple) and len(expression) == 3 and expression[0] == "eq"):
-            return {"Items": list(self.items.values())}
-        _, field_name, expected = expression
-        return {"Items": [item for item in self.items.values() if item.get(field_name) == expected]}
+            matched = list(self.items.values())
+        else:
+            _, field_name, expected = expression
+            matched = [item for item in self.items.values() if item.get(field_name) == expected]
+        return self._paginate(matched, kwargs)
+
+    def _paginate(self, matched: list[dict[str, object]], kwargs: dict[str, object]) -> dict[str, object]:
+        # Mimics DynamoDB's page-at-a-time responses (LastEvaluatedKey /
+        # ExclusiveStartKey) so callers must loop to see the full result set.
+        if self.page_size is None:
+            return {"Items": matched}
+        start = 0
+        exclusive_start_key = kwargs.get("ExclusiveStartKey")
+        if exclusive_start_key is not None:
+            start = int(exclusive_start_key["offset"])  # type: ignore[index]
+        end = min(start + self.page_size, len(matched))
+        result: dict[str, object] = {"Items": matched[start:end]}
+        if end < len(matched):
+            result["LastEvaluatedKey"] = {"offset": end}
+        return result
 
 
 class DynamoDbAiProviderRepositoryTest(TestCase):
@@ -187,3 +209,47 @@ class DynamoDbAiProviderRepositoryTest(TestCase):
 
         self.assertEqual(0, self.repository.get_server_credit_balance())
         self.assertEqual(0, self.repository.get_user_credit_balance("owner_1"))
+
+    def test_list_server_credit_ledger_paginates_across_multiple_scan_pages(self) -> None:
+        table = self.tables["server_credit_ledger"]
+        table.page_size = 1
+        entries = [
+            ServerCreditLedgerEntry(
+                entry_id=f"server_credit_{i}",
+                entry_type=ServerCreditLedgerEntryType.CREDIT_GRANT,
+                credit_delta=10,
+                reason="seed",
+                admin_actor_id="admin_1",
+                created_at=datetime(2026, 6, 30, i, tzinfo=timezone.utc),
+            )
+            for i in range(1, 5)
+        ]
+        for entry in entries:
+            self.repository.append_server_credit_ledger_entry(entry)
+
+        result = self.repository.list_server_credit_ledger()
+
+        self.assertEqual(tuple(entries), result)
+        self.assertGreater(table.scan_calls, 1)
+
+    def test_list_user_credit_ledger_by_owner_paginates_across_multiple_query_pages(self) -> None:
+        table = self.tables["user_credit_ledger"]
+        table.page_size = 1
+        entries = [
+            UserCreditLedgerEntry(
+                entry_id=f"user_credit_{i}",
+                owner_user_id="owner_1",
+                entry_type=UserCreditLedgerEntryType.CREDIT_GRANT,
+                credit_delta=10,
+                reason="grant",
+                created_at=datetime(2026, 6, 30, i, tzinfo=timezone.utc),
+            )
+            for i in range(1, 5)
+        ]
+        for entry in entries:
+            self.repository.append_user_credit_ledger_entry(entry)
+
+        result = self.repository.list_user_credit_ledger_by_owner("owner_1")
+
+        self.assertEqual(tuple(entries), result)
+        self.assertGreater(table.query_calls, 1)

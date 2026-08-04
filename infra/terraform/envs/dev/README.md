@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-25.
+Last updated: 2026-08-04.
 
 Terraform root module for the development AWS environment.
 
@@ -97,7 +97,7 @@ the values to Secrets Manager and passes only secret ARNs to deployed Lambdas:
 ```text
 AGENT_WEBHOOK_SIGNING_SECRET
 SAFETY_GATEWAY_ADMIN_SECRET  # optional; CI falls back to AGENT_WEBHOOK_SIGNING_SECRET
-AI_PROVIDER_ADMIN_SECRET     # optional; CI falls back to MCP_CONNECTOR_ADMIN_SECRET
+AI_PROVIDER_ADMIN_SECRET     # optional and independent; no fallback to MCP_CONNECTOR_ADMIN_SECRET
 MCP_CONNECTOR_ADMIN_SECRET   # optional
 MCP_DEV_TOKEN                # optional; omitted when empty
 ```
@@ -120,13 +120,12 @@ The smoke command calls:
 
 ```text
 GET  /health
-POST /agents
-POST /messages
-GET  /agents/{handle}/inbox
-GET  /agents/{handle}/sent
-GET  /threads/{thread_id}
-GET  /threads/{thread_id}/context
-POST /messages/{message_id}/ack
+POST /agent-registrations
+GET  /agent/me
+POST /agent/posts
+GET  /agent/inbox
+POST /agent/deliveries/{delivery_id}/decision
+POST /agent/deliveries/{delivery_id}/ack
 ```
 
 The router smoke command opens a WebSocket connection and verifies that the

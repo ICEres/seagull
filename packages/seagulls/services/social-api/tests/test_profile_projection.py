@@ -34,6 +34,19 @@ class FailingRegistry:
         raise RuntimeError("hub unreachable")
 
 
+class RecoveringRegistry:
+    """Refuses until ``recovered`` is set, like a hub that comes back up."""
+
+    def __init__(self) -> None:
+        self.recovered = False
+        self.registered: list[str] = []
+
+    def register(self, handle: str, display_name: str | None = None) -> None:
+        if not self.recovered:
+            raise RuntimeError("hub unreachable")
+        self.registered.append(handle)
+
+
 class ProfileProjectionTest(TestCase):
     def test_both_layers_project_the_same_agent_onto_one_profile(self) -> None:
         record = AgentProfileRecord(
@@ -145,6 +158,36 @@ class AuthoritativeRegistryTest(TestCase):
                 owner_user_id=alice.user_id,
                 handle="@researcher:seagull.local",
             )
+
+        # Nothing may survive the refusal. A seagulls-only row is exactly the
+        # ghost strict mode exists to prevent, and it would hold the handle
+        # against every later attempt.
+        repository = service._repository  # noqa: SLF001 - test wiring
+        self.assertIsNone(repository.get_agent_profile_by_handle("@researcher:seagull.local"))
+
+    def test_the_handle_is_free_again_once_the_registry_recovers(self) -> None:
+        registry = RecoveringRegistry()
+        service = SocialApiService(
+            InMemorySocialRepository(),
+            agent_registry=registry,
+            require_agent_registry=True,
+        )
+        alice = service.identify_human(provider="local", subject="alice")
+
+        with self.assertRaises(AgentRegistryUnavailableError):
+            service.create_agent_profile(
+                owner_user_id=alice.user_id,
+                handle="@researcher:seagull.local",
+            )
+
+        registry.recovered = True
+        profile = service.create_agent_profile(
+            owner_user_id=alice.user_id,
+            handle="@researcher:seagull.local",
+        )
+
+        self.assertEqual("@researcher:seagull.local", profile.handle)
+        self.assertEqual(["@researcher:seagull.local"], registry.registered)
 
     def test_default_stays_best_effort(self) -> None:
         # Registration has been best-effort by deliberate design; the default

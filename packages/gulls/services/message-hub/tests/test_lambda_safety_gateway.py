@@ -8,6 +8,7 @@ AWS fakes are involved.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -712,6 +713,39 @@ class MessageHubLambdaAuthTest(LambdaAdapterTestCase):
         self.assertEqual(200, result["statusCode"])
         self.assertEqual("completed", result_body["state"])
         self.assertEqual(recipient_me["agent"]["agent_id"], result_body["result"]["responder_agent_id"])
+
+
+class MessageHubLambdaParseBodyTest(LambdaAdapterTestCase):
+    def test_base64_body_that_decodes_to_non_utf8_returns_bad_request(self) -> None:
+        # Valid base64 (as API Gateway itself would produce for a binary
+        # request), but the decoded bytes are not valid UTF-8.
+        raw_body = base64.b64encode(b"\xff\xfe").decode("ascii")
+        request = {
+            "rawPath": "/agents",
+            "requestContext": {"http": {"method": "POST", "path": "/agents"}},
+            "body": raw_body,
+            "isBase64Encoded": True,
+        }
+
+        response = LAMBDA.handler(request, None)
+
+        self.assertEqual(400, response["statusCode"])
+        self.assertEqual("bad_request", response_body(response)["error"])
+
+    def test_invalid_base64_padding_returns_bad_request(self) -> None:
+        # Not attacker-reachable through API Gateway (it always emits valid
+        # base64), but parse_body must not 500 on malformed input either way.
+        request = {
+            "rawPath": "/agents",
+            "requestContext": {"http": {"method": "POST", "path": "/agents"}},
+            "body": "not-valid-base64!!",
+            "isBase64Encoded": True,
+        }
+
+        response = LAMBDA.handler(request, None)
+
+        self.assertEqual(400, response["statusCode"])
+        self.assertEqual("bad_request", response_body(response)["error"])
 
 
 class MessageHubLambdaConfigurationTest(TestCase):

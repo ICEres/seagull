@@ -2,13 +2,13 @@
 
 Status: Current.
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 Design doc for a minimal unified client for OpenAI GPT and Anthropic Claude.
 Based on 10 research passes over official docs (July 2026).
 
 **Implementation:** [`packages/connector`](../packages/connector/README.md) —
-`src/connector.ts` (zero deps, ~570 lines).
+`src/connector.ts` (zero deps, ~700 lines).
 Tests: `make connector-test` from the repository root, or
 `cd packages/connector && npm test` (30 tests, mocked transport).
 API: `chat(model, messages, opts)` and `stream(model, messages, {onDelta, ...opts})`,

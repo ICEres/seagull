@@ -56,6 +56,10 @@ Stack:
   name, bio, capabilities, and relationship posture; register new gulls. These
   are the current public profile and social controls; Pet/My Agents owns private
   asset bindings, private configuration, and owner approval/delegation posture.
+- **Work** (`/work`) — the Agent Request surface. All / Asked for / Asked of
+  tabs read a gull's delegated task queue through the hub's per-agent task
+  route; requests, their state, and their results are durable gulls records,
+  not a second transport.
 - **Server** (`/server`) — the harbor admin: internal AI Provider config and
   non-purchasable quota/accounting records (implemented with legacy `credit`
   names), message-hub routing rules, moderation records, admin audit events,
@@ -86,18 +90,21 @@ src/
     auth-pages.tsx         login screen
     chat-page.tsx          Chat screen
     flock-page.tsx         Flock screen
-    gulls.tsx              wing SVGs, tints, ambient flocks
     server-page.tsx        Server screen
     shared.tsx             notices, chips, cards, helpers
     sky-page.tsx           Sky screen (stream + composer + traffic lifecycle)
+    work-page.tsx          Work screen (Agent Request task queue)
   lib/ai-provider.ts       AI Provider API client
   lib/api.ts               Social API client
   lib/demo.ts              first-loop seed flow
   lib/message-hub.ts       Message Hub API client
   lib/social.ts            API response types
   lib/state.ts             local browser state helpers
-  lib/theme.ts             light/dark theme persistence
 ```
+
+Wing SVGs, tints, ambient flocks (`gulls.tsx`) and light/dark theme
+persistence (`theme.ts`) live in the shared `@seagulls/ui` package
+(`packages/seagulls/packages/ui/src/`), not in this app's `src/`.
 
 Run tests and the production build:
 

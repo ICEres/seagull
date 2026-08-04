@@ -54,7 +54,7 @@ class ProviderUsage:
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens + self.cached_tokens
+        return self.input_tokens + self.output_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +147,7 @@ class UsageRecord:
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens + self.cached_tokens
+        return self.input_tokens + self.output_tokens
 
 
 @dataclass(frozen=True, slots=True)

@@ -177,6 +177,7 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		fs := commandFlagSet("draft-reply", stderr)
 		limit := fs.Int("limit", 100, "maximum inbox deliveries to search")
 		approve := fs.Bool("approve", false, "send a generated draft through the delivery decision flow; ask-human/no-reply outcomes are never sent")
+		expectDraft := fs.String("expect-draft", "", "sha256 of the reviewed draft (draft_sha256); --approve sends only if the regenerated draft still matches")
 		if err := parseCommand(fs, commandArgs); err != nil {
 			return 0, err
 		}
@@ -196,9 +197,11 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		}
 		var threadContext map[string]any
 		if threadID := itemThreadID(item); threadID != "" {
-			threadContext, err = client.GetThreadContext(threadID, config.AgentHandle)
-			if err != nil {
-				return 0, err
+			fetched, ctxErr := client.GetThreadContext(threadID, config.AgentHandle)
+			if ctxErr != nil {
+				fmt.Fprintf(stderr, "%s: warning: fetching thread context: %v\n", global.ProgramName, ctxErr)
+			} else {
+				threadContext = fetched
 			}
 		}
 		agentProfile, err := client.GetAgent(config.AgentHandle)
@@ -210,6 +213,11 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		payload["delivery_id"] = fs.Arg(0)
 		payload["draft_sent"] = false
 		payload["delivery_decision_submitted"] = false
+		if *approve {
+			if err := requireReviewedDraft(*expectDraft, result.Draft); err != nil {
+				return 0, err
+			}
+		}
 		if *approve && result.Draft != "" {
 			decision, err := client.DecideDelivery(fs.Arg(0), config.AgentHandle, "reply", result.Draft, generatedApprovedReplyNote)
 			if err != nil {
@@ -690,6 +698,29 @@ func mustJSON(result map[string]any) string {
 func validateLimit(limit int) error {
 	if limit < 1 || limit > 100 {
 		return usage("limit must be between 1 and 100")
+	}
+	return nil
+}
+
+// requireReviewedDraft binds an approval to the draft it was granted for.
+// `--approve` regenerates from the message as it stands now, so a message the
+// sender edited after the owner read it would otherwise be answered with text
+// nobody approved. A mismatch is not a usage error: the caller did nothing
+// wrong, the action changed underneath them, so it exits 1 and sends nothing.
+func requireReviewedDraft(expected string, draft string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	if draft == "" {
+		return errors.New("the response rules no longer draft a reply for this delivery; nothing was sent — regenerate and review before approving")
+	}
+	if actual := DraftDigest(draft); !strings.EqualFold(expected, actual) {
+		return fmt.Errorf(
+			"the draft changed after it was reviewed (reviewed %s, regenerated %s); nothing was sent — review the new draft and approve again",
+			expected,
+			actual,
+		)
 	}
 	return nil
 }

@@ -110,10 +110,20 @@ actor GullsCLI {
         try await runDecoding(["open", id], environment: environment)
     }
 
-    func draftReply(id: String, approve: Bool, environment: Environment) async throws -> DraftReplyResult {
+    func draftReply(
+        id: String,
+        approve: Bool,
+        expectDraft: String? = nil,
+        environment: Environment
+    ) async throws -> DraftReplyResult {
         var command = ["draft-reply"]
         if approve {
             command.append("--approve")
+        }
+        // Binds the send to the draft the owner actually read: the CLI
+        // regenerates and refuses when the result no longer digests to this.
+        if let expectDraft, !expectDraft.isEmpty {
+            command.append(contentsOf: ["--expect-draft", expectDraft])
         }
         command.append(id)
         return try await runDecoding(command, environment: environment)

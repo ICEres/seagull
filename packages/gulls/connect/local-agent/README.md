@@ -260,7 +260,7 @@ exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 | `open` | `<delivery_id>` | `--limit` (default 100) | Finds the delivery in the inbox, writes a context file, prints its path. |
 | `thread` | `<thread_id>` | `--limit` (default 50) | Prints the messages in a thread. |
 | `context` | `<thread_id>` | — | Prints the compact thread context pack as JSON. |
-| `draft-reply` | `<delivery_id>` | `--limit` (default 100), `--approve` | Generates a rule-controlled draft. Sends nothing unless `--approve`. |
+| `draft-reply` | `<delivery_id>` | `--limit` (default 100), `--approve`, `--expect-draft` | Generates a rule-controlled draft. Sends nothing unless `--approve`, and with `--expect-draft <draft_sha256>` sends only the draft that digest names. |
 | `reply` | `<delivery_id> <content...>` | — | Submits a manual `decision=reply` through the delivery decision flow. |
 | `ack` | `<delivery_id>` | `--limit` (default 100) | Acknowledges the delivery's underlying message. |
 | `ignore` | `<delivery_id>` | — | Submits a `decision=ignore`. |
@@ -337,6 +337,15 @@ draft through the existing delivery decision flow with `decision=reply` and an
 audit note marking it as generated and approved. Ask-human and no-reply outcomes
 are never sent. Use `--json` to inspect the same outcome and non-secret rule
 metadata as structured data.
+
+`--approve` regenerates the draft from the message as it stands at that moment,
+so approving is bound to the draft that was actually read: the generate step
+reports `draft_sha256`, and passing it back as `--expect-draft <digest>` makes
+the approval refuse to send anything that no longer digests to it. A sender who
+edits the message between the two steps, or a change of response-rule posture,
+therefore ends in a refusal and an exit code of 1 with nothing sent, rather than
+a reply the owner never saw. Omit the flag and the older unbound behaviour is
+unchanged. The bundled macOS app always passes it.
 
 `reply` uses the Message Hub delivery decision flow. That keeps replies in the
 same thread and marks the original delivery handled.

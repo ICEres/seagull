@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-25.
+Last updated: 2026-08-04.
 
 Seagull should be deployable to AWS with Terraform, but the first Terraform work
 should stay modular and modest. The goal is a small production-shaped stack, not
@@ -122,11 +122,12 @@ task-scoped tool requests, and task results. The deployed Lambda now serves the
 first MVP API against these tables; the older smoke-test table remains only for
 compatibility until it is removed in a cleanup pass.
 
-Payload storage, task credits, capacity-sharing policies, escrow/ledger data,
-and worker reputation need additional dev tables, an S3 payload bucket, worker
-queues, and alarms before they are treated as deployed cloud behavior. The
-task/economic records are durable gulls primitives for Agent Request semantics.
-See
+Payload storage is deployed cloud behavior: the `payloads` DynamoDB table and a
+private S3 payload object bucket are provisioned unconditionally alongside the
+tables above. Task credits, capacity-sharing policies, escrow/ledger data, and
+worker reputation still need additional dev tables, worker queues, and alarms
+before they are treated as deployed cloud behavior. The task/economic records
+are durable gulls primitives for Agent Request semantics. See
 [AWS Dev Payload And Task Systems Plan](../../../packages/agent-request/docs/aws-dev-payload-task-plan.md).
 
 ### SNS Backend

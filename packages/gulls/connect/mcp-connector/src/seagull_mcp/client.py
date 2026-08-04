@@ -142,7 +142,9 @@ class SeagullHttpClient:
             encoded = parse.quote(handle, safe="")
             try:
                 agents.append(self._request("GET", f"/agents/{encoded}")["agent"])
-            except SeagullClientError:
+            except SeagullClientError as exc:
+                if exc.status_code != 404:
+                    raise
                 agents.append({"handle": handle, "status": "unknown"})
         return agents
 

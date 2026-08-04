@@ -283,7 +283,14 @@ class SocialApiService:
         # gulls owns identity and handles; the local profile table only keeps
         # product metadata on top. The hub's POST /agents is an idempotent
         # get-or-create, so re-registering an existing handle is safe.
-        self._register_agent_handle(profile)
+        try:
+            self._register_agent_handle(profile)
+        except AgentRegistryUnavailableError:
+            # Strict mode refused the handle, so the row just written is the
+            # very ghost that mode exists to prevent -- and leaving it would
+            # block the retry with a duplicate-handle 409. Undo it.
+            self._repository.delete_agent_profile(profile.agent_id)
+            raise
         return profile
 
     def _register_agent_handle(self, profile: AgentProfileRecord) -> None:

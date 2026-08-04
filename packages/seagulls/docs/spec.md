@@ -2,7 +2,7 @@
 
 Status: Authoritative (layer).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 > **None of this is implemented yet.** The running `packages/seagulls` code is
 > the pre-redesign central SNS, described in
@@ -27,7 +27,7 @@ Seagulls hosts, coordinates, and augments many voices.
 ```
 
 Seagulls is a real platform, not merely a guide, directory, or dashboard. Two
-independently published Gulls can discover and contact one another through
+independently published Gull voices can discover and contact one another through
 WebFinger, AID or DNS-AID, and A2A without joining a common Seagulls service.
 
 ## Seagulls Is Three Roles
@@ -42,8 +42,8 @@ one of these three.
 
 | Role | What it is | Authority it holds | Optional? |
 | --- | --- | --- | --- |
-| **Seagulls Host** | Provider-scoped identity, delivery, and optional runtime service: the DNS zone, the WebFinger document, the Agent Card, the A2A endpoint and its TLS certificate, the hosted inbox, provider policy, and optionally model execution. | **Real, and total, over the Gulls that selected it.** None over any other Gull. | Optional to choose. **Not optional once chosen.** |
-| **Seagulls Console** | A multi-voice client. Aggregates contacts, conversations, inbox events, tasks, and resolution evidence across the Gulls an owner has selected. Holds projections only. | **None.** Every fact it shows is a copy of a fact owned elsewhere. | Yes. Freely deletable. |
+| **Seagulls Host** | Provider-scoped identity, delivery, and optional runtime service: the DNS zone, the WebFinger document, the Agent Card, the A2A endpoint and its TLS certificate, the hosted inbox, provider policy, and optionally model execution. | **Real, and total, over the Gull voices that selected it.** None over any other Gull. | Optional to choose. **Not optional once chosen.** |
+| **Seagulls Console** | A multi-voice client. Aggregates contacts, conversations, inbox events, tasks, and resolution evidence across the Gull voices an owner has selected. Holds projections only. | **None.** Every fact it shows is a copy of a fact owned elsewhere. | Yes. Freely deletable. |
 | **Seagulls Apps** | The account and extension surface. Human accounts, workspaces, and the product surfaces Pet and Agent Request are presented through, plus optional provider-scoped social and catalog features. | Over provider-local product data only. | Yes. |
 
 Whenever a sentence in this repository says "Seagulls", it must be replaceable
@@ -87,7 +87,7 @@ capability that appears in two rows is a bug in this table.
 | --- | --- |
 | Allocate a handle in the provider-local `gulls.ai` namespace | Provider-scoped. Not a global registry. |
 | Serve `/.well-known/webfinger` for hosted handles | RFC 7033 JRD. |
-| Serve and version the A2A Agent Card for hosted Gulls | See [Host As Adversary](#host-as-adversary). |
+| Serve and version the A2A Agent Card for hosted Gull voices | See [Host As Adversary](#host-as-adversary). |
 | Operate the A2A endpoint and hold its TLS certificate | The `tls` and `endpoint_binding` verifications terminate here. |
 | Operate the durable hosted inbox while the runtime is offline | Real message custody. |
 | Authenticate the owner and bind the hosted voice to a selected runtime | Login as Host authority, distinct from the account as an Apps record. |
@@ -96,10 +96,10 @@ capability that appears in two rows is a bug in this table.
 | Moderation that blocks or holds delivery through the hosted endpoint | Distinct from catalog moderation, which is Apps. |
 | Export the Gull configuration and support custom-domain attachment or delegation | The exit path. Must include handle tombstoning. |
 
-Host is the routing and delivery authority for the hosted Gulls that selected
-it, and gains no authority over external Gulls or the open Gull ecosystem. It
-holds no authority over a connected custom-domain Gull at all: connecting a
-Gull to Console or Apps does not enroll it in Host.
+Host is the routing and delivery authority for the hosted Gull voices that
+selected it, and gains no authority over external Gull voices or the open Gull
+ecosystem. It holds no authority over a connected custom-domain Gull at all:
+connecting a Gull to Console or Apps does not enroll it in Host.
 
 **The runtime exception is deliberate and must not be softened.** Seagulls does
 not author an agent's voice — except when Host also executes the model for a
@@ -111,7 +111,7 @@ but they shape it inside the provider's process.
 
 | Capability | Notes |
 | --- | --- |
-| A local or hosted address book of selected Gulls | A list of pointers. Holds no name. |
+| A local or hosted address book of selected Gull voices | A list of pointers. Holds no name. |
 | Display resolution, freshness, and endpoint-verification evidence | Renders the resolution bundle; never produces one it did not receive. |
 | Re-resolve a selected identity through its authoritative domain before contact | Required. A catalog suggestion is never a routing decision. |
 | Aggregated views of conversations, inbox events, and A2A tasks the current owner is authorized to see | Projections. Source of truth stays at each Gull. |
@@ -238,7 +238,7 @@ private capability                 structured work
          +--------- Seagulls Apps ----+
                     Seagulls Console (projections, no authority)
                          |
-              connected Gulls        hosted Gulls -- Seagulls Host
+        connected Gull voices        hosted Gull voices -- Seagulls Host
                          |
           WebFinger + AID/DNS-AID + A2A
 ```
@@ -254,7 +254,7 @@ survive a platform change, while hosted-domain voices cannot.
   policy, inbox, runtime connector, and audit boundary.
 - **gulls**: the runtime and CLI that supplies the Gull voice capability.
 - **Seagulls Host**: the provider-scoped identity, delivery, and optional
-  runtime service. Holds real authority over the Gulls that selected it.
+  runtime service. Holds real authority over the Gull voices that selected it.
 - **Seagulls Console**: the multi-voice client. Projections only, no authority,
   freely deletable.
 - **Seagulls Apps**: the account and product-extension surface.
@@ -281,16 +281,16 @@ Seagulls composes the same standards used by each Gull:
 | --- | --- | --- |
 | Human handle resolution | WebFinger | Host serves it for hosted handles; Console consumes it for all handles |
 | Agent endpoint discovery | AID or DNS-AID | Host publishes; Console consumes |
-| Agent description | A2A Agent Card | Host serves for hosted Gulls; Console renders |
+| Agent description | A2A Agent Card | Host serves for hosted Gull voices; Console renders |
 | Agent interaction and remote task state | A2A | Neither role owns it |
 | Local voice, persistence, policy, and runtime delivery | Gulls | No Seagulls role |
 | Optional provider-hosted voice | WebFinger and A2A under the provider domain | Host |
 | Multi-Gull presentation | Projections | Console |
 | Accounts and product modules | Platform contracts | Apps |
 
-There is no Seagulls wire protocol. Standalone Gulls require no Seagulls server.
-Host may operate services for the Gulls that selected it, but external Gulls
-continue to expose standard interfaces and owe it nothing.
+There is no Seagulls wire protocol. Standalone Gull voices require no Seagulls
+server. Host may operate services for the Gull voices that selected it, but
+external Gull voices continue to expose standard interfaces and owe it nothing.
 
 ## Hosted Gull Voices
 
@@ -298,7 +298,7 @@ An agent without an owner-controlled domain may publish a public voice through
 Host:
 
 ```text
-agent runtime <-> hosted Gull <-> @weather:gulls.ai <-> other Gulls
+agent runtime <-> hosted Gull <-> @weather:gulls.ai <-> other Gull voices
 ```
 
 The Host capability table above is the complete list of what Host does for that
@@ -327,7 +327,7 @@ owner runs the Gull locally.
 Agent Request owns structured work UX and policy: bounded requests, acceptance,
 refusal, approvals, progress, artifacts, results, and completion. Apps supplies
 participants and product surface; Console supplies task views, notifications,
-and supervision projections; the participating Gulls carry the interaction
+and supervision projections; the participating Gull voices carry the interaction
 using A2A messages and tasks.
 
 Agent Request does not create a second public task transport or make a Seagulls
@@ -362,9 +362,10 @@ with the single documented exception of Host-executed runtimes.
 - A mandatory global agent registry or namespace. The Host domain is one
   optional provider namespace.
 - A required hub, relay, account system, shared database, or control plane for
-  all Gulls.
+  all Gull voices.
 - External Gull identity, private inboxes, local policy, runtime state, or
-  delivery truth. Host owns these for hosted Gulls only, and for no one else.
+  delivery truth. Host owns these for hosted Gull voices only, and for no one
+  else.
 - DNS, WebFinger, AID, DNS-AID, A2A, or proprietary replacements for them.
 - Network-wide capability truth, reputation, ranking, or transitive trust.
 - Pet private assets or owner relationship truth.
@@ -422,11 +423,11 @@ The [Migration Plan](../../gulls/docs/migration-plan.md#definition-of-done)
 adopts this list verbatim as its definition of done. Each is demonstrated by a
 test or a metric, not by a document.
 
-- Two independent Gulls can discover and communicate without joining a common
-  Seagulls service.
+- Two independent Gull voices can discover and communicate without joining a
+  common Seagulls service.
 - An agent with no owner-controlled domain can publish a resolvable public Gull
   voice through optional Seagulls hosting.
-- A user can connect or host several Gulls and supervise them from one
+- A user can connect or host several Gull voices and supervise them from one
   Seagulls platform.
 - Pet can equip an owned Gull without exposing its private asset bundle.
 - Agent Request can coordinate bounded A2A work and present durable task state.

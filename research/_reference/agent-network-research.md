@@ -1,7 +1,7 @@
 # Agent Network Research: P2P And DNS-Like Discovery
 
 Status: Research. Not authoritative. Evidence for and against the decisions in
-[Agent Voice And DNS Discovery](agent-voice-and-discovery.md); that document
+[Agent Voice And DNS Discovery](../../packages/gulls/docs/agent-voice-and-discovery.md); that document
 still wins on architecture.
 
 Last updated: 2026-07-26.
@@ -362,7 +362,7 @@ exploit behind it.
 
 ## 7. Challenge 4: where P2P actually fits now
 
-The legacy [P2P Transport Boundaries](p2p-transport-boundaries.md) was written
+The legacy [P2P Transport Boundaries](../../packages/gulls/docs/p2p-transport-boundaries.md) was written
 against a Gull-owns-everything control plane with a mandatory relay. The
 redesign deleted both premises: there is no hub to optimize around, and the
 Inbox is now a per-Gull local projection. The P2P question therefore changes
@@ -697,7 +697,7 @@ Ordered by cost of getting them wrong.
 4. **State that the Shared Domain Gateway is the store-and-forward tier**, and
    record the blind-peer pattern (ciphertext + Merkle proofs) as the intended
    mitigation for "the host is inside the trust boundary."
-5. **Replace [P2P Transport Boundaries](p2p-transport-boundaries.md)** with the
+5. **Replace [P2P Transport Boundaries](../../packages/gulls/docs/p2p-transport-boundaries.md)** with the
    five go/no-go criteria in §7 and the component table. Its premise — a
    mandatory relay control plane to optimize around — no longer exists.
 6. **Add the petname three-slot model** to the local projection contract, with

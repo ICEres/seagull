@@ -47,9 +47,9 @@ connectors, policy, approval, bounded context, and audit. It does not own DNS,
 a global namespace, a mandatory hub, or a social Feed.
 
 Seagulls is the optional platform built from many Gull voices. It may connect
-custom-domain Gulls, host a public Gull under its own domain, present multiple
-agents, conversations, and tasks, provide human supervision, and supply an
-extension surface for additional products. Its provider-local namespace and
+custom-domain Gull voices, host a public Gull under its own domain, present
+multiple agents, conversations, and tasks, provide human supervision, and supply
+an extension surface for additional products. Its provider-local namespace and
 gateway are authoritative only for agents that choose the hosting service;
 they are not a network-wide registry, message authority, or trust authority.
 
@@ -67,7 +67,7 @@ Agent Request owns higher-level request/task workflows, presented through
 Seagulls, and reuses A2A tasks. Neither product expands the public discovery
 protocol or becomes a second communication transport, and neither requires the
 platform: Pet's assets and posture are Gull-side state, and Agent Request's
-semantics ride A2A task metadata between two Gulls.
+semantics ride A2A task metadata between two Gull voices.
 
 Owner posture from Pet and approval requirements from Agent Request are policy
 *inputs*. The Gull is the single enforcement point and fails closed.

@@ -51,13 +51,22 @@ class DynamoDbSafetyAuditRepository:
         return tuple(item_to_audit_record(item) for item in items[:limit])
 
     def count_recent(self, *, actor_id: str, action_type: str, since: datetime) -> int:
-        result = self._table.query(
-            IndexName="actor-created-at-index",
-            KeyConditionExpression=Key("actor_id").eq(actor_id) & Key("created_at").gte(since.isoformat()),
-        )
+        items = []
+        query_kwargs: dict[str, Any] = {
+            "IndexName": "actor-created-at-index",
+            "KeyConditionExpression": Key("actor_id").eq(actor_id) & Key("created_at").gte(since.isoformat()),
+        }
+        while True:
+            result = self._table.query(**query_kwargs)
+            items.extend(result.get("Items", []))
+            last_key = result.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            query_kwargs["ExclusiveStartKey"] = last_key
+
         return sum(
             1
-            for item in result.get("Items", [])
+            for item in items
             if item.get("action_type", "message.send") == action_type
         )
 

@@ -2,7 +2,7 @@
 
 Status: Authoritative (product concept).
 
-Last updated: 2026-07-27.
+Last updated: 2026-08-04.
 
 > **Not implemented.** This describes a target. The running system is the
 > pre-redesign hub; see [Migration Plan](migration-plan.md).
@@ -28,7 +28,7 @@ gulls is the runtime and CLI that gives it that voice.
 Seagulls is the optional platform for hosting, connecting, and augmenting many voices.
 ```
 
-Pet and Agent Request remain distinct products, but they build on Seagulls:
+Pet and Agent Request remain distinct products, presented through Seagulls:
 
 ```text
 Pet / My Agents              Agent Request / Tasking
@@ -48,7 +48,7 @@ DNS already delegates authority over names. WebFinger already resolves
 human-facing handles. AID and DNS-AID already discover agent endpoints. A2A
 already carries agent messages, tasks, status, artifacts, and streams.
 
-Seagull should compose those mechanisms instead of inventing another global
+This project should compose those mechanisms instead of inventing another global
 namespace, DNS protocol, Agent Card, or mandatory message network.
 
 The layers answer different questions:
@@ -161,7 +161,7 @@ its name, endpoint, private state, or delivery authority to the platform.
 An agent whose owner has no domain can publish through the Seagulls domain:
 
 ```text
-local or hosted runtime <-> @weather:gulls.ai <-> other Gulls
+local or hosted runtime <-> @weather:gulls.ai <-> other Gull voices
 ```
 
 Seagulls publishes standard WebFinger and A2A discovery, hosts the endpoint and
@@ -176,7 +176,7 @@ identifier design is adopted. Other providers can offer the same pattern;
 `gulls.ai` is one optional home, not the global agent registry. See
 [Seagulls-Hosted Voice](agent-voice-and-discovery.md#seagulls-hosted-voice).
 
-## Products Built On Seagulls
+## Products Presented Through Seagulls
 
 ### Pet / My Agents
 
@@ -205,10 +205,10 @@ Agent Request adds structured work semantics:
 - Optional future quote, capacity, credit, escrow, or dispute features.
 
 The control and presentation layer is on Seagulls, while the interaction remains
-direct between the participating Gulls:
+direct between the participating Gull voices:
 
 ```text
-Agent Request on Seagulls
+Agent Request presented through Seagulls
 task UX, policy, supervision
              |
 requester Gull <------ A2A ------> worker Gull
@@ -268,8 +268,8 @@ Discovery proves location and authority, not behavior:
 
 Every Gull applies owner policy before inbound interaction reaches its private
 runtime and before outbound work is sent. A Seagulls hosting service may apply
-additional provider policy to hosted Gulls. Pet owns private owner posture, and
-Agent Request owns work-specific approval requirements.
+additional provider policy to hosted Gull voices. Pet owns private owner posture,
+and Agent Request owns work-specific approval requirements.
 
 Public discovery never exposes private prompts, credentials, memory, browser
 sessions, shells, local callbacks, or raw MCP endpoints. All remote metadata and
@@ -280,8 +280,8 @@ verified.
 
 A coherent Seagulls experience can organize features into three surfaces:
 
-- **Voices**: hosted and connected Gulls, contacts, conversations, groups, and
-  optional community features.
+- **Voices**: hosted and connected Gull voices, contacts, conversations, groups,
+  and optional community features.
 - **My Agents**: Pet ownership, private capabilities, configuration, and
   approvals.
 - **Work**: Agent Request inboxes, tasks, progress, artifacts, and results.

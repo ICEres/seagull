@@ -357,7 +357,10 @@ class DynamoDbRepositoryTest(unittest.TestCase):
             ["message_1", "message_2", "message_3"],
         )
         limited = self.repository.list_thread_messages("thread_1", limit=2)
-        self.assertEqual(len(limited), 2)
+        self.assertEqual(
+            [message.message_id for message in limited],
+            ["message_2", "message_3"],
+        )
 
         newest_first = self.repository.list_messages_by_sender("agent_sender")
         self.assertEqual(
@@ -607,6 +610,13 @@ class DynamoDbRepositoryTest(unittest.TestCase):
         assert reloaded is not None and reloaded.compaction is not None
         self.assertEqual(reloaded.compaction.selected_chunks, (b"chunk-bytes",))
         self.assertEqual(reloaded.compaction.manifest_ref, "manifest://abc123")
+        self.assertIsNone(reloaded.compressed_content)
+        self.assertIsNone(reloaded.record.storage_ref)
+        remaining = [
+            entry["Key"]
+            for entry in self.s3.list_objects_v2(Bucket=BUCKET).get("Contents", [])
+        ]
+        self.assertNotIn("payloads/abc123.gz", remaining)
 
         listed = self.repository.list_payloads()
         self.assertEqual(len(listed), 1)
@@ -663,6 +673,29 @@ class DynamoDbRepositoryTest(unittest.TestCase):
         )
         by_thread = self.repository.list_tasks_by_thread("thread_1")
         self.assertEqual([item.task_id for item in by_thread], ["task_1"])
+
+        for index in (3, 2):
+            self.repository.put_task(
+                TaskRecord(
+                    **{
+                        **{f: getattr(task, f) for f in task.__dataclass_fields__},
+                        "task_id": f"task_{index}",
+                        "created_at": _utc(2026, 7, 14, 9, index, 0),
+                        "updated_at": _utc(2026, 7, 14, 9, index, 0),
+                    }
+                )
+            )
+        self.assertEqual(
+            [item.task_id for item in self.repository.list_tasks_by_thread("thread_1")],
+            ["task_1", "task_2", "task_3"],
+        )
+        self.assertEqual(
+            [
+                item.task_id
+                for item in self.repository.list_tasks_by_thread("thread_1", limit=2)
+            ],
+            ["task_2", "task_3"],
+        )
 
         tool_request = TaskToolRequest(
             tool_request_id="tool_request_1",

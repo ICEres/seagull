@@ -25,11 +25,13 @@ app covers the same core inbox flow for everyone else:
   `gulls stream`), always on — one toolbar status item shows stream/poll
   health, last check, and a Pause Notifications toggle
 - Actionable notifications: Reply (inline text input), Ack, and — when a
-  rule-generated draft exists — a truncated preview with "Send draft". This
-  direct-send path has the consent-integrity blocker documented below. Banners are
-  withdrawn automatically when a delivery is decided anywhere (CLI, another
-  machine). On the very first launch the pre-existing queue is seeded
-  silently — banners are only for deliveries that arrive after that
+  rule-generated draft exists — "Review draft", which opens the app. A banner
+  announces that a decision is waiting and never carries one out; message and
+  draft text stay out of it unless "Show Message Text in Notifications" is
+  turned on. Banners are withdrawn automatically when a delivery is decided
+  anywhere (CLI, another machine). On the very first launch the pre-existing
+  queue is seeded silently — banners are only for deliveries that arrive after
+  that
 - Delivery detail (content rendered as plain text — message content is
   untrusted input; links are never made clickable)
 - Reply / Ack / Ignore
@@ -39,28 +41,33 @@ app covers the same core inbox flow for everyone else:
 - Settings with Keychain-stored connector token and one-way import from
   `~/.config/seagull/env`
 
-## Known Consent-Integrity Blockers
+## Consent Integrity
 
-The app is not release-safe for consequential effects until the issues below
-are fixed:
+Three blockers were recorded here. Two are closed; the third is narrowed.
 
-- By default a notification title exposes the sender, its body exposes the
-  first 96 message characters, and its subtitle exposes the first 72 draft
-  characters. Notifications must announce only that a decision is waiting
-  unless the operating system and user privacy settings explicitly permit
-  details.
-- A notification shows only the first 72 characters of a draft, while **Send
-  draft** sends the full hidden value carried in the notification. The action
-  must open the trusted full-review surface; a truncated lock-screen preview
-  must not send anything.
-- **Approve & send** regenerates the draft, sends it, and only then warns if it
-  differs from what the person reviewed. Approval must bind an immutable action
-  id, version, payload hash, expiry, and preconditions to execution. Any change
-  must invalidate the approval and ask again before sending.
+**Closed — a banner no longer performs a consequential effect.** The old "Send
+draft" action sent the full generated draft carried invisibly in the
+notification, after showing only its first 72 characters. It is now "Review
+draft", which opens the app, and the draft text is not put in the notification
+at all. Reply still sends from the banner, which is sound for a different
+reason: the owner types that text there, so what was composed is what is sent.
 
-These are privacy and exact-action consent failures, not presentation polish.
-The banner and in-app sheet may remain useful notification and review surfaces
-after their disclosure and side-effect contracts are corrected.
+**Closed — approval binds to the draft that was read.** `draft-reply --approve`
+regenerates from the message as it stands now, so the generate step reports
+`draft_sha256` and **Approve & send** passes it back as `--expect-draft`. A
+draft that changed after review — because the sender edited the message, or
+because response-rule posture changed — is refused and nothing is sent. The
+post-hoc "the sent draft differs" warning is gone because it can no longer
+happen.
+
+**Narrowed — lock-screen disclosure.** Message and draft text are no longer in
+banners unless the owner turns on "Show Message Text in Notifications" (off by
+default). The notification title still names the sender, which is a detail
+rather than the bare fact that a decision is waiting; tightening that is the
+remaining work in this area.
+
+Still outstanding, and tracked in [Product Direction](../../../../PRODUCT.md):
+the generic web action has no sufficiently explicit effect summary.
 
 The WebSocket stream is an Inbox wake-up channel, not a Live A2A session.
 Push carries no durable conversation state; the app always re-fetches Inbox as

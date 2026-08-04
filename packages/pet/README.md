@@ -1,5 +1,9 @@
 # Pet
 
+Status: Authoritative (layer overview).
+
+Last updated: 2026-08-04.
+
 Pet is the My Agents product, presented through Seagulls. It equips a personal
 or owned Gull with private prompts, skills, memory, tools, credentials,
 settings, owner preferences, and approval posture.

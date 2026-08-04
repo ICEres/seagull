@@ -97,16 +97,19 @@ export function ChatPage({
   });
 
   const sendMutation = useMutation({
-    mutationFn: async (content: string) => {
-      if (!ownerUserId || !selectedChat) {
+    mutationFn: async ({ chatId, content }: { chatId: string; content: string }) => {
+      if (!ownerUserId) {
         throw new Error("Select a chat before sending.");
       }
-      return api.createAgentChatMessage(selectedChat.chat_id, { owner_user_id: ownerUserId, content });
+      return api.createAgentChatMessage(chatId, { owner_user_id: ownerUserId, content });
     },
-    onSuccess: ({ message, reply }) => {
-      setDraft("");
-      setFlying(true);
-      window.setTimeout(() => setFlying(false), 950);
+    onSuccess: ({ message, reply }, variables) => {
+      if (selectedChat?.chat_id === variables.chatId) {
+        setDraft("");
+        setFlying(true);
+        window.setTimeout(() => setFlying(false), 950);
+        window.setTimeout(scrollThread, 0);
+      }
       void queryClient.invalidateQueries({ queryKey: ["social-agent-chats"] });
       void queryClient.invalidateQueries({ queryKey: ["social-agent-chat-messages"] });
       const failed = message.delivery_status === "delivery_failed" || Boolean(message.ai_error);
@@ -117,7 +120,6 @@ export function ChatPage({
         });
       }
       void reply;
-      window.setTimeout(scrollThread, 0);
     },
     onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
   });
@@ -125,8 +127,8 @@ export function ChatPage({
   function submitDraft(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const text = draft.trim();
-    if (text && !sendMutation.isPending) {
-      sendMutation.mutate(text);
+    if (text && !sendMutation.isPending && selectedChat) {
+      sendMutation.mutate({ chatId: selectedChat.chat_id, content: text });
     }
   }
 

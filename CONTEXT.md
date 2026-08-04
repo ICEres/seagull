@@ -6,7 +6,7 @@
 > **Still true:** the term definitions below accurately describe the running
 > implementation and the vocabulary in deployed code, tests, and table names.
 > The *layer ownership* claims are superseded.
-> **Rewritten when:** terminology is consolidated into one glossary.
+> **Retire when:** terminology is consolidated into one glossary.
 
 This file defines the domain language of the **current implementation**. It
 remains useful for reading existing code, tests, and records, because the

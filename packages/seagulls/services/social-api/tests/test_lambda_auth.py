@@ -131,6 +131,13 @@ class FakeMessageHubPoster:
         }
 
 
+class FakeAiProviderRunClient:
+    """Stands in for the AI provider: one completed run with output."""
+
+    def create_run(self, request: dict[str, object]) -> dict[str, object]:
+        return {"run_id": "run_1", "state": "completed", "output_text": "reply from the agent"}
+
+
 class SocialApiLambdaChatDeliveryTest(TestCase):
     CLAIMS = {"sub": "alice-sub", "email": "alice@example.com"}
     HUB_ENV = {"MESSAGE_API_URL": "https://hub.test"}
@@ -230,6 +237,54 @@ class SocialApiLambdaChatDeliveryTest(TestCase):
         self.assertEqual(["/messages"], [path for path, _ in poster.calls])
         self.assertEqual("delivery_failed", message["delivery_status"])
         self.assertIn("500", message["delivery_error"])
+
+    def enable_ai_replies(self, lambda_module: types.ModuleType) -> None:
+        lambda_module.AI_PROVIDER_API_URL = "https://ai.test"
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "admin-secret"
+        lambda_module.AI_REPLY_PROVIDER = "anthropic"
+        lambda_module.AI_REPLY_MODEL = "claude-test"
+        lambda_module.AiProviderRunClient = FakeAiProviderRunClient
+
+    def test_the_agent_reply_is_delivered_back_through_the_hub(self) -> None:
+        """Both sides of the conversation reach gulls, in one thread.
+
+        Delivering only the human's message would leave gulls holding half of
+        every conversation -- which is exactly what a chat read cutover would
+        then surface.
+        """
+        poster = FakeMessageHubPoster()
+        lambda_module = self.load_module_with_hub(poster)
+        self.enable_ai_replies(lambda_module)
+
+        with patch.dict(os.environ, self.HUB_ENV):
+            chat_id = self.create_chat(lambda_module)
+            poster.calls.clear()
+            response = lambda_module.handler(
+                event(
+                    "POST",
+                    f"/agent-chats/{chat_id}/messages",
+                    body={"content": "Plan the MVP."},
+                    claims=self.CLAIMS,
+                ),
+                None,
+            )
+
+        self.assertEqual(200, response["statusCode"])
+        self.assertEqual(["/messages", "/messages"], [path for path, _ in poster.calls])
+
+        inbound, outbound = (body for _, body in poster.calls)
+        self.assertEqual("@alice:seagull.local", inbound["sender_handle"])
+        self.assertEqual(["@assistant:seagull.local"], inbound["recipient_handles"])
+        # Reversed, and in the thread the first delivery stamped on the session.
+        self.assertEqual("@assistant:seagull.local", outbound["sender_handle"])
+        self.assertEqual(["@alice:seagull.local"], outbound["recipient_handles"])
+        self.assertEqual("reply from the agent", outbound["content"])
+        self.assertEqual("thread_1", outbound["thread_id"])
+
+        reply = response_body(response)["reply"]
+        self.assertEqual("delivered", reply["delivery_status"])
+        self.assertEqual("message_1", reply["hub_message_id"])
+        self.assertEqual("thread_1", reply["hub_thread_id"])
 
 
 class SocialApiLambdaAuthTest(TestCase):

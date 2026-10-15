@@ -1,6 +1,6 @@
 # Product Direction
 
-Last reviewed: 2026-08-04.
+Last reviewed: 2026-10-15.
 
 > This is a product-priority brief, not a second architecture authority.
 > [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md)
@@ -42,6 +42,64 @@ runtime usually need orchestration, not a public voice. A Gull becomes useful
 when work crosses a trust boundary, must survive either runtime being offline,
 or needs an independently enforceable policy and audit trail.
 
+### Two layers
+
+Decided 2026-10-15. The product is two layers stacked on one another, and the
+upper one is an owner setting.
+
+1. **The edge** — the policy edge this document describes: A2A send and
+   receive, a local durable inbox, unknown-contact quarantine, exact-action
+   approval, and receipts. Always on. Everything in [Now](#now--restore-truth-and-prove-one-protected-loop)
+   is edge work.
+2. **Introductions** — an optional layer on the edge, adopted from the research
+   loop's champion ([proposal](research/proposal.md), variant `jul28-01`). An
+   introduction is a signed record that an introducer told an introduction
+   recipient to contact an introduced agent for a stated purpose. It closes
+   from the A2A task states the edge already records, never from a rating, and
+   an introducer whose introductions to one recipient stay open may not make
+   more of them to that recipient. It is the planned answer to the cold-start
+   risk below: an agent reaches one it could not name, through one it already
+   can.
+
+The owner sets three things:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| Introduction layer | `off`, `record-only`, `on` | `record-only` |
+| An introduced stranger at the gate (`on` only) | held in quarantine with the introduction shown, or admitted once on a valid grant the owner's Gull issued through that introducer | held |
+| Open introductions one introducer may hold with this owner's agents (`on` only) | an integer the owner reads and sets | 3 |
+
+`record-only` keeps every introduction on the owner's box. The owner's own
+referrals are recorded and closed from the edge's task records, which is enough
+for the dead-referral report: the recorded referrals that no agent of theirs
+has ever acted on. Nothing is sent to the other two parties, and no introduction
+changes an admission decision. `on` exchanges introductions with the other two
+parties, enforces the cap on the introduction recipient's box, and applies the
+gate setting.
+
+No setting changes these:
+
+- An introduction or a grant governs admission only. It never satisfies an
+  exact-action approval, never changes a sender's trust label, and never widens
+  a runtime's capability scope — the limits
+  [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md#inbound-contact-state-machine)
+  already places on trust labels.
+- A grant is not a new credential. It is the recipient-minted token that
+  [Caller Authentication](packages/gulls/docs/agent-voice-and-discovery.md#caller-authentication)
+  already requires — scoped to one sender, expiring, revocable — narrowed
+  further to one purpose and one use.
+- The layer adds no feed, no follower count, no global score, and no directory.
+  Discovery through introductions returns only what the owner's agents hold,
+  and the empty set otherwise.
+
+The edge is built first and does not change for this decision: Stage 1A carries
+no introduction fields. The layer attaches at two seams the edge already has —
+closure reads the edge's task records, and admission accepts a recipient-minted
+token — so the edge never needs to know introductions exist. One part of the
+champion does not carry over: it defines the product as serving no endpoint and
+transporting no messages. Here the edge does both, and the introduction layer
+runs on top of it.
+
 ### Primary user
 
 The first user is a technical individual operating roughly two to ten agents
@@ -78,7 +136,9 @@ browser, credential, and write access are not needed to prove the value.
 - Hosting public identities before the local edge has repeat users.
 - Autonomous consequential side effects without standing policy or an exact
   human approval receipt.
-- Public discovery of an agent the requester cannot already name.
+- Public discovery of an agent the requester cannot already name. Reach
+  through introductions is not public discovery, and it is not part of the
+  first proof either; see [Two layers](#two-layers).
 
 ## Human Supervision Contract
 
@@ -173,6 +233,9 @@ supervision, bounded private context, and readable evidence across runtimes.
 - Add deduplication, snooze, assignment, quiet hours, queue-age visibility, and
   digest controls.
 - Test a second cross-vendor workflow only after the first repeats.
+- Build the [introduction layer](#two-layers) on the edge once Stage 1A passes:
+  `record-only` first, because the dead-referral report needs no peer, then
+  exchange, the per-pair cap, and grant admission behind the owner settings.
 
 ### Not yet: provider hosting and broad platform expansion
 
@@ -233,8 +296,13 @@ as a north star. Each can rise while user value or safety falls.
    which still lacks a sufficiently explicit effect summary.
 2. **The identity promise is conditional.** A custom-domain voice can retain
    its address across runtime or platform changes. A hosted-domain voice cannot.
-3. **There is no cold-start mechanism.** Known-handle resolution does not help a
-   user find a capable stranger, and a marketplace is not justified yet.
+3. **The cold-start mechanism is planned, not proved.** Known-handle resolution
+   does not help a user find a capable stranger, and a marketplace is not
+   justified yet. The [introduction layer](#two-layers) is the planned answer,
+   and its own research records why it may not work: demand is unproven, the
+   bootstrap runs backwards because an introduction to a recipient that never
+   installs `gulls` never closes, and nobody has counted how often three-party
+   introductions actually happen.
 4. **Onboarding is still developer-only.** `make setup` starts dependencies;
    the verified hubstub quickstart still requires Go, a source build, and manual
    configuration. It is a seeded fake-hub demo, not an independent cross-agent

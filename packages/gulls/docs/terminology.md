@@ -2,7 +2,7 @@
 
 Status: Authoritative (glossary).
 
-Last updated: 2026-07-27.
+Last updated: 2026-10-15.
 
 This is the project glossary. New terms belong here in the change that
 introduces them. [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
@@ -91,6 +91,35 @@ Seagulls Host, Seagulls Console, or Seagulls Apps.
   [Protocol](../packages/protocol/README.md#relationship-presets).
 - **AI Provider** — optional hosted runtime execution. A Seagulls Host concern;
   a Gull with an owner-supplied runtime never calls it.
+
+## Introduction Terms
+
+The optional layer on the edge, decided in
+[Product Direction](../../../PRODUCT.md#two-layers). None of it is implemented.
+
+- **Introduction** — a signed record that an introducer told an introduction
+  recipient to contact an introduced agent for a stated purpose. Keyed on all
+  four; no two-party edge represents it. It stays `open` until it closes as
+  `completed`, `failed`, `rejected`, or `never-contacted`, derived from A2A task
+  states or its expiry. No party authors its outcome.
+- **Introducer** — the agent that made the recommendation.
+- **Introduced agent** — the agent recommended. Its Gull later receives the
+  contact and is the only issuer of first-contact grants.
+- **Introduction recipient** — the agent that was told. It initiates contact
+  afterwards, so at the introduced agent's edge it is the *sender*. Write the
+  full phrase wherever bare "recipient" could be read as the inbox side.
+- **Introduction layer** — the owner setting `off`, `record-only` (default), or
+  `on`. `record-only` keeps introductions on the owner's box and never affects
+  admission.
+- **Introduction cap** — the number of open introductions one introducer may
+  hold with one owner's agents at a time. Enforced on the introduction
+  recipient's box; default 3.
+- **First-contact grant** — a single-use admission token the introduced agent's
+  Gull issues through an introducer, bound to one introduction recipient, one
+  purpose, and one expiry. A narrowing of the recipient-minted token, not a new
+  credential, and it governs admission only.
+- **Dead-referral report** — the zero-peer view of which recorded referrals no
+  agent of the owner's has ever acted on.
 
 ## Frozen Identifiers
 

@@ -1,6 +1,6 @@
 # Product Direction
 
-Last reviewed: 2026-08-04.
+Last reviewed: 2026-10-15.
 
 > This is a product-priority brief, not a second architecture authority.
 > [Agent Voice And DNS Discovery](packages/gulls/docs/agent-voice-and-discovery.md)
@@ -220,17 +220,24 @@ as a north star. Each can rise while user value or safety falls.
 
 ## Immediate Product Risks
 
-1. **Consent is not yet exact everywhere.** Two of the three defects here are
-   closed. The in-app approval path is bound: `draft-reply --approve` takes
+1. **Consent is exact on the known surfaces, but not yet by construction.** All
+   three known defects are closed. The in-app approval path is bound:
+   `draft-reply --approve` takes
    `--expect-draft <draft_sha256>` and the macOS approval passes the digest of
    the draft it displayed, so a draft that changed after review is refused
    rather than sent. The macOS notification no longer performs a consequential
    effect from a truncated preview — its draft action opens the app, and the
    draft text is not carried in the notification. Message and draft text are now
    omitted from banners unless the owner opts in, though the title still names
-   the sender. The remaining defect is the
-   [generic web action](packages/seagulls/apps/web/src/components/sky-page.tsx#L782),
-   which still lacks a sufficiently explicit effect summary.
+   the sender. The
+   [generic web action](packages/seagulls/apps/web/src/components/action-review.tsx)
+   now states its effect before anything is sent — operation, real destination
+   host, full URL, whether the sender supplied it, runtime, and that confirming
+   only records a request awaiting approval — submits only the request that was
+   reviewed, and checks the hub's record against it. What remains is
+   structural: the hub's action request is not an exact-action receipt, nothing
+   executes one yet, and the receipt carrying action id, version, payload hash,
+   expiry, and preconditions arrives with the Stage 1A edge.
 2. **The identity promise is conditional.** A custom-domain voice can retain
    its address across runtime or platform changes. A hosted-domain voice cannot.
 3. **There is no cold-start mechanism.** Known-handle resolution does not help a

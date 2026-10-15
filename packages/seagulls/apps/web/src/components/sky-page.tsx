@@ -2,6 +2,7 @@ import { CSSProperties, FormEvent, KeyboardEvent, useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { recordedMatchesReview, type OpenUrlEffect } from "../lib/action-effect";
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import {
   MessageHubClient,
@@ -13,6 +14,7 @@ import {
 import type { AgentChatSession, AgentProfile, LoopState, Notification, Post } from "../lib/social";
 import { formatRelativeTime, knownProfiles } from "../lib/state";
 import { GullAvatar, Wing, statusDotColor, tintFor, wingFor } from "@seagulls/ui";
+import { ActionReview } from "./action-review";
 import { Chip, EmptyState, displayLabel, shortHandle, type Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError | MessageHubError;
@@ -750,10 +752,12 @@ function DeliveryDetail({
     item.current_message?.content_inline ?? item.message.content_inline ?? "",
   );
   const [replyText, setReplyText] = useState("");
-  const [actionTarget, setActionTarget] = useState(
-    item.current_message?.refs?.[0]?.url ?? item.message.refs?.[0]?.url ?? "",
-  );
+  // Bumped after a recorded action so the review form starts over.
+  const [actionReviewKey, setActionReviewKey] = useState(0);
   const currentRefs = item.current_message?.refs?.length ? item.current_message.refs : item.message.refs ?? [];
+  const senderUrls = [...(item.message.refs ?? []), ...(item.current_message?.refs ?? [])].flatMap((ref) =>
+    ref.url ? [ref.url] : [],
+  );
 
   const hookMutation = useMutation({
     mutationFn: () =>
@@ -771,33 +775,50 @@ function DeliveryDetail({
   });
 
   const decisionMutation = useMutation({
-    mutationFn: (decision: "reply" | "action" | "ignore" | "ask_human") => {
-      if (decision === "reply") {
+    mutationFn: (
+      choice:
+        | { decision: "reply" | "ignore" | "ask_human" }
+        | { decision: "action"; effect: OpenUrlEffect },
+    ) => {
+      if (choice.decision === "reply") {
         return messageApi.submitDecision(item.delivery.delivery_id, {
           agent_handle: agentHandle,
-          decision,
+          decision: choice.decision,
           content: replyText,
         });
       }
-      if (decision === "action") {
+      if (choice.decision === "action") {
+        // Only the reviewed effect is sent, including the approval requirement
+        // the summary promised, rather than relying on the hub's default.
         return messageApi.submitDecision(item.delivery.delivery_id, {
           agent_handle: agentHandle,
-          decision,
-          action_type: "open_url",
-          action_target: actionTarget,
-          action_runtime: "cloud_node",
+          decision: choice.decision,
+          action_type: choice.effect.type,
+          action_target: choice.effect.target,
+          action_runtime: choice.effect.runtime,
+          requires_approval: choice.effect.requiresApproval,
         });
       }
       return messageApi.submitDecision(item.delivery.delivery_id, {
         agent_handle: agentHandle,
-        decision,
+        decision: choice.decision,
       });
     },
-    onSuccess: (_, decision) => {
-      if (decision === "reply") {
+    onSuccess: (result, choice) => {
+      if (choice.decision === "reply") {
         setReplyText("");
       }
-      onNotice({ tone: "ok", message: `Delivery marked ${decision}.` });
+      if (choice.decision !== "action") {
+        onNotice({ tone: "ok", message: `Delivery marked ${choice.decision}.` });
+      } else if (recordedMatchesReview(choice.effect, result.action_request)) {
+        setActionReviewKey((key) => key + 1);
+        onNotice({ tone: "ok", message: `Action request recorded: open ${choice.effect.host}, waiting for approval.` });
+      } else {
+        onNotice({
+          tone: "error",
+          message: "The hub recorded a different action from the one you reviewed. Check the delivery before approving it.",
+        });
+      }
       onChanged();
     },
     onError: (error: Error | MessageHubError) => onNotice({ tone: "error", message: error.message }),
@@ -830,30 +851,19 @@ function DeliveryDetail({
           Apply hook
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
-        <label className="grid gap-1.5 text-[0.72rem] font-extrabold text-muted">
-          Reply
-          <textarea
-            value={replyText}
-            onChange={(event) => setReplyText(event.target.value)}
-            rows={2}
-            className="bg-bg text-[0.88rem]"
-          />
-        </label>
-        <label className="grid gap-1.5 text-[0.72rem] font-extrabold text-muted">
-          Action target
-          <input
-            value={actionTarget}
-            onChange={(event) => setActionTarget(event.target.value)}
-            spellCheck={false}
-            className="bg-bg text-[0.88rem]"
-          />
-        </label>
-      </div>
+      <label className="grid gap-1.5 text-[0.72rem] font-extrabold text-muted">
+        Reply
+        <textarea
+          value={replyText}
+          onChange={(event) => setReplyText(event.target.value)}
+          rows={2}
+          className="bg-bg text-[0.88rem]"
+        />
+      </label>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => decisionMutation.mutate("reply")}
+          onClick={() => decisionMutation.mutate({ decision: "reply" })}
           disabled={!replyText.trim() || decisionMutation.isPending}
           className="min-h-8 rounded-[7px] border-0 bg-accent px-3 text-[0.76rem] font-extrabold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -861,15 +871,7 @@ function DeliveryDetail({
         </button>
         <button
           type="button"
-          onClick={() => decisionMutation.mutate("action")}
-          disabled={!actionTarget.trim() || decisionMutation.isPending}
-          className="min-h-8 rounded-[7px] border-[1.5px] border-line bg-transparent px-3 text-[0.76rem] font-extrabold text-muted hover:border-accent hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          Action
-        </button>
-        <button
-          type="button"
-          onClick={() => decisionMutation.mutate("ask_human")}
+          onClick={() => decisionMutation.mutate({ decision: "ask_human" })}
           disabled={decisionMutation.isPending}
           className="min-h-8 rounded-[7px] border-[1.5px] border-line bg-transparent px-3 text-[0.76rem] font-extrabold text-muted hover:border-accent hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -877,13 +879,21 @@ function DeliveryDetail({
         </button>
         <button
           type="button"
-          onClick={() => decisionMutation.mutate("ignore")}
+          onClick={() => decisionMutation.mutate({ decision: "ignore" })}
           disabled={decisionMutation.isPending}
           className="min-h-8 rounded-[7px] border-[1.5px] border-line bg-transparent px-3 text-[0.76rem] font-extrabold text-muted hover:border-accent hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
           Ignore
         </button>
       </div>
+      <ActionReview
+        key={actionReviewKey}
+        initialTarget={item.current_message?.refs?.[0]?.url ?? item.message.refs?.[0]?.url ?? ""}
+        senderUrls={senderUrls}
+        senderHandle={item.delivery.sender_handle ?? item.message.sender_agent_id}
+        pending={decisionMutation.isPending}
+        onConfirm={(effect) => decisionMutation.mutate({ decision: "action", effect })}
+      />
       {trace.length > 0 ? <TraceList trace={trace} /> : null}
     </div>
   );

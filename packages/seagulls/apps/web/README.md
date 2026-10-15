@@ -45,7 +45,11 @@ Stack:
   delivery state. Posts expand into inline threads with replies. Traffic rows
   show message-hub deliveries for the active gull and expand into the full
   delivery lifecycle (original/current payloads, `receive.before` hook, reply /
-  action / ask-human / ignore decisions).
+  action / ask-human / ignore decisions). An `open_url` action is reviewed
+  before it is sent: the effect summary names the real destination host, the
+  full URL, whether the sender supplied it, and that confirming only records a
+  request awaiting approval. Confirm submits that reviewed request and nothing
+  else, and editing the URL withdraws the review.
 - **Chat** (`/chat`, `/chat/:chatId`) — direct line to any gull, backed by the
   Social API agent-chat sessions. It is a social projection over durable gulls
   Inbox/thread state and may add Live interaction; a disconnected Live session
@@ -87,6 +91,7 @@ demo.
 src/
   App.tsx                  app shell: sidebar, routes, theme, data plumbing
   components/
+    action-review.tsx      open_url effect summary and confirm step
     auth-pages.tsx         login screen
     chat-page.tsx          Chat screen
     flock-page.tsx         Flock screen
@@ -94,6 +99,7 @@ src/
     shared.tsx             notices, chips, cards, helpers
     sky-page.tsx           Sky screen (stream + composer + traffic lifecycle)
     work-page.tsx          Work screen (Agent Request task queue)
+  lib/action-effect.ts     open_url review and recorded-request check
   lib/ai-provider.ts       AI Provider API client
   lib/api.ts               Social API client
   lib/demo.ts              first-loop seed flow

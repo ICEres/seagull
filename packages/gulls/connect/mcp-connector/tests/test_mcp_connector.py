@@ -21,6 +21,10 @@ from seagull_mcp.server import McpConnectorApp
 from seagull_mcp.server import allowed_origin_for
 from seagull_mcp.storage import DynamoDbConnectorTokenStore, record_to_item
 
+# Tokens in these tests are issued at this instant and the app's clock is
+# pinned to it, so expiry never depends on the date the suite happens to run.
+TEST_NOW = datetime(2026, 6, 14, tzinfo=timezone.utc)
+
 
 class FakeSeagullClient:
     def __init__(self) -> None:
@@ -290,13 +294,14 @@ class McpConnectorTest(TestCase):
             owner_user_id="user_alice",
             scopes=ALL_SCOPES,
             agent_handles=["@alice:gulls.ai"],
-            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            now=TEST_NOW,
         )
         self.app = McpConnectorApp(
             token_store=self.store,
             seagull_client=self.client,
             resource_uri="https://mcp.gulls.ai/mcp",
             admin_secret="admin",
+            clock=lambda: TEST_NOW,
         )
 
     def test_connector_token_hashes_secret_and_verifies(self) -> None:
@@ -306,16 +311,16 @@ class McpConnectorTest(TestCase):
         self.assertIsNotNone(record)
         self.assertNotIn(secret, record.token_hash)
 
-        principal = verify_bearer_token(self.store, self.issued.token)
+        principal = verify_bearer_token(self.store, self.issued.token, now=TEST_NOW)
         self.assertEqual("user_alice", principal.owner_user_id)
         self.assertEqual(frozenset({"@alice:gulls.ai"}), principal.agent_handles)
 
     def test_revoked_connector_token_fails(self) -> None:
         token_id, _ = parse_connector_token(self.issued.token)
-        self.store.revoke_token(token_id, datetime(2026, 6, 14, tzinfo=timezone.utc))
+        self.store.revoke_token(token_id, TEST_NOW)
 
         with self.assertRaises(TokenVerificationError):
-            verify_bearer_token(self.store, self.issued.token)
+            verify_bearer_token(self.store, self.issued.token, now=TEST_NOW)
 
     def test_missing_auth_gets_401_with_metadata_hint(self) -> None:
         response = self.app.handle(method="POST", path="/mcp", headers={}, body=json_rpc("initialize", {}))
@@ -425,7 +430,7 @@ class McpConnectorTest(TestCase):
             owner_user_id="user_alice",
             scopes=["messages:read"],
             agent_handles=["@alice:gulls.ai"],
-            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            now=TEST_NOW,
         )
         response = self.app.handle(
             method="POST",
@@ -496,7 +501,7 @@ class McpConnectorTest(TestCase):
             owner_user_id="user_bob",
             scopes=ALL_SCOPES,
             agent_handles=["@bob:gulls.ai"],
-            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            now=TEST_NOW,
         )
         created = self.mcp(
             "tools/call",
@@ -748,7 +753,7 @@ class McpConnectorTest(TestCase):
             owner_user_id="user_alice",
             scopes=["messages:read"],
             agent_handles=["@alice:gulls.ai"],
-            now=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            now=TEST_NOW,
         )
         response = self.app.handle(
             method="POST",
@@ -1045,7 +1050,7 @@ class DynamoDbConnectorTokenStoreTest(TestCase):
                     owner_user_id="user_alice",
                     scopes=ALL_SCOPES,
                     agent_handles=("@alice:gulls.ai",),
-                    created_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                    created_at=TEST_NOW,
                 )
             )
             for i in range(7)

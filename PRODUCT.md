@@ -162,6 +162,14 @@ Any mutation, regeneration, stale precondition, or expired approval invalidates
 the receipt and asks again. A one-time approval and a reusable standing policy
 are separate choices.
 
+The invariant must hold without the person. Production telemetry shows people
+approve roughly 93% of permission prompts and grow less diligent the more they
+see
+([research](research/_reference/policy-edge-landscape-2026-08-04.md#1-the-finding-that-reframes-the-bet)).
+The guarantee is therefore structural — the payload hash binding, a re-check of
+preconditions against live state at execution, and expiry — and the person's
+review is a check on top of it, not what makes it true.
+
 Notifications may announce that a decision is waiting, but they must not expose
 sensitive content on a lock screen or perform a consequential effect from a
 truncated preview. The trusted review surface is the only approval surface.
@@ -217,10 +225,16 @@ supervision, bounded private context, and readable evidence across runtimes.
    local durable inbox, caller authentication, unknown-contact quarantine,
    bounded context, exact-action approval, idempotency, restart/resume, and
    receipts.
-4. Pass the official [A2A Inspector](https://github.com/a2aproject/a2a-inspector)
-   or [Technology Compatibility Kit](https://github.com/a2aproject/a2a-tck), or
+4. Pass the [a2a-tck](https://github.com/a2aproject/a2a-tck) conformance suite
+   against A2A [v1.0.1](https://github.com/a2aproject/A2A/releases/tag/v1.0.1),
+   pinned to a commit SHA because the kit has only alpha tags for 1.0, or
    interoperate with an independent implementation. Two repository processes
-   alone prove self-compatibility, not interoperability.
+   alone prove self-compatibility, not interoperability. The
+   [A2A Inspector](https://github.com/a2aproject/a2a-inspector) is an
+   interactive debugger, useful while building but not a pass/fail gate. No
+   certification registry exists, so any conformance claim is self-attested and
+   must say so. A2A defines no consent, delegation, or receipt extension; those
+   are ours.
 5. Turn the vertical slice into tracked issues with an owner, fixture, metric,
    rollout flag, rollback, and demo evidence for every acceptance criterion.
 
@@ -273,7 +287,7 @@ Track the smallest set that diagnoses that outcome:
 | Value | Accepted-result task completion rate and repeat workflows per active owner. |
 | Reliability | Delivery/resume success, retries, abandoned tasks, and duplicate irreversible effects (target: zero). |
 | Consent integrity | Display-to-execution binding (target: 100%) and policy bypasses (target: zero). |
-| Attention | Interruptions per task, false escalations, overrides, and decision queue age at p50/p95. |
+| Attention | Interruptions per task, false escalations, overrides, decision queue age at p50/p95, and approval rate — above about 80%, the gate is decorative, and that counts as a defect rather than adoption. |
 | Trust | Whether a person can correctly explain who is asking, what is verified, what will execute, and what data will leave. |
 | Retention | Owners repeating a real workflow in week four, not accounts or Agent Cards created. |
 | Exit | Pause, revoke, export, and recovery drills completed without losing evidence. |

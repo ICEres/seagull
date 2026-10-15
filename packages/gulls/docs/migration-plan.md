@@ -2,7 +2,7 @@
 
 Status: Authoritative (delivery).
 
-Last updated: 2026-08-04.
+Last updated: 2026-10-15.
 
 [Agent Voice And DNS Discovery](agent-voice-and-discovery.md) defines the target
 architecture. This document defines how the repository gets there from what is
@@ -101,11 +101,13 @@ Build additively beside the hub in two increments:
   Gulls, sends a bounded task, quarantines an unknown caller before the private
   runtime, approves an immutable action, restarts one side, and reads one result
   plus its receipt from the local inbox without duplicate execution. Exercise
-  the supported binding with the official
-  [A2A Inspector](https://github.com/a2aproject/a2a-inspector) or
-  [Technology Compatibility Kit](https://github.com/a2aproject/a2a-tck), or an
-  independent implementation; two repository processes alone prove only
-  self-compatibility.
+  the supported binding with [a2a-tck](https://github.com/a2aproject/a2a-tck)
+  against A2A [v1.0.1](https://github.com/a2aproject/A2A/releases/tag/v1.0.1),
+  pinned to a commit SHA, or with an independent implementation; two
+  repository processes alone prove only self-compatibility. The
+  [A2A Inspector](https://github.com/a2aproject/a2a-inspector) is a debugger,
+  not a pass/fail gate. Record the result as self-attested, because no
+  certification registry exists.
 - **Stage 1B acceptance:** a separate automated test starts with an unconfigured
   known handle or FQDN, follows its authoritative resolution chain to the same
   Agent Card, and completes the Stage 1A task. An adapter's absence does not

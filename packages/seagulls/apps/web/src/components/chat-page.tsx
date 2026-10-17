@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import type { AgentChatMessage, AgentProfile, LoopState } from "../lib/social";
@@ -9,6 +9,7 @@ import { GullAvatar, Wing, YOUR_WING, statusDotColor, wingFor } from "@seagulls/
 import { Chip, EmptyState, shortHandle, shortId, type Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;
+type SendChatMessage = { chatId: string; content: string; owner: string };
 
 export function ChatPage({
   api,
@@ -25,9 +26,11 @@ export function ChatPage({
   const params = useParams();
   const queryClient = useQueryClient();
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [picking, setPicking] = useState(false);
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
+  const [unconfirmedMessages, setUnconfirmedMessages] = useState<AgentChatMessage[]>([]);
 
   const ownerUserId = state.activeUser?.user_id ?? null;
   const selectedChatId = params.chatId ?? null;
@@ -53,28 +56,12 @@ export function ChatPage({
     }
   }, [chats, navigate, picking, selectedChatId]);
 
-  const messagesQuery = useQuery({
-    queryKey: ["social-agent-chat-messages", api.baseUrl, ownerUserId, selectedChat?.chat_id],
-    queryFn: () => api.getAgentChatMessages(selectedChat!.chat_id, ownerUserId ?? undefined),
-    enabled: Boolean(ownerUserId && selectedChat),
-  });
-  const messages = messagesQuery.data?.items ?? [];
-
   function scrollThread() {
     const element = threadRef.current;
     if (element) {
       element.scrollTop = element.scrollHeight;
     }
   }
-
-  useEffect(() => {
-    setDraft("");
-    scrollThread();
-  }, [selectedChat?.chat_id]);
-
-  useEffect(() => {
-    scrollThread();
-  }, [messages.length]);
 
   const createChatMutation = useMutation({
     mutationFn: async (agentHandle: string) => {
@@ -97,39 +84,115 @@ export function ChatPage({
   });
 
   const sendMutation = useMutation({
-    mutationFn: async ({ chatId, content }: { chatId: string; content: string }) => {
-      if (!ownerUserId) {
-        throw new Error("Select a chat before sending.");
-      }
-      return api.createAgentChatMessage(chatId, { owner_user_id: ownerUserId, content });
+    mutationKey: ["social-agent-chat-send", api.baseUrl, ownerUserId],
+    mutationFn: async ({ chatId, content, owner }: SendChatMessage) => {
+      return api.createAgentChatMessage(chatId, { owner_user_id: owner, content });
     },
-    onSuccess: ({ message, reply }, variables) => {
-      if (selectedChat?.chat_id === variables.chatId) {
-        setDraft("");
-        setFlying(true);
-        window.setTimeout(() => setFlying(false), 950);
-        window.setTimeout(scrollThread, 0);
-      }
+    onMutate: async ({ chatId, content, owner }) => {
+      const queryKey = ["social-agent-chat-messages", api.baseUrl, owner, chatId];
+      await queryClient.cancelQueries({ queryKey, exact: true });
+      const now = new Date().toISOString();
+      const optimisticMessage: AgentChatMessage = {
+        chat_message_id: `pending_${crypto.randomUUID()}`,
+        chat_id: chatId,
+        owner_user_id: owner,
+        sender_type: "human",
+        content,
+        hub_message_id: null,
+        hub_thread_id: null,
+        delivery_status: "sending",
+        delivery_error: null,
+        ai_run_id: null,
+        ai_run_state: null,
+        ai_error: null,
+        created_at: now,
+        updated_at: now,
+      };
+      queryClient.setQueryData<{ items: AgentChatMessage[] }>(queryKey, (current) => ({
+        items: [...(current?.items ?? []), optimisticMessage],
+      }));
+      return { queryKey, optimisticMessage };
+    },
+    onSuccess: ({ message, reply }, _variables, context) => {
+      const confirmed = reply ? [message, reply] : [message];
+      queryClient.setQueryData<{ items: AgentChatMessage[] }>(context.queryKey, (current) => ({
+        items: [
+          ...(current?.items ?? []).filter(
+            (item) => item.chat_message_id !== context.optimisticMessage.chat_message_id &&
+              !confirmed.some((result) => result.chat_message_id === item.chat_message_id),
+          ),
+          ...confirmed,
+        ],
+      }));
       void queryClient.invalidateQueries({ queryKey: ["social-agent-chats"] });
-      void queryClient.invalidateQueries({ queryKey: ["social-agent-chat-messages"] });
-      const failed = message.delivery_status === "delivery_failed" || Boolean(message.ai_error);
-      if (failed) {
+      if (!reply && (message.delivery_status === "delivery_failed" || message.ai_error)) {
         onNotice({
           tone: "warn",
-          message: message.ai_error ? "Message stored; AI reply failed." : "Message stored; delivery failed.",
+          message: message.ai_error
+            ? "Your message was saved, but a reply is unavailable."
+            : "Your message was saved, but delivery could not be confirmed.",
         });
       }
-      void reply;
     },
-    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
+    onError: (error: AppMutationError, _variables, context) => {
+      if (context) {
+        queryClient.setQueryData<{ items: AgentChatMessage[] }>(context.queryKey, (current) => ({
+          items: (current?.items ?? []).filter(
+            (item) => item.chat_message_id !== context.optimisticMessage.chat_message_id,
+          ),
+        }));
+        setUnconfirmedMessages((current) => [
+          ...current,
+          { ...context.optimisticMessage, delivery_status: "send_unconfirmed", delivery_error: error.message },
+        ]);
+      }
+      onNotice({ tone: "error", message: "Could not confirm delivery. Your message is kept in the conversation." });
+    },
   });
+
+  const pendingSends = useMutationState({
+    filters: { mutationKey: ["social-agent-chat-send", api.baseUrl, ownerUserId], status: "pending" },
+    select: (mutation) => mutation.state.variables as SendChatMessage,
+  });
+  const sendingToSelectedChat = pendingSends.some(
+    (send) => send.chatId === selectedChat?.chat_id && send.owner === ownerUserId,
+  );
+  const messagesQuery = useQuery({
+    queryKey: ["social-agent-chat-messages", api.baseUrl, ownerUserId, selectedChat?.chat_id],
+    queryFn: () => api.getAgentChatMessages(selectedChat!.chat_id, ownerUserId ?? undefined),
+    enabled: Boolean(ownerUserId && selectedChat) && !sendingToSelectedChat,
+    staleTime: 5000,
+  });
+  const messages = messagesQuery.data?.items ?? [];
+  const recoveryMessages = unconfirmedMessages.filter(
+    (message) => message.chat_id === selectedChat?.chat_id && message.owner_user_id === ownerUserId,
+  );
+
+  useEffect(() => {
+    setDraft("");
+    setFlying(false);
+    scrollThread();
+  }, [ownerUserId, selectedChat?.chat_id]);
+
+  useEffect(() => {
+    scrollThread();
+  }, [messages.length, recoveryMessages.length, sendingToSelectedChat]);
 
   function submitDraft(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const text = draft.trim();
-    if (text && !sendMutation.isPending && selectedChat) {
-      sendMutation.mutate({ chatId: selectedChat.chat_id, content: text });
+    if (text && !sendingToSelectedChat && !messagesQuery.isPending && selectedChat && ownerUserId) {
+      setDraft("");
+      setFlying(true);
+      window.setTimeout(() => setFlying(false), 950);
+      sendMutation.mutate({ chatId: selectedChat.chat_id, content: text, owner: ownerUserId });
     }
+  }
+
+  function restoreDraft(message: AgentChatMessage) {
+    setDraft((current) => current ? `${current}\n${message.content}` : message.content);
+    setUnconfirmedMessages((current) => current.filter((item) => item.chat_message_id !== message.chat_message_id));
+    composerRef.current?.focus();
   }
 
   function onDraftKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -241,12 +304,12 @@ export function ChatPage({
             )}
           </div>
         ) : selectedChat ? (
-          <div className="grid grid-rows-[auto_minmax(0,1fr)_auto]">
+          <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
             <div className="flex items-center gap-3 border-b border-line px-5 py-3">
               <GullAvatar
                 handle={selectedChat.agent_handle}
                 size={34}
-                animation={sendMutation.isPending ? "gull-flap 0.4s ease-in-out infinite" : undefined}
+                animation={sendingToSelectedChat ? "gull-flap 0.4s ease-in-out infinite" : undefined}
               />
               <span className="min-w-0">
                 <strong className="block text-[0.95rem]">{selectedChat.title}</strong>
@@ -267,9 +330,9 @@ export function ChatPage({
             </div>
 
             <div ref={threadRef} aria-live="polite" className="grid content-start gap-2.5 overflow-y-auto bg-bg px-[22px] py-5">
-              {messagesQuery.isFetching && messages.length === 0 ? (
+              {messagesQuery.isFetching && messages.length === 0 && recoveryMessages.length === 0 ? (
                 <EmptyState title="Opening the thread" detail="Fetching stored messages." />
-              ) : messages.length === 0 ? (
+              ) : messages.length === 0 && recoveryMessages.length === 0 ? (
                 <EmptyState title="Say hello" detail="Messages travel with prompt and skill snapshots." />
               ) : (
                 messages.map((message, index) => (
@@ -281,6 +344,23 @@ export function ChatPage({
                   />
                 ))
               )}
+              {recoveryMessages.map((message) => (
+                <aside key={message.chat_message_id} role="alert" className="grid gap-2 rounded-lg border border-amber bg-amber-soft p-3 text-[0.8rem]">
+                  <strong>Could not confirm delivery.</strong>
+                  <span className="text-muted">This copy is kept for recovery. Check the conversation before sending again.</span>
+                  <blockquote className="m-0 border-l-2 border-amber pl-3 whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</blockquote>
+                  <div className="flex gap-3 font-extrabold">
+                    <button type="button" onClick={() => restoreDraft(message)} className="border-0 bg-transparent p-0 text-accent-strong">Restore draft</button>
+                    <button type="button" onClick={() => setUnconfirmedMessages((current) => current.filter((item) => item.chat_message_id !== message.chat_message_id))} className="border-0 bg-transparent p-0 text-muted">Dismiss</button>
+                  </div>
+                </aside>
+              ))}
+              {sendingToSelectedChat ? (
+                <div role="status" className="flex items-center gap-2.5 py-2 text-[0.8rem] font-bold text-muted">
+                  <GullAvatar handle={selectedChat.agent_handle} size={26} />
+                  <span className="motion-safe:animate-pulse">Waiting for reply…</span>
+                </div>
+              ) : null}
             </div>
 
             <form
@@ -315,6 +395,7 @@ export function ChatPage({
               ) : null}
               <div className="flex items-end gap-2 px-1.5 py-0.5">
                 <textarea
+                  ref={composerRef}
                   rows={1}
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
@@ -323,25 +404,19 @@ export function ChatPage({
                   aria-label="Message"
                   className="box-border max-h-[140px] min-h-[44px] flex-1 resize-none border-0 bg-transparent px-1 py-[11px] text-base leading-[1.45]"
                 />
-                {draft.trim() ? (
-                  <span
-                    aria-hidden="true"
-                    className="inline-flex pr-1 pb-[13px] text-[0.76rem] font-extrabold whitespace-nowrap text-accent"
-                  >
-                    ⏎ Enter
-                  </span>
-                ) : null}
+                <button
+                  type="submit"
+                  disabled={!draft.trim() || sendingToSelectedChat || messagesQuery.isPending}
+                  className="mb-1 min-h-9 rounded-lg border-0 bg-accent px-3.5 text-[0.8rem] font-extrabold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Send
+                </button>
               </div>
               <div className="flex items-center gap-1.5 px-1.5 pb-1.5">
-                <Chip tone={selectedChat.prompt_asset_id ? "accent" : "faint"}>
-                  Prompt {shortId(selectedChat.prompt_asset_id)}
-                </Chip>
-                <Chip tone={selectedChat.skill_asset_id ? "accent" : "faint"}>
-                  Skill {shortId(selectedChat.skill_asset_id)}
-                </Chip>
-                {selectedChat.hub_thread_id ? <Chip>Thread {shortId(selectedChat.hub_thread_id)}</Chip> : null}
+                {selectedChat.prompt_asset_id ? <Chip tone="accent">Prompt {shortId(selectedChat.prompt_asset_id)}</Chip> : null}
+                {selectedChat.skill_asset_id ? <Chip tone="accent">Skill {shortId(selectedChat.skill_asset_id)}</Chip> : null}
                 <span className="flex-1" />
-                <span className="text-[0.72rem] font-extrabold text-faint">snapshots travel with the message</span>
+                <span className="text-[0.72rem] font-bold text-faint">Enter to send · Shift+Enter for a new line</span>
               </div>
             </form>
           </div>
@@ -367,7 +442,11 @@ function ChatBubble({
 }) {
   const isHuman = message.sender_type === "human";
   const delivered = message.delivery_status === "delivered";
-  const failed = message.delivery_status === "delivery_failed" || Boolean(message.ai_error);
+  const deliveryFailed = message.delivery_status === "delivery_failed";
+  const failed = deliveryFailed || Boolean(message.ai_error);
+  const status = message.delivery_status === "sending" ? "Sending…"
+    : deliveryFailed ? "Delivery not confirmed"
+    : delivered ? "Delivered" : "Saved";
   return (
     <div className={`flex items-end gap-2 ${isHuman ? "flex-row-reverse" : "flex-row"}`}>
       <span
@@ -388,18 +467,10 @@ function ChatBubble({
           animation: isLast ? "msg-in 0.3s ease-out" : "none",
         }}
       >
-        <span className="leading-[1.45] text-body [overflow-wrap:anywhere]">{message.content}</span>
+        <span className="leading-[1.45] whitespace-pre-wrap text-body [overflow-wrap:anywhere]">{message.content}</span>
         <span className="flex flex-wrap items-center justify-end gap-1.5 text-[0.68rem] font-bold text-faint">
-          {message.ai_run_id ? (
-            <span>
-              AI run {message.ai_run_id}
-              {message.ai_run_state ? ` (${message.ai_run_state})` : ""}
-            </span>
-          ) : null}
-          {failed ? (
-            <span className="font-extrabold text-danger">{message.ai_error ?? message.delivery_error ?? "failed"}</span>
-          ) : null}
-          <span>{message.delivery_status}</span>
+          <span className={failed ? "text-danger" : undefined}>{status}</span>
+          {message.ai_error ? <span className="text-danger">Reply unavailable</span> : null}
           <span>{formatRelativeTime(message.created_at)}</span>
           {isHuman && delivered ? (
             <span className="font-black tracking-[-0.12em] text-accent" aria-label="delivered">
@@ -407,6 +478,13 @@ function ChatBubble({
             </span>
           ) : null}
         </span>
+        {failed && (message.ai_error || message.delivery_error || message.ai_run_id) ? (
+          <details className="text-[0.68rem] text-muted [overflow-wrap:anywhere]">
+            <summary className="cursor-pointer">Details</summary>
+            {message.ai_error || message.delivery_error ? <p className="my-1">{message.ai_error ?? message.delivery_error}</p> : null}
+            {message.ai_run_id ? <p className="my-1">AI run {message.ai_run_id} ({message.ai_run_state})</p> : null}
+          </details>
+        ) : null}
       </article>
     </div>
   );

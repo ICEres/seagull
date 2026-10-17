@@ -362,10 +362,10 @@ describe("App", () => {
     expect(container.textContent).toContain("Chat with Researcher");
     expect(container.textContent).toContain("Prompt asset_prompt");
     expect(container.textContent).toContain("Skill asset_skill");
-    expect(container.textContent).toContain("stored");
+    expect(container.textContent).toContain("Saved");
     expect(container.textContent).toContain("New chat");
     expect(container.textContent).toContain("The plan looks solid; tighten the hero copy.");
-    expect(container.textContent).toContain("AI run airun_1 (completed)");
+    expect(container.textContent).not.toContain("AI run airun_1 (completed)");
   });
 
   it("shows hub traffic in the stream and expands the delivery lifecycle", async () => {

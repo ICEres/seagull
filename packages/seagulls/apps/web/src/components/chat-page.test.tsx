@@ -2,12 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "./chat-page";
 import { SocialApiClient } from "../lib/api";
 import { emptyLoopState } from "../lib/state";
-import type { AgentChatSession, AgentProfile, LoopState } from "../lib/social";
+import type { AgentChatMessage, AgentChatSession, AgentProfile, LoopState } from "../lib/social";
 
 function agent(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
@@ -46,6 +46,26 @@ function chat(overrides: Partial<AgentChatSession> = {}): AgentChatSession {
     hub_thread_id: null,
     created_at: "2026-06-13T00:00:00Z",
     updated_at: "2026-06-13T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function message(overrides: Partial<AgentChatMessage> = {}): AgentChatMessage {
+  return {
+    chat_message_id: "chatmsg_1",
+    chat_id: "chat_a",
+    owner_user_id: "user_1",
+    sender_type: "human",
+    content: "hello",
+    hub_message_id: null,
+    hub_thread_id: null,
+    delivery_status: "delivered",
+    delivery_error: null,
+    ai_run_id: null,
+    ai_run_state: null,
+    ai_error: null,
+    created_at: "2026-06-13T00:01:00Z",
+    updated_at: "2026-06-13T00:01:00Z",
     ...overrides,
   };
 }
@@ -102,6 +122,66 @@ async function waitForPlaceholder(container: HTMLElement, placeholder: string): 
   throw new Error(`Expected a message textarea with placeholder including "${placeholder}".`);
 }
 
+function response(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function renderChatPage({
+  fetchImpl,
+  initialEntry = "/chat/chat_a",
+  profiles = [agent()],
+}: {
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  initialEntry?: string;
+  profiles?: AgentProfile[];
+}): Promise<void> {
+  vi.stubGlobal("fetch", vi.fn(fetchImpl));
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const api = new SocialApiClient("https://social.example.test");
+
+  await act(async () => {
+    root?.render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route
+              path="/chat/:chatId"
+              element={<ChatPage api={api} state={loopState()} profiles={profiles} onNotice={() => {}} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  });
+}
+
+function chatListResponse(chats: AgentChatSession[]): Response {
+  return response({ items: chats });
+}
+
+function messagesResponse(items: AgentChatMessage[]): Response {
+  return response({ items });
+}
+
+function messageTextarea(): HTMLTextAreaElement {
+  const textarea = container?.querySelector('textarea[aria-label="Message"]');
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    throw new Error("Message textarea not found.");
+  }
+  return textarea;
+}
+
+function submit(textarea: HTMLTextAreaElement, content: string): void {
+  setNativeValue(textarea, content);
+  textarea.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
@@ -113,7 +193,175 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+});
+
 describe("ChatPage", () => {
+  it("shows the sent message and waiting state immediately while clearing the textarea", async () => {
+    const chatA = chat({ chat_id: "chat_a" });
+    let resolveSend: ((result: Response) => void) | null = null;
+    const sendResponse = new Promise<Response>((resolve) => {
+      resolveSend = resolve;
+    });
+
+    await renderChatPage({
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_a/messages") {
+          return sendResponse;
+        }
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA]);
+        }
+        if (url.pathname === "/agent-chats/chat_a/messages") {
+          return messagesResponse([]);
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Say hello");
+    const textarea = messageTextarea();
+    await act(async () => {
+      submit(textarea, "hello immediately");
+    });
+
+    expect(container?.textContent).toContain("hello immediately");
+    expect(container?.textContent).toMatch(/waiting for reply/i);
+    expect(messageTextarea().value).toBe("");
+
+    await act(async () => {
+      resolveSend?.(response({ message: message({ content: "hello immediately" }), reply: null }));
+    });
+  });
+
+  it("keeps a new draft typed during a pending reply when the response arrives", async () => {
+    const chatA = chat({ chat_id: "chat_a" });
+    let resolveSend: ((result: Response) => void) | null = null;
+    const sendResponse = new Promise<Response>((resolve) => {
+      resolveSend = resolve;
+    });
+
+    await renderChatPage({
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_a/messages") {
+          return sendResponse;
+        }
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA]);
+        }
+        if (url.pathname === "/agent-chats/chat_a/messages") {
+          return messagesResponse([]);
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Say hello");
+    await act(async () => {
+      submit(messageTextarea(), "first message");
+    });
+    await act(async () => {
+      setNativeValue(messageTextarea(), "second draft");
+    });
+    expect(messageTextarea().value).toBe("second draft");
+
+    await act(async () => {
+      resolveSend?.(
+        response({
+          message: message({ content: "first message" }),
+          reply: message({
+            chat_message_id: "chatmsg_reply",
+            sender_type: "agent",
+            content: "reply received",
+          }),
+        }),
+      );
+    });
+    await waitForText(container!, "reply received");
+    expect(messageTextarea().value).toBe("second draft");
+  });
+
+  it("renders the returned message and reply without duplicating them", async () => {
+    const chatA = chat({ chat_id: "chat_a" });
+
+    await renderChatPage({
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_a/messages") {
+          return response({
+            message: message({ content: "one sent message" }),
+            reply: message({
+              chat_message_id: "chatmsg_reply",
+              sender_type: "agent",
+              content: "one returned reply",
+            }),
+          });
+        }
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA]);
+        }
+        if (url.pathname === "/agent-chats/chat_a/messages") {
+          return messagesResponse([]);
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Say hello");
+    const textarea = await waitForPlaceholder(container!, "@researcher");
+    await act(async () => {
+      submit(textarea, "one sent message");
+    });
+    await waitForText(container!, "one returned reply");
+
+    const thread = container?.querySelector('[aria-live="polite"]');
+    if (!(thread instanceof HTMLElement)) {
+      throw new Error("Chat thread not found.");
+    }
+    const rendered = thread.textContent ?? "";
+    expect(rendered.match(/one sent message/g)?.length).toBe(1);
+    expect(rendered.match(/one returned reply/g)?.length).toBe(1);
+
+  });
+
+  it("keeps an unconfirmed message visible and offers draft restoration after a send error", async () => {
+    const chatA = chat({ chat_id: "chat_a" });
+
+    await renderChatPage({
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_a/messages") {
+          return response({ error: "upstream unavailable" }, 503);
+        }
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA]);
+        }
+        if (url.pathname === "/agent-chats/chat_a/messages") {
+          return messagesResponse([]);
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Say hello");
+    await act(async () => {
+      submit(messageTextarea(), "keep this attempted message");
+    });
+    await waitForText(container!, "Could not confirm delivery.");
+
+    const restoreButton = Array.from(container!.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Restore draft"),
+    );
+    expect(restoreButton).toBeTruthy();
+    await act(async () => {
+      restoreButton?.click();
+    });
+    expect(messageTextarea().value).toBe("keep this attempted message");
+  });
+
   it("does not clear a chat's draft with a stale send response from another chat", async () => {
     const chatA = chat({ chat_id: "chat_a", agent_handle: "@a:seagull.local", title: "Chat with A" });
     const chatB = chat({ chat_id: "chat_b", agent_handle: "@b:seagull.local", title: "Chat with B" });
@@ -201,6 +449,7 @@ describe("ChatPage", () => {
       chatBButton.click();
     });
     const chatBTextarea = await waitForPlaceholder(container, "@b");
+    expect(container.textContent).not.toMatch(/waiting for reply/i);
     await act(async () => {
       setNativeValue(chatBTextarea, "hello from B");
     });
@@ -239,5 +488,95 @@ describe("ChatPage", () => {
 
     const finalTextarea = container.querySelector('textarea[aria-label="Message"]');
     expect(finalTextarea instanceof HTMLTextAreaElement && finalTextarea.value).toBe("hello from B");
+  });
+
+  it("allows another chat to send while the first chat is waiting", async () => {
+    const chatA = chat({ chat_id: "chat_a", agent_handle: "@a:seagull.local", title: "Chat with A" });
+    const chatB = chat({ chat_id: "chat_b", agent_handle: "@b:seagull.local", title: "Chat with B" });
+    const profiles = [
+      agent({ agent_id: "agent_a", handle: "@a:seagull.local", display_name: "A" }),
+      agent({ agent_id: "agent_b", handle: "@b:seagull.local", display_name: "B" }),
+    ];
+    let resolveSendA: ((result: Response) => void) | null = null;
+    let resolveSendB: ((result: Response) => void) | null = null;
+    let sendBStarted = false;
+    const sendA = new Promise<Response>((resolve) => {
+      resolveSendA = resolve;
+    });
+    const sendB = new Promise<Response>((resolve) => {
+      resolveSendB = resolve;
+    });
+
+    await renderChatPage({
+      profiles,
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_a/messages") {
+          return sendA;
+        }
+        if (init?.method === "POST" && url.pathname === "/agent-chats/chat_b/messages") {
+          sendBStarted = true;
+          return sendB;
+        }
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA, chatB]);
+        }
+        if (
+          url.pathname === "/agent-chats/chat_a/messages" ||
+          url.pathname === "/agent-chats/chat_b/messages"
+        ) {
+          return messagesResponse([]);
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Say hello");
+    await act(async () => {
+      submit(messageTextarea(), "message from A");
+    });
+    expect(container?.textContent).toMatch(/waiting for reply/i);
+
+    const chatBButton = Array.from(container!.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Chat with B"),
+    );
+    if (!chatBButton) {
+      throw new Error("Chat B sidebar entry not found.");
+    }
+    await act(async () => {
+      chatBButton.click();
+    });
+    await waitForPlaceholder(container!, "@b");
+
+    await act(async () => {
+      submit(messageTextarea(), "message from B");
+    });
+    expect(sendBStarted).toBe(true);
+    expect(container?.textContent).toMatch(/waiting for reply/i);
+
+    await act(async () => {
+      resolveSendB?.(
+        response({
+          message: message({ chat_id: "chat_b", chat_message_id: "chatmsg_b", content: "message from B" }),
+          reply: message({
+            chat_id: "chat_b",
+            chat_message_id: "chatmsg_b_reply",
+            sender_type: "agent",
+            content: "reply from B",
+          }),
+        }),
+      );
+    });
+    await waitForText(container!, "reply from B");
+    expect(container?.textContent).not.toMatch(/waiting for reply/i);
+
+    await act(async () => {
+      resolveSendA?.(
+        response({
+          message: message({ chat_id: "chat_a", chat_message_id: "chatmsg_a", content: "message from A" }),
+          reply: null,
+        }),
+      );
+    });
   });
 });

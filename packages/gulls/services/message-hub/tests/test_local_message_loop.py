@@ -29,6 +29,20 @@ class DeterministicClock:
         return self._base + timedelta(seconds=next(self._ticks))
 
 
+class DelayedHandleIndexRepository(InMemoryMessageHubRepository):
+    """Model a newly written agent missing from the eventually consistent GSI."""
+
+    def add_agent(self, agent):  # noqa: ANN001 - test double follows repository protocol
+        super().add_agent(agent)
+        self._delay_next_handle_lookup = True
+
+    def get_agent_by_handle(self, handle):  # noqa: ANN001, ANN201 - test double protocol
+        if getattr(self, "_delay_next_handle_lookup", False):
+            self._delay_next_handle_lookup = False
+            return None
+        return super().get_agent_by_handle(handle)
+
+
 class LocalMessageLoopTest(TestCase):
     def setUp(self) -> None:
         self.service = MessageHubService(
@@ -100,6 +114,27 @@ class LocalMessageLoopTest(TestCase):
             ],
             [message["content_inline"] for message in thread["messages"]],
         )
+
+    def test_agent_registration_issues_token_during_handle_index_lag(self) -> None:
+        repository = DelayedHandleIndexRepository()
+        service = MessageHubService(
+            repository,
+            id_factory=DeterministicIds(),
+            clock=DeterministicClock(),
+            safety_evaluator=LocalSafetyEvaluator(),
+        )
+        api = LocalMessageHubApi(service)
+
+        result = api.agent_registration(
+            {
+                "handle": "@new-agent:seagull.local",
+                "scopes": ["agent:read"],
+            }
+        )
+
+        self.assertTrue(result["created"])
+        self.assertTrue(result["token"].startswith("sga_"))
+        self.assertEqual("@new-agent:seagull.local", result["record"]["agent_handle"])
 
     def test_local_api_returns_budgeted_context_pack(self) -> None:
         self.api.register_agent({"handle": "@researcher:seagull.local"})

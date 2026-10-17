@@ -32,7 +32,8 @@ curl -fsS \
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
     \"name\": \"$PROBE researcher runtime\",
     \"node_id\": \"aws-smoke\"
-  }" | tee .local/aws-smoke-sender-registration.json
+  }" -o .local/aws-smoke-sender-registration.json
+echo "Registered sender: $SENDER_HANDLE"
 echo
 echo
 
@@ -46,7 +47,8 @@ curl -fsS \
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
     \"name\": \"$PROBE reviewer runtime\",
     \"node_id\": \"aws-smoke\"
-  }" | tee .local/aws-smoke-recipient-registration.json
+  }" -o .local/aws-smoke-recipient-registration.json
+echo "Registered recipient: $RECIPIENT_HANDLE"
 echo
 echo
 

@@ -489,12 +489,14 @@ class MessageHubService:
         agent_handle: str,
         *,
         scopes: Sequence[str],
+        agent: Agent | None = None,
         name: str | None = None,
         owner_user_id: str | None = None,
         node_id: str | None = None,
         expires_at: datetime | None = None,
     ) -> IssuedAgentToken:
-        agent = self._require_agent_by_handle(agent_handle)
+        if agent is None:
+            agent = self._require_agent_by_handle(agent_handle)
         normalized_scopes = normalize_agent_token_scopes(scopes)
         normalized_expires_at = normalize_payload_ttl_expires_at(expires_at)
         token_id = secrets.token_hex(12)

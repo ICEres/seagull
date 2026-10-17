@@ -281,6 +281,7 @@ class LocalMessageHubApi:
             issued = self._service.issue_agent_token(
                 agent.handle,
                 scopes=agent_registration_scopes(body),
+                agent=agent,
                 name=optional_string(body, "name"),
                 owner_user_id=optional_string(body, "owner_user_id"),
                 node_id=optional_string(body, "node_id"),

@@ -30,24 +30,17 @@ class AuthDomainGuardTest(TestCase):
     def setUp(self) -> None:
         self.guard = load_guard()
 
-    def test_allows_exact_domain_case_insensitively(self) -> None:
-        event = auth_event("User@EXAMPLE.TEST")
-
-        self.assertIs(event, self.guard.handler(event, None))
-
-    def test_rejects_other_and_subdomains(self) -> None:
-        for email in ("user@example.com", "user@team.example.test"):
-            with self.subTest(email=email), self.assertRaisesRegex(
-                ValueError,
-                r"Only @aiisu\.com email addresses are allowed\.",
-            ):
-                self.guard.handler(auth_event(email), None)
+    def test_allows_any_email_domain(self) -> None:
+        for email in ("User@EXAMPLE.TEST", "user@example.com", "user@team.example.test"):
+            with self.subTest(email=email):
+                event = auth_event(email)
+                self.assertIs(event, self.guard.handler(event, None))
 
     def test_rejects_missing_email(self) -> None:
-        with self.assertRaisesRegex(ValueError, r"Only @aiisu\.com"):
+        with self.assertRaisesRegex(ValueError, r"An email address is required"):
             self.guard.handler(auth_event(None), None)
 
     def test_accepts_email_username_when_attributes_are_unavailable(self) -> None:
-        event = auth_event(None, username="user@example.test")
+        event = auth_event(None, username="user@example.com")
 
         self.assertIs(event, self.guard.handler(event, None))

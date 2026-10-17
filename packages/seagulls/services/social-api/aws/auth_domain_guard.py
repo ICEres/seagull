@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-ALLOWED_EMAIL_DOMAIN = "example.test"
-ERROR_MESSAGE = f"Only @{ALLOWED_EMAIL_DOMAIN} email addresses are allowed."
+ERROR_MESSAGE = "An email address is required."
 
 
 def handler(event: dict[str, Any], _context: object) -> dict[str, Any]:
@@ -14,14 +13,14 @@ def handler(event: dict[str, Any], _context: object) -> dict[str, Any]:
     if not isinstance(email, str):
         email = event.get("userName")
 
-    if not _has_allowed_domain(email):
+    if not _has_email_address(email):
         raise ValueError(ERROR_MESSAGE)
 
     return event
 
 
-def _has_allowed_domain(email: object) -> bool:
+def _has_email_address(email: object) -> bool:
     if not isinstance(email, str):
         return False
     local_part, separator, domain = email.strip().rpartition("@")
-    return bool(local_part and separator and domain.casefold() == ALLOWED_EMAIL_DOMAIN)
+    return bool(local_part and separator and domain)

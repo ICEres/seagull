@@ -1,5 +1,5 @@
-import { ChevronsUpDown, Moon, Sun } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Moon, Settings, Sun } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -59,9 +59,6 @@ export default function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuthSession());
   const [state, setState] = useState<LoopState>(() => loadLoopState());
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const accountMenuRef = useRef<HTMLDivElement>(null);
-  const accountButtonRef = useRef<HTMLButtonElement>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const messageApiUrl = useMemo(() => configuredMessageApiUrl(), []);
   const aiProviderApiUrl = useMemo(() => configuredAiProviderApiUrl(), []);
@@ -77,30 +74,8 @@ export default function App() {
     clearAuthSession();
     queryClient.clear();
     setAuthSession(null);
-    setAccountMenuOpen(false);
     setState(clearLoopState());
   }, [queryClient]);
-
-  useEffect(() => {
-    if (!accountMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !accountMenuRef.current?.contains(event.target)) {
-        setAccountMenuOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setAccountMenuOpen(false);
-        accountButtonRef.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [accountMenuOpen]);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -438,52 +413,31 @@ export default function App() {
 
         <div className="mt-auto grid gap-3.5 max-[860px]:mt-0 max-[860px]:ml-auto max-[860px]:flex max-[860px]:items-center">
           {state.activeUser ? (
-            <div ref={accountMenuRef} className="relative min-w-0">
-              <button
-                ref={accountButtonRef}
-                type="button"
-                aria-label="Account menu"
-                aria-expanded={accountMenuOpen}
-                aria-controls="account-menu"
-                onClick={() => setAccountMenuOpen((open) => !open)}
-                className="group flex min-h-11 w-full items-center gap-2.5 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left hover:bg-accent-soft max-[860px]:px-1.5"
-              >
-                <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
-                  <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
-                </span>
-                <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_20px] items-center gap-x-2 max-[860px]:hidden">
-                  <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
-                    {identityName(state.activeUser, activeAuthSession?.idToken)}
-                  </strong>
-                  <span aria-hidden="true" className={`grid h-5 w-5 place-items-center rounded-md transition-colors ${
-                    accountMenuOpen ? "bg-accent-soft text-accent-strong" : "text-faint group-hover:text-ink"
-                  }`}>
-                    <ChevronsUpDown size={14} strokeWidth={1.8} />
-                  </span>
-                  <span className="col-span-2 block text-[0.74rem] font-bold whitespace-nowrap text-faint">human · your gull</span>
-                </span>
-              </button>
-              {accountMenuOpen ? (
-                <div id="account-menu" className="absolute right-0 bottom-full left-0 z-30 mb-2 rounded-lg bg-bg max-[860px]:top-full max-[860px]:bottom-auto max-[860px]:left-auto max-[860px]:mt-2 max-[860px]:mb-0 max-[860px]:w-48 max-[860px]:border max-[860px]:border-line max-[860px]:bg-card max-[860px]:p-1 max-[860px]:shadow-panel">
-                  <button
-                    type="button"
-                    aria-current={settingsCurrent ? "page" : undefined}
-                    onClick={() => {
-                      setAccountMenuOpen(false);
-                      navigate("/settings");
-                      window.scrollTo(0, 0);
-                    }}
-                    className={`flex min-h-10 w-full items-center gap-2 rounded-lg border-0 bg-transparent px-2.5 text-left text-[0.94rem] font-extrabold whitespace-nowrap hover:text-accent-strong ${
-                      settingsCurrent ? "text-ink" : "text-muted"
-                    }`}
-                  >
-                    <span aria-hidden="true" className="grid w-5 flex-none justify-items-center">
-                      {settingsCurrent ? <Wing path={YOUR_WING} size={16} strokeWidth={3.2} className="text-ink" /> : null}
-                    </span>
-                    <span className="flex-1">Settings</span>
-                  </button>
-                </div>
-              ) : null}
+            <div className="flex min-h-11 min-w-0 items-center gap-2.5 px-2.5 py-1.5 max-[860px]:px-0">
+              <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
+                <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
+              </span>
+              <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_24px] items-center gap-x-2 max-[860px]:flex max-[860px]:flex-none">
+                <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap max-[860px]:hidden">
+                  {identityName(state.activeUser, activeAuthSession?.idToken)}
+                </strong>
+                <button
+                  type="button"
+                  aria-label="Settings"
+                  title="Settings"
+                  aria-current={settingsCurrent ? "page" : undefined}
+                  onClick={() => {
+                    navigate("/settings");
+                    window.scrollTo(0, 0);
+                  }}
+                  className={`grid h-6 w-6 flex-none place-items-center rounded-md border-0 transition-colors hover:bg-accent-soft hover:text-accent-strong focus-visible:outline-2 focus-visible:outline-accent max-[860px]:h-9 max-[860px]:w-9 ${
+                    settingsCurrent ? "bg-accent-soft text-accent-strong" : "bg-transparent text-faint"
+                  }`}
+                >
+                  <Settings size={16} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+                <span className="col-span-2 block text-[0.74rem] font-bold whitespace-nowrap text-faint max-[860px]:hidden">human · your gull</span>
+              </span>
             </div>
           ) : null}
           {authConfig.mode === "local" ? (

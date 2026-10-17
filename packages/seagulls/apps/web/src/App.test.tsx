@@ -283,7 +283,7 @@ describe("App", () => {
     expect(container.textContent).toContain("Mentions");
   });
 
-  it("opens personal AI Usage from the account menu settings", async () => {
+  it("opens personal AI Usage from the account settings button", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     vi.stubGlobal("scrollTo", vi.fn());
     saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
@@ -321,21 +321,10 @@ describe("App", () => {
     await waitForText(container, "The sky");
     const primaryButtons = Array.from(container.querySelectorAll('nav[aria-label="Primary"] button'));
     expect(primaryButtons.some((item) => /usage/i.test(item.textContent ?? ""))).toBe(false);
-    const accountButton = Array.from(container.querySelectorAll("button")).find((item) =>
-      /Alice|alice@example\.com/i.test(item.textContent ?? ""),
-    );
-    expect(accountButton).toBeInstanceOf(HTMLButtonElement);
-    expect(accountButton?.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => {
-      (accountButton as HTMLButtonElement).click();
-    });
-    expect(accountButton?.getAttribute("aria-expanded")).toBe("true");
-    await waitForText(container, "Settings");
-    const settingsButton = Array.from(container.querySelectorAll("button")).find(
-      (item) => item.textContent?.trim() === "Settings",
-    );
+    const settingsButton = container.querySelector('button[aria-label="Settings"]');
     expect(settingsButton).toBeInstanceOf(HTMLButtonElement);
-    expect(settingsButton?.getAttribute("aria-current")).toBeNull();
+    expect(container.querySelector('[aria-controls="account-menu"]')).toBeNull();
+    expect(container.querySelector("#account-menu")).toBeNull();
     await act(async () => {
       (settingsButton as HTMLButtonElement).click();
     });
@@ -343,11 +332,7 @@ describe("App", () => {
     expect(container.textContent).toContain("Settings");
     expect(container.textContent).toContain("AI Usage");
     expect(container.textContent).toContain("Researcher");
-    expect(accountButton?.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => {
-      (accountButton as HTMLButtonElement).click();
-    });
-    expect(container.querySelector('#account-menu button')?.getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector('button[aria-label="Settings"]')?.getAttribute("aria-current")).toBe("page");
 
     const usageCall = vi.mocked(fetch).mock.calls.find(([input]) =>
       String(input).includes("/me/ai-usage?owner_user_id=user_1"),

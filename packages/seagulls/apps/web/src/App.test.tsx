@@ -325,14 +325,17 @@ describe("App", () => {
       /Alice|alice@example\.com/i.test(item.textContent ?? ""),
     );
     expect(accountButton).toBeInstanceOf(HTMLButtonElement);
+    expect(accountButton?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => {
       (accountButton as HTMLButtonElement).click();
     });
+    expect(accountButton?.getAttribute("aria-expanded")).toBe("true");
     await waitForText(container, "Settings");
     const settingsButton = Array.from(container.querySelectorAll("button")).find(
       (item) => item.textContent?.trim() === "Settings",
     );
     expect(settingsButton).toBeInstanceOf(HTMLButtonElement);
+    expect(settingsButton?.getAttribute("aria-current")).toBeNull();
     await act(async () => {
       (settingsButton as HTMLButtonElement).click();
     });
@@ -340,6 +343,11 @@ describe("App", () => {
     expect(container.textContent).toContain("Settings");
     expect(container.textContent).toContain("AI Usage");
     expect(container.textContent).toContain("Researcher");
+    expect(accountButton?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => {
+      (accountButton as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('#account-menu button')?.getAttribute("aria-current")).toBe("page");
 
     const usageCall = vi.mocked(fetch).mock.calls.find(([input]) =>
       String(input).includes("/me/ai-usage?owner_user_id=user_1"),

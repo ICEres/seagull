@@ -1,4 +1,4 @@
-import { ChevronUp, Moon, Sun } from "lucide-react";
+import { ChevronsUpDown, Moon, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -394,6 +394,7 @@ export default function App() {
   }
 
   const skyCount = unreadMentions;
+  const settingsCurrent = location.pathname === "/settings";
 
   return (
     <div className="grid min-h-screen grid-cols-[208px_minmax(0,1fr)] max-[860px]:grid-cols-1">
@@ -445,31 +446,41 @@ export default function App() {
                 aria-expanded={accountMenuOpen}
                 aria-controls="account-menu"
                 onClick={() => setAccountMenuOpen((open) => !open)}
-                className="relative flex min-h-11 w-full items-center gap-2.5 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left hover:bg-accent-soft max-[860px]:px-1.5"
+                className="group flex min-h-11 w-full items-center gap-2.5 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left hover:bg-accent-soft max-[860px]:px-1.5"
               >
                 <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
                   <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
                 </span>
-                <span className="min-w-0 flex-1 max-[860px]:hidden">
-                  <strong className="block overflow-hidden pr-4 text-[0.88rem] text-ellipsis whitespace-nowrap">
+                <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_20px] items-center gap-x-2 max-[860px]:hidden">
+                  <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
                     {identityName(state.activeUser, activeAuthSession?.idToken)}
                   </strong>
-                  <span className="block text-[0.74rem] font-bold whitespace-nowrap text-faint">human · your gull</span>
+                  <span aria-hidden="true" className={`grid h-5 w-5 place-items-center rounded-md transition-colors ${
+                    accountMenuOpen ? "bg-accent-soft text-accent-strong" : "text-faint group-hover:text-ink"
+                  }`}>
+                    <ChevronsUpDown size={14} strokeWidth={1.8} />
+                  </span>
+                  <span className="col-span-2 block text-[0.74rem] font-bold whitespace-nowrap text-faint">human · your gull</span>
                 </span>
-                <ChevronUp size={14} aria-hidden="true" className={`absolute top-3 right-2.5 text-faint max-[860px]:hidden ${accountMenuOpen ? "rotate-180" : ""}`} />
               </button>
               {accountMenuOpen ? (
-                <div id="account-menu" className="absolute right-0 bottom-full left-0 z-30 mb-2 rounded-xl border border-line bg-card p-1.5 shadow-panel max-[860px]:top-full max-[860px]:bottom-auto max-[860px]:left-auto max-[860px]:mt-2 max-[860px]:mb-0 max-[860px]:w-48">
+                <div id="account-menu" className="absolute right-0 bottom-full left-0 z-30 mb-2 rounded-lg bg-bg max-[860px]:top-full max-[860px]:bottom-auto max-[860px]:left-auto max-[860px]:mt-2 max-[860px]:mb-0 max-[860px]:w-48 max-[860px]:border max-[860px]:border-line max-[860px]:bg-card max-[860px]:p-1 max-[860px]:shadow-panel">
                   <button
                     type="button"
+                    aria-current={settingsCurrent ? "page" : undefined}
                     onClick={() => {
                       setAccountMenuOpen(false);
                       navigate("/settings");
                       window.scrollTo(0, 0);
                     }}
-                    className="min-h-9 w-full rounded-lg border-0 bg-transparent px-3 text-left text-[0.82rem] font-extrabold text-muted hover:bg-accent-soft hover:text-accent-strong"
+                    className={`flex min-h-10 w-full items-center gap-2 rounded-lg border-0 bg-transparent px-2.5 text-left text-[0.94rem] font-extrabold whitespace-nowrap hover:text-accent-strong ${
+                      settingsCurrent ? "text-ink" : "text-muted"
+                    }`}
                   >
-                    Settings
+                    <span aria-hidden="true" className="grid w-5 flex-none justify-items-center">
+                      {settingsCurrent ? <Wing path={YOUR_WING} size={16} strokeWidth={3.2} className="text-ink" /> : null}
+                    </span>
+                    <span className="flex-1">Settings</span>
                   </button>
                 </div>
               ) : null}

@@ -49,6 +49,12 @@ API Gateway endpoint:
 https://<api-id>.execute-api.<region>.amazonaws.com
 ```
 
+API Gateway regional custom-domain endpoint for `fishing.gulls.ai`:
+
+```text
+<regional-domain-id>.execute-api.<region>.amazonaws.com
+```
+
 No `gulls.ai` Route 53 hosted zone was found in the AWS account used by the
 deployment profile.
 
@@ -173,8 +179,13 @@ passthrough route on its internal `websecure` entrypoint:
 ```text
 internal fishing.gulls.ai
 -> Traefik TLS passthrough
--> <api-id>.execute-api.<region>.amazonaws.com:443
+-> <regional-domain-id>.execute-api.<region>.amazonaws.com:443
 ```
+
+The API ID endpoint (`<api-id>.execute-api...`) must not be used for this
+route: it presents a generic API Gateway certificate when the client sends the
+`fishing.gulls.ai` SNI. The regional custom-domain endpoint preserves the
+custom-domain certificate.
 
 TLS passthrough is intentional. The client SNI remains `fishing.gulls.ai`, so
 the AWS endpoint returns the existing Amazon-issued certificate for that name;
@@ -188,21 +199,21 @@ The remote dynamic file is:
 <traefik-config-dir>/fishing-gulls-internal.yml
 ```
 
-The pre-change file is preserved under a timestamped directory in:
+The pre-change file is preserved as a timestamped sibling file:
 
 ```text
-~/traefik/backups/fishing-gulls-before-20261017T145331Z/
+<traefik-config-dir>/fishing-gulls-internal.yml.bak-<timestamp>
 ```
 
-Rollback is deleting the dynamic route file; Traefik watches the directory and
-will remove the route on reload. The public AWS endpoint remains the fallback.
+Rollback is restoring the timestamped sibling file; Traefik watches the
+directory and reloads the route. The public AWS endpoint remains the fallback.
 
 Verification on 2026-10-17:
 
 - Internal DNS: `fishing.gulls.ai -> <private-ip>`.
 - Public DNS remains on AWS API Gateway.
-- Internal and public `GET /agent/me` both return the expected `401` JSON
-  response when no bearer token is supplied.
+- Internal and public `GET /health` both return HTTP 200 with the message hub
+  health payload.
 - Internal and public TLS both present `CN=fishing.gulls.ai`, issued by
   Amazon RSA 2048 M04.
 

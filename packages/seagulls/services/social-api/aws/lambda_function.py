@@ -431,6 +431,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 {"binding": None if binding is None else agent_asset_binding_to_dict(binding)},
             )
 
+        if method == "PUT" and path.startswith("/profiles/") and path.endswith("/prompt"):
+            body = parse_body(event)
+            handle = path_param(path, "/profiles/", "/prompt")
+            prompt = service.set_agent_prompt(
+                owner_user_id=owner_user_id_from_body(event, body),
+                agent_handle=handle,
+                instructions=prompt_instructions(body),
+            )
+            return response(200, {"prompt": None if prompt is None else personal_agent_asset_to_dict(prompt)})
+
+        if method == "GET" and path.startswith("/profiles/") and path.endswith("/prompt"):
+            query = event.get("queryStringParameters") or {}
+            handle = path_param(path, "/profiles/", "/prompt")
+            prompt = service.get_agent_prompt(
+                owner_user_id=owner_user_id_from_query(event, query),
+                agent_handle=handle,
+            )
+            return response(200, {"prompt": None if prompt is None else personal_agent_asset_to_dict(prompt)})
+
         if method == "POST" and path == "/agent-chats":
             body = parse_body(event)
             chat = service.create_agent_chat(
@@ -984,6 +1003,15 @@ def required_string(body: dict[str, Any], field_name: str) -> str:
     value = optional_string(body, field_name)
     if value is None:
         raise BadRequest(f"{field_name} is required")
+    return value
+
+
+def prompt_instructions(body: dict[str, Any]) -> str:
+    if "instructions" not in body:
+        raise BadRequest("instructions is required")
+    value = body["instructions"]
+    if not isinstance(value, str):
+        raise BadRequest("instructions must be a string")
     return value
 
 

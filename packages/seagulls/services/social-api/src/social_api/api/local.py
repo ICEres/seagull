@@ -397,6 +397,46 @@ class LocalSocialApi:
             raise ApiError(404, "not_found", str(exc)) from exc
         return {"binding": None if binding is None else agent_asset_binding_to_dict(binding)}
 
+    def read_agent_prompt(
+        self,
+        agent_handle: str,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            prompt = self._service.get_agent_prompt(
+                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                agent_handle=agent_handle,
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"prompt": None if prompt is None else personal_agent_asset_to_dict(prompt)}
+
+    def set_agent_prompt(
+        self,
+        agent_handle: str,
+        body: dict[str, Any],
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        try:
+            prompt = self._service.set_agent_prompt(
+                owner_user_id=self._owner_user_id(body, principal),
+                agent_handle=agent_handle,
+                instructions=prompt_instructions(body),
+            )
+        except PermissionDeniedError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except InvalidSocialRequestError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"prompt": None if prompt is None else personal_agent_asset_to_dict(prompt)}
+
     def create_agent_chat(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
         try:
             chat = self._service.create_agent_chat(
@@ -770,6 +810,10 @@ def generate_agent_chat_reply(
     handling.
     """
     try:
+        current_prompt = service.get_agent_prompt(
+            owner_user_id=owner_user_id,
+            agent_handle=chat.agent_handle,
+        )
         request = compose_agent_reply_request(
             chat=chat,
             profile=service.get_owned_profile(
@@ -780,7 +824,7 @@ def generate_agent_chat_reply(
                 owner_user_id=owner_user_id,
                 chat_id=chat.chat_id,
             ),
-            prompt_asset=_chat_asset(service, owner_user_id, chat.prompt_asset_id),
+            prompt_asset=current_prompt,
             skill_asset=_chat_asset(service, owner_user_id, chat.skill_asset_id),
         )
         run = ai_run_client.create_run(request)
@@ -1064,6 +1108,15 @@ def required_string(body: dict[str, Any], field_name: str) -> str:
     value = optional_string(body, field_name)
     if value is None:
         raise ApiError(400, "bad_request", f"{field_name} is required")
+    return value
+
+
+def prompt_instructions(body: dict[str, Any]) -> str:
+    if "instructions" not in body:
+        raise ApiError(400, "bad_request", "instructions is required")
+    value = body["instructions"]
+    if not isinstance(value, str):
+        raise ApiError(400, "bad_request", "instructions must be a string")
     return value
 
 

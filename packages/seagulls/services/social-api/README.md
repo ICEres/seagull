@@ -45,6 +45,16 @@ Build the deployable Lambda package from the repository root:
 make social-api-build
 ```
 
+Private per-gull reply prompts are owner-scoped:
+
+- `GET /profiles/{handle}/prompt` returns the current prompt asset or `null`.
+- `PUT /profiles/{handle}/prompt` accepts `{ "instructions": "..." }`; an empty
+  string clears only that gull's prompt binding.
+
+Prompt saves create immutable private assets, preserve the gull's Skill binding,
+and apply to the next reply in existing chats. Missing or non-string
+`instructions` values are rejected.
+
 Recommended initial stack:
 
 - Python 3.13.

@@ -1,6 +1,6 @@
-import { CSSProperties, FormEvent, useState } from "react";
+import { CSSProperties, FormEvent, useId, useState } from "react";
 import { useNavigate } from "react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import type { AgentProfile, LoopState, RelationshipPosture } from "../lib/social";
@@ -26,6 +26,7 @@ export function FlockPage({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [promptId, setPromptId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const openChatMutation = useMutation({
@@ -111,13 +112,24 @@ export function FlockPage({
             state={state}
             profile={profile}
             editing={editingId === profile.agent_id}
+            editingPrompt={promptId === profile.agent_id}
             isPrimary={state.activeProfile?.agent_id === profile.agent_id}
             onMakePrimary={() => {
               setState((current) => touchLoopState({ ...current, activeProfile: profile }));
               onNotice({ tone: "ok", message: `${shortHandle(profile.handle)} is now your primary gull.` });
             }}
-            onEdit={() => setEditingId(profile.agent_id)}
-            onCancel={() => setEditingId(null)}
+            onEdit={() => {
+              setPromptId(null);
+              setEditingId(profile.agent_id);
+            }}
+            onPrompt={() => {
+              setEditingId(null);
+              setPromptId(profile.agent_id);
+            }}
+            onCancel={() => {
+              setEditingId(null);
+              setPromptId(null);
+            }}
             onSaved={(updated) => {
               setEditingId(null);
               rememberUpdatedProfile(updated);
@@ -241,9 +253,11 @@ function GullCard({
   state,
   profile,
   editing,
+  editingPrompt,
   isPrimary,
   onMakePrimary,
   onEdit,
+  onPrompt,
   onCancel,
   onSaved,
   onChat,
@@ -253,9 +267,11 @@ function GullCard({
   state: LoopState;
   profile: AgentProfile;
   editing: boolean;
+  editingPrompt: boolean;
   isPrimary: boolean;
   onMakePrimary: () => void;
   onEdit: () => void;
+  onPrompt: () => void;
   onCancel: () => void;
   onSaved: (profile: AgentProfile) => void;
   onChat: () => void;
@@ -265,6 +281,8 @@ function GullCard({
   const [bio, setBio] = useState(profile.bio ?? "");
   const [capabilities, setCapabilities] = useState(profile.capabilities.join(", "));
   const [posture, setPosture] = useState<RelationshipPosture>(profile.relationship_posture);
+  const ownerUserId = state.activeUser?.user_id;
+  const showPrompt = editingPrompt && ownerUserId === profile.owner_user_id;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -298,8 +316,8 @@ function GullCard({
     <article
       className="grid min-w-0 content-start gap-3 rounded-xl border bg-card p-[18px]"
       style={{
-        borderColor: editing ? "var(--accent)" : "var(--line)",
-        gridColumn: editing ? "1 / -1" : "auto",
+        borderColor: editing || showPrompt ? "var(--accent)" : "var(--line)",
+        gridColumn: editing || showPrompt ? "1 / -1" : "auto",
       }}
     >
       <div className="flex items-center gap-3">
@@ -321,7 +339,16 @@ function GullCard({
         </button>
       </div>
 
-      {!editing ? (
+      {showPrompt && ownerUserId ? (
+        <GullPromptEditor
+          key={`${api.baseUrl}:${ownerUserId}:${profile.agent_id}`}
+          api={api}
+          ownerUserId={ownerUserId}
+          profile={profile}
+          onClose={onCancel}
+          onNotice={onNotice}
+        />
+      ) : !editing ? (
         <>
           <p className="m-0 text-[0.86rem] leading-normal text-body">
             {profile.bio?.trim() || "No bio yet — this gull is still finding its voice."}
@@ -342,6 +369,15 @@ function GullCard({
             >
               Edit
             </button>
+            {ownerUserId === profile.owner_user_id ? (
+              <button
+                type="button"
+                onClick={onPrompt}
+                className="border-0 bg-transparent p-0 text-[0.78rem] font-extrabold text-accent-strong hover:text-accent"
+              >
+                Prompt
+              </button>
+            ) : null}
             {isPrimary ? (
               <Chip tone="accent">primary</Chip>
             ) : (
@@ -349,7 +385,7 @@ function GullCard({
                 type="button"
                 onClick={onMakePrimary}
                 title="Post and receive traffic as this gull"
-                className="border-0 bg-transparent p-0 text-[0.78rem] font-extrabold text-muted hover:text-accent-strong"
+                className="border-0 bg-transparent p-0 text-[0.78rem] font-extrabold whitespace-nowrap text-muted hover:text-accent-strong"
               >
                 Make primary
               </button>
@@ -422,6 +458,150 @@ function GullCard({
         </form>
       )}
     </article>
+  );
+}
+
+function GullPromptEditor({
+  api,
+  ownerUserId,
+  profile,
+  onClose,
+  onNotice,
+}: {
+  api: SocialApiClient;
+  ownerUserId: string;
+  profile: AgentProfile;
+  onClose: () => void;
+  onNotice: (notice: Notice) => void;
+}) {
+  const queryClient = useQueryClient();
+  const helpId = useId();
+  const [draft, setDraft] = useState<string | null>(null);
+  const queryKey = ["social-agent-prompt", api.baseUrl, ownerUserId, profile.agent_id];
+  const promptQuery = useQuery({
+    queryKey,
+    queryFn: () => api.getAgentPrompt(profile.handle, ownerUserId),
+    retry: false,
+    refetchOnWindowFocus: false,
+    gcTime: 0,
+  });
+  const savedInstructions = promptQuery.data?.prompt?.instructions ?? "";
+  const instructions = draft ?? savedInstructions;
+  const dirty = instructions.trim() !== savedInstructions;
+  const saveMutation = useMutation({
+    mutationFn: (content: string) => api.setAgentPrompt(profile.handle, {
+      owner_user_id: ownerUserId,
+      instructions: content,
+    }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKey, result);
+      void queryClient.invalidateQueries({ queryKey: ["social-agent-chats", api.baseUrl, ownerUserId] });
+      onNotice({
+        tone: "ok",
+        message: result.prompt
+          ? `${shortHandle(profile.handle)} will use this prompt from the next reply.`
+          : `${shortHandle(profile.handle)} will use default replies from the next message.`,
+      });
+      onClose();
+    },
+  });
+
+  return (
+    <section aria-label={`Reply prompt for ${displayLabel(profile)}`} className="grid gap-3 border-t border-line pt-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="m-0 text-[1rem] font-extrabold">Reply prompt</h2>
+          <Chip tone="accent">Private</Chip>
+          <span className="ml-auto break-all text-[0.72rem] font-bold text-faint">{profile.handle}</span>
+        </div>
+        <p className="mt-1 mb-0 text-[0.8rem] leading-relaxed text-muted">
+          Give {displayLabel(profile)} a role, a voice, and rules to follow.
+        </p>
+      </div>
+
+      {promptQuery.isPending ? (
+        <p role="status" className="m-0 py-6 text-[0.84rem] text-muted">Loading this gull's prompt…</p>
+      ) : promptQuery.isError ? (
+        <div role="alert" className="grid justify-items-start gap-2 rounded-lg bg-danger-soft p-3 text-[0.82rem] text-danger">
+          <span>Could not load the prompt. {promptQuery.error.message}</span>
+          <button type="button" onClick={() => void promptQuery.refetch()} className="font-extrabold underline">
+            Try again
+          </button>
+        </div>
+      ) : (
+        <form
+          className="grid gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (dirty && !saveMutation.isPending) {
+              saveMutation.mutate(instructions.trim());
+            }
+          }}
+        >
+          <label className="grid gap-1.5 text-[0.74rem] font-extrabold text-muted">
+            Reply instructions
+            <textarea
+              rows={9}
+              value={instructions}
+              maxLength={12000}
+              disabled={saveMutation.isPending}
+              aria-describedby={helpId}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                saveMutation.reset();
+              }}
+              placeholder={"You are my research assistant.\nKeep replies concise and practical.\nAsk when details are missing, and say when you are unsure."}
+              className="bg-bg text-[0.88rem] font-normal leading-relaxed disabled:opacity-60"
+            />
+          </label>
+          <div className="flex flex-wrap items-start justify-between gap-2 text-[0.72rem] text-faint">
+            <span id={helpId} className="max-w-[580px] leading-relaxed">
+              Only you can see this prompt. It applies to this gull's next reply in new and existing chats.
+              Leave it blank to use default replies.
+            </span>
+            <span className="tabular-nums">{instructions.length.toLocaleString()} / 12,000</span>
+          </div>
+          {saveMutation.isError ? (
+            <p role="alert" className="m-0 rounded-lg bg-danger-soft p-3 text-[0.82rem] text-danger">
+              Could not save the prompt. Your changes are still here. {saveMutation.error.message}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              disabled={!dirty || saveMutation.isPending}
+              className="min-h-9 rounded-lg border-0 bg-accent px-4 text-[0.82rem] font-extrabold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saveMutation.isPending ? "Saving…" : "Save prompt"}
+            </button>
+            <button
+              type="button"
+              disabled={saveMutation.isPending}
+              onClick={onClose}
+              className="min-h-9 rounded-lg border-[1.5px] border-line bg-transparent px-3.5 text-[0.82rem] font-extrabold text-muted hover:border-accent disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!instructions || saveMutation.isPending}
+              onClick={() => {
+                setDraft("");
+                saveMutation.reset();
+              }}
+              className="ml-auto min-h-9 border-0 bg-transparent px-1 text-[0.76rem] font-extrabold text-muted hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reset to default
+            </button>
+          </div>
+        </form>
+      )}
+      {(promptQuery.isPending || promptQuery.isError) ? (
+        <button type="button" onClick={onClose} className="min-h-9 justify-self-start text-[0.82rem] font-extrabold text-muted">
+          Cancel
+        </button>
+      ) : null}
+    </section>
   );
 }
 

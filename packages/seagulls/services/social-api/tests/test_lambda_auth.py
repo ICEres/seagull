@@ -86,6 +86,7 @@ def event(
     body: dict[str, object] | None = None,
     claims: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
 ) -> dict[str, object]:
     request: dict[str, object] = {
         "rawPath": path,
@@ -101,6 +102,8 @@ def event(
         request["body"] = json.dumps(body)
     if claims is not None:
         request["requestContext"]["authorizer"] = {"jwt": {"claims": claims}}  # type: ignore[index]
+    if query is not None:
+        request["queryStringParameters"] = query
     return request
 
 
@@ -335,6 +338,77 @@ class SocialApiLambdaAuthTest(TestCase):
         self.assertTrue(lambda_module.SOCIAL_AUTH_REQUIRED)
         self.assertEqual(401, response["statusCode"])
         self.assertEqual("authentication is required", response_body(response)["message"])
+
+    def test_prompt_routes_are_owner_scoped_and_preserve_saved_prompt_on_bad_put(self) -> None:
+        lambda_module = load_lambda_module()
+        alice_claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        bob_claims = {"sub": "bob-sub", "email": "bob@example.com"}
+        encoded_path = "/profiles/%40prompt-gull%3Aseagull.local/prompt"
+
+        created = lambda_module.handler(
+            event(
+                "POST",
+                "/profiles",
+                body={"handle": "@prompt-gull:seagull.local"},
+                claims=alice_claims,
+            ),
+            None,
+        )
+        self.assertEqual(200, created["statusCode"])
+
+        saved = lambda_module.handler(
+            event("PUT", encoded_path, body={"instructions": "Reply calmly."}, claims=alice_claims),
+            None,
+        )
+        self.assertEqual(200, saved["statusCode"])
+        self.assertEqual("Reply calmly.", response_body(saved)["prompt"]["instructions"])
+
+        read = lambda_module.handler(event("GET", encoded_path, claims=alice_claims), None)
+        self.assertEqual(200, read["statusCode"])
+        self.assertEqual("Reply calmly.", response_body(read)["prompt"]["instructions"])
+
+        for malformed_body in ({}, {"instructions": None}):
+            with self.subTest(malformed_body=malformed_body):
+                malformed = lambda_module.handler(
+                    event("PUT", encoded_path, body=malformed_body, claims=alice_claims),
+                    None,
+                )
+                self.assertEqual(400, malformed["statusCode"])
+                still_saved = lambda_module.handler(event("GET", encoded_path, claims=alice_claims), None)
+                self.assertEqual("Reply calmly.", response_body(still_saved)["prompt"]["instructions"])
+
+        spoofed_query = lambda_module.handler(
+            event("GET", encoded_path, claims=alice_claims, query={"owner_user_id": "user_other"}),
+            None,
+        )
+        self.assertEqual(403, spoofed_query["statusCode"])
+        spoofed_body = lambda_module.handler(
+            event(
+                "PUT",
+                encoded_path,
+                body={"owner_user_id": "user_other", "instructions": "Spoofed."},
+                claims=alice_claims,
+            ),
+            None,
+        )
+        self.assertEqual(403, spoofed_body["statusCode"])
+
+        for method, body in (("GET", None), ("PUT", {"instructions": "Other owner."})):
+            with self.subTest(method=method):
+                denied = lambda_module.handler(
+                    event(method, encoded_path, body=body, claims=bob_claims),
+                    None,
+                )
+                self.assertEqual(403, denied["statusCode"])
+
+        unauthenticated = lambda_module.handler(event("GET", encoded_path), None)
+        self.assertEqual(401, unauthenticated["statusCode"])
+
+        reset = lambda_module.handler(event("PUT", encoded_path, body={"instructions": ""}, claims=alice_claims), None)
+        self.assertEqual(200, reset["statusCode"])
+        self.assertIsNone(response_body(reset)["prompt"])
+        reset_read = lambda_module.handler(event("GET", encoded_path, claims=alice_claims), None)
+        self.assertIsNone(response_body(reset_read)["prompt"])
 
     def test_ai_reply_enabled_accepts_direct_lambda_transport(self) -> None:
         lambda_module = load_lambda_module()

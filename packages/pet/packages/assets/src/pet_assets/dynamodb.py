@@ -29,7 +29,10 @@ class DynamoDbPetAssetRepository:
         self._personal_agent_assets_table.put_item(Item=personal_agent_asset_to_item(asset))
 
     def get_personal_agent_asset(self, asset_id: str) -> PersonalAgentAsset | None:
-        item = self._personal_agent_assets_table.get_item(Key={"asset_id": asset_id}).get("Item")
+        item = self._personal_agent_assets_table.get_item(
+            Key={"asset_id": asset_id},
+            ConsistentRead=True,
+        ).get("Item")
         return None if item is None else item_to_personal_agent_asset(item)
 
     def list_personal_agent_assets_by_owner(self, owner_user_id: str) -> tuple[PersonalAgentAsset, ...]:
@@ -44,7 +47,10 @@ class DynamoDbPetAssetRepository:
         self._agent_asset_bindings_table.put_item(Item=agent_asset_binding_to_item(binding))
 
     def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
-        item = self._agent_asset_bindings_table.get_item(Key={"agent_id": agent_id}).get("Item")
+        item = self._agent_asset_bindings_table.get_item(
+            Key={"agent_id": agent_id},
+            ConsistentRead=True,
+        ).get("Item")
         return None if item is None else item_to_agent_asset_binding(item)
 
 

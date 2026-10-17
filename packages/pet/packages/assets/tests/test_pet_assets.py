@@ -156,6 +156,78 @@ class PetAssetServiceTest(TestCase):
     def test_unbound_agent_has_no_binding(self) -> None:
         self.assertIsNone(self.service.get_agent_asset_binding("agent_unknown"))
 
+    def test_agent_prompt_creates_immutable_versions_and_preserves_skill_binding(self) -> None:
+        skill = self.service.create_personal_agent_asset(
+            owner_user_id="user_1", asset_type="skill", name="s", instructions="skill"
+        )
+        self.service.set_agent_asset_binding(
+            owner_user_id="user_1", agent_id="agent_1", skill_asset_id=skill.asset_id
+        )
+
+        prompt = self.service.set_agent_prompt(
+            owner_user_id="user_1",
+            agent_id="agent_1",
+            name="Agent Reply Prompt",
+            instructions="Be concise.",
+        )
+        self.assertIsNotNone(prompt)
+        assert prompt is not None
+        self.assertEqual("Be concise.", prompt.instructions)
+        binding = self.service.get_agent_asset_binding("agent_1")
+        self.assertIsNotNone(binding)
+        assert binding is not None
+        self.assertEqual(prompt.asset_id, binding.prompt_asset_id)
+        self.assertEqual(skill.asset_id, binding.skill_asset_id)
+
+        updated = self.service.set_agent_prompt(
+            owner_user_id="user_1",
+            agent_id="agent_1",
+            name="Agent Reply Prompt",
+            instructions="Ask before acting.",
+        )
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertNotEqual(prompt.asset_id, updated.asset_id)
+        self.assertEqual("Ask before acting.", updated.instructions)
+        self.assertEqual("Be concise.", self.service.require_asset(prompt.asset_id).instructions)
+
+        self.assertIsNone(
+            self.service.set_agent_prompt(
+                owner_user_id="user_1",
+                agent_id="agent_1",
+                name="Agent Reply Prompt",
+                instructions="   ",
+            )
+        )
+        binding = self.service.get_agent_asset_binding("agent_1")
+        self.assertIsNotNone(binding)
+        assert binding is not None
+        self.assertIsNone(binding.prompt_asset_id)
+        self.assertEqual(skill.asset_id, binding.skill_asset_id)
+
+    def test_editing_one_agent_does_not_change_a_shared_prompt_asset(self) -> None:
+        shared = self.service.create_personal_agent_asset(
+            owner_user_id="user_1", asset_type="prompt", name="Shared", instructions="Original"
+        )
+        self.service.set_agent_asset_binding(
+            owner_user_id="user_1", agent_id="agent_1", prompt_asset_id=shared.asset_id
+        )
+        self.service.set_agent_asset_binding(
+            owner_user_id="user_1", agent_id="agent_2", prompt_asset_id=shared.asset_id
+        )
+
+        replacement = self.service.set_agent_prompt(
+            owner_user_id="user_1",
+            agent_id="agent_1",
+            name="Agent 1 Reply Prompt",
+            instructions="Agent 1 only",
+        )
+        self.assertIsNotNone(replacement)
+        assert replacement is not None
+        self.assertEqual(shared.asset_id, self.service.get_agent_asset_binding("agent_2").prompt_asset_id)
+        self.assertEqual("Original", self.service.require_asset(shared.asset_id).instructions)
+        self.assertEqual(replacement.asset_id, self.service.get_agent_asset_binding("agent_1").prompt_asset_id)
+
     def test_serializers_expose_the_public_response_shape(self) -> None:
         asset = self.service.create_personal_agent_asset(
             owner_user_id="user_1",

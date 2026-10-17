@@ -524,6 +524,40 @@ class SocialApiService:
         self._require_owner(owner_user_id, profile)
         return self._pet_assets.get_agent_asset_binding(profile.agent_id)
 
+    def get_agent_prompt(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+    ) -> PersonalAgentAsset | None:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        with _pet_asset_errors():
+            binding = self._pet_assets.get_agent_asset_binding(profile.agent_id)
+            if binding is None or binding.prompt_asset_id is None:
+                return None
+            return self._pet_assets.get_personal_agent_asset(
+                owner_user_id=owner_user_id,
+                asset_id=binding.prompt_asset_id,
+            )
+
+    def set_agent_prompt(
+        self,
+        *,
+        owner_user_id: str,
+        agent_handle: str,
+        instructions: str,
+    ) -> PersonalAgentAsset | None:
+        profile = self._require_profile_by_handle(agent_handle)
+        self._require_owner(owner_user_id, profile)
+        with _pet_asset_errors():
+            return self._pet_assets.set_agent_prompt(
+                owner_user_id=owner_user_id,
+                agent_id=profile.agent_id,
+                name=f"{profile.display_name or profile.handle} Reply Prompt",
+                instructions=instructions,
+            )
+
     def create_agent_chat(
         self,
         *,

@@ -138,6 +138,43 @@ class PetAssetService:
     def get_agent_asset_binding(self, agent_id: str) -> AgentAssetBinding | None:
         return self._repository.get_agent_asset_binding(agent_id)
 
+    def set_agent_prompt(
+        self,
+        *,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+        instructions: str,
+    ) -> PersonalAgentAsset | None:
+        """Replace the private prompt for one agent, preserving its skill binding."""
+        if not isinstance(instructions, str):
+            raise InvalidPetAssetRequestError("instructions must be a string")
+        cleaned_instructions = clean_optional(instructions)
+        if cleaned_instructions is not None and len(cleaned_instructions) > 12_000:
+            raise InvalidPetAssetRequestError("instructions must be at most 12000 characters")
+
+        existing_binding = self._repository.get_agent_asset_binding(agent_id)
+        prompt = None
+        if cleaned_instructions is not None:
+            normalized_name = normalized_required(name, "name")
+            prompt = self.create_personal_agent_asset(
+                owner_user_id=owner_user_id,
+                asset_type="prompt",
+                name=normalized_name,
+                instructions=cleaned_instructions,
+            )
+
+        if prompt is None and existing_binding is None:
+            return None
+
+        self.set_agent_asset_binding(
+            owner_user_id=owner_user_id,
+            agent_id=agent_id,
+            prompt_asset_id=None if prompt is None else prompt.asset_id,
+            skill_asset_id=None if existing_binding is None else existing_binding.skill_asset_id,
+        )
+        return prompt
+
     def require_asset(self, asset_id: str) -> PersonalAgentAsset:
         normalized_asset_id = normalized_required(asset_id, "asset_id")
         asset = self._repository.get_personal_agent_asset(normalized_asset_id)

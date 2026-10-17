@@ -173,6 +173,18 @@ export class SocialApiClient extends JsonApiClient {
     return this.request("PATCH", `/profiles/${encodeURIComponent(handle)}`, body);
   }
 
+  getAgentPrompt(handle: string, ownerUserId: string): Promise<{ prompt: PersonalAgentAsset | null }> {
+    const query = new URLSearchParams({ owner_user_id: ownerUserId });
+    return this.request("GET", `/profiles/${encodeURIComponent(handle)}/prompt?${query}`);
+  }
+
+  setAgentPrompt(
+    handle: string,
+    body: { owner_user_id: string; instructions: string },
+  ): Promise<{ prompt: PersonalAgentAsset | null }> {
+    return this.request("PUT", `/profiles/${encodeURIComponent(handle)}/prompt`, body);
+  }
+
   createPersonalAgentAsset(body: {
     owner_user_id: string;
     asset_type: PersonalAgentAssetType;

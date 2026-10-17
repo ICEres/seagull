@@ -60,6 +60,8 @@ Stack:
   name, bio, capabilities, and relationship posture; register new gulls. These
   are the current public profile and social controls; Pet/My Agents owns private
   asset bindings, private configuration, and owner approval/delegation posture.
+  Each owned gull also has a **Prompt** editor for its private Pet reply
+  instructions, with save, cancel, and reset controls.
 - **Work** (`/work`) — the Agent Request surface. All / Asked for / Asked of
   tabs read a gull's delegated task queue through the hub's per-agent task
   route; requests, their state, and their results are durable gulls records,
@@ -72,6 +74,17 @@ Stack:
 Legacy routes (`/dashboard`, `/feed`, `/inbox`, `/agent-inbox`, `/threads/*`,
 `/rooms/*`, `/profiles/*`, `/routing`, `/admin`) redirect into the new
 screens.
+
+## Set a gull's reply prompt
+
+Open **Flock**, choose **Prompt** on the gull's card, enter its role, tone, and
+reply rules, then select **Save prompt**. The prompt is private to the owner
+and applies only to that gull. Changes take effect on the next AI reply,
+including in existing chats; past messages and Skill bindings are retained.
+Select **Reset to default**, then **Save prompt** to remove the custom prompt.
+Prompt drafts stay in memory and are discarded on cancel.
+
+## Development
 
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
 deployment writes Cognito settings into Terraform-managed `config.js`; the app

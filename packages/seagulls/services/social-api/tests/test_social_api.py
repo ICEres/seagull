@@ -988,6 +988,46 @@ class LocalSocialApiTest(TestCase):
         self.assertEqual([prompt["asset_id"]], [asset["asset_id"] for asset in prompt_assets])
         self.assertEqual(binding, read_binding)
 
+    def test_local_api_prompt_editor_is_owner_scoped_and_preserves_skill(self) -> None:
+        api = LocalSocialApi.in_memory(auth_required=True)
+        alice = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+        bob = AuthPrincipal(provider="cognito", subject="bob-sub", email="bob@example.com")
+        profile = api.create_agent_profile({"handle": "@assistant:seagull.local"}, alice)["profile"]
+        skill = api.create_personal_agent_asset(
+            {"asset_type": "skill", "name": "Skill", "instructions": "Keep steps clear."}, alice
+        )["asset"]
+        api.set_agent_asset_binding(profile["handle"], {"skill_asset_id": skill["asset_id"]}, alice)
+
+        with self.assertRaises(ApiError) as missing:
+            api.set_agent_prompt(profile["handle"], {}, alice)
+        self.assertEqual(400, missing.exception.status_code)
+        with self.assertRaises(ApiError) as malformed:
+            api.set_agent_prompt(profile["handle"], {"instructions": 123}, alice)
+        self.assertEqual(400, malformed.exception.status_code)
+        with self.assertRaises(ApiError) as too_long:
+            api.set_agent_prompt(profile["handle"], {"instructions": "x" * 12001}, alice)
+        self.assertEqual(400, too_long.exception.status_code)
+        self.assertIsNone(api.read_agent_prompt(profile["handle"], principal=alice)["prompt"])
+
+        saved = api.set_agent_prompt(
+            profile["handle"], {"instructions": "Reply in a calm voice."}, alice
+        )["prompt"]
+        self.assertEqual("Reply in a calm voice.", saved["instructions"])
+        self.assertEqual(saved, api.read_agent_prompt(profile["handle"], principal=alice)["prompt"])
+        self.assertEqual(
+            skill["asset_id"],
+            api.read_agent_asset_binding(profile["handle"], principal=alice)["binding"]["skill_asset_id"],
+        )
+
+        with self.assertRaises(ApiError) as denied:
+            api.read_agent_prompt(profile["handle"], principal=bob)
+        self.assertEqual(403, denied.exception.status_code)
+
+        self.assertIsNone(api.set_agent_prompt(profile["handle"], {"instructions": "   "}, alice)["prompt"])
+        binding = api.read_agent_asset_binding(profile["handle"], principal=alice)["binding"]
+        self.assertIsNone(binding["prompt_asset_id"])
+        self.assertEqual(skill["asset_id"], binding["skill_asset_id"])
+
     def test_local_api_chat_message_can_deliver_through_message_hub_sender(self) -> None:
         hub = FakeMessageHubSender()
         api = LocalSocialApi.in_memory(auth_required=True, message_hub_sender=hub)
@@ -1139,6 +1179,28 @@ class LocalSocialApiTest(TestCase):
         self.assertIn("@assistant:seagull.local", system_instructions)
         self.assertIn("Answer directly.", system_instructions)
         self.assertIn("Plan in steps.", system_instructions)
+
+        # Prompt edits apply to the next reply in an existing chat, while the
+        # chat's skill snapshot remains unchanged.
+        api.set_agent_prompt(
+            assistant["handle"],
+            {"instructions": "Ask one clarifying question first."},
+            principal,
+        )
+        api.create_agent_chat_message(chat["chat_id"], {"content": "Continue."}, principal)
+        self.assertEqual(2, len(ai_client.requests))
+        next_system = ai_client.requests[1]["system_instructions"]
+        self.assertIn("Ask one clarifying question first.", next_system)
+        self.assertNotIn("Answer directly.", next_system)
+        self.assertIn("Plan in steps.", next_system)
+
+        api.set_agent_prompt(assistant["handle"], {"instructions": ""}, principal)
+        api.create_agent_chat_message(chat["chat_id"], {"content": "Use the default behavior."}, principal)
+        self.assertEqual(3, len(ai_client.requests))
+        reset_system = ai_client.requests[2]["system_instructions"]
+        self.assertNotIn("Ask one clarifying question first.", reset_system)
+        self.assertNotIn("Answer directly.", reset_system)
+        self.assertIn("Plan in steps.", reset_system)
 
     def test_local_api_chat_reply_failure_keeps_message_and_records_ai_state(self) -> None:
         denied_client = FakeAiRunClient(

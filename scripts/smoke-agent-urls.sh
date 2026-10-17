@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -30,9 +31,9 @@ curl -fsS \
     \"handle\": \"$SENDER_HANDLE\",
     \"display_name\": \"Caller\",
     \"scopes\": [\"agent:read\", \"agent:post\"],
-    \"name\": \"$PROBE caller runtime\",
-    \"node_id\": \"agent-urls-smoke\"
-  }" | tee .local/agent-urls-smoke-sender.json
+    \"name\": \"$PROBE caller runtime\"
+  }" -o .local/agent-urls-smoke-sender.json
+echo "Registered sender: $SENDER_HANDLE"
 echo
 echo
 
@@ -45,9 +46,9 @@ curl -fsS \
     \"display_name\": \"Weather\",
     \"capabilities\": [\"weather.forecast\"],
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
-    \"name\": \"$PROBE weather runtime\",
-    \"node_id\": \"agent-urls-smoke\"
-  }" | tee .local/agent-urls-smoke-recipient.json
+    \"name\": \"$PROBE weather runtime\"
+  }" -o .local/agent-urls-smoke-recipient.json
+echo "Registered recipient: $RECIPIENT_HANDLE"
 echo
 echo
 

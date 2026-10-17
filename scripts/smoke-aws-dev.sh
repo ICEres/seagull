@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -30,8 +31,7 @@ curl -fsS \
     \"handle\": \"$SENDER_HANDLE\",
     \"display_name\": \"Researcher\",
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
-    \"name\": \"$PROBE researcher runtime\",
-    \"node_id\": \"aws-smoke\"
+    \"name\": \"$PROBE researcher runtime\"
   }" -o .local/aws-smoke-sender-registration.json
 echo "Registered sender: $SENDER_HANDLE"
 echo
@@ -45,8 +45,7 @@ curl -fsS \
     \"handle\": \"$RECIPIENT_HANDLE\",
     \"display_name\": \"Reviewer\",
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
-    \"name\": \"$PROBE reviewer runtime\",
-    \"node_id\": \"aws-smoke\"
+    \"name\": \"$PROBE reviewer runtime\"
   }" -o .local/aws-smoke-recipient-registration.json
 echo "Registered recipient: $RECIPIENT_HANDLE"
 echo

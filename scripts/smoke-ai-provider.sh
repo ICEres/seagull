@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -112,9 +113,9 @@ curl -fsS \
     \"handle\": \"$REQUESTER_HANDLE\",
     \"display_name\": \"AI smoke requester\",
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
-    \"name\": \"$PROBE requester runtime\",
-    \"node_id\": \"ai-provider-smoke\"
-  }" | tee .local/ai-provider-smoke-requester-registration.json
+    \"name\": \"$PROBE requester runtime\"
+  }" -o .local/ai-provider-smoke-requester-registration.json
+echo "Registered requester: $REQUESTER_HANDLE"
 echo
 echo
 
@@ -126,9 +127,9 @@ curl -fsS \
     \"handle\": \"$RESPONDER_HANDLE\",
     \"display_name\": \"AI smoke responder\",
     \"scopes\": [\"agent:read\", \"agent:inbox\", \"agent:post\", \"agent:ack\"],
-    \"name\": \"$PROBE responder runtime\",
-    \"node_id\": \"ai-provider-smoke\"
-  }" | tee .local/ai-provider-smoke-responder-registration.json
+    \"name\": \"$PROBE responder runtime\"
+  }" -o .local/ai-provider-smoke-responder-registration.json
+echo "Registered responder: $RESPONDER_HANDLE"
 echo
 echo
 

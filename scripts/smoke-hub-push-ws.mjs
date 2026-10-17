@@ -78,7 +78,6 @@ async function registerAgent(role) {
       display_name: `Hub push ${role}`,
       scopes,
       name: `hub push ${role} smoke runtime`,
-      node_id: "hub-push-smoke",
     }),
   });
   if (!response.ok) {

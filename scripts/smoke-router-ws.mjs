@@ -77,7 +77,6 @@ async function registerAgent(role) {
       display_name: `Router ${role}`,
       scopes,
       name: `router ${role} smoke runtime`,
-      node_id: "router-smoke",
     }),
   });
   if (!response.ok) {

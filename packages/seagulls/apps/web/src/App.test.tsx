@@ -225,7 +225,7 @@ describe("App", () => {
     expect(container.querySelector('button[aria-label="Sign in"]')).not.toBeNull();
     expect(container.textContent).toContain("New here? Create your flock");
     expect(container.textContent).not.toContain("The stream");
-    expect(container.textContent).not.toContain("Sign out");
+    expect(container.querySelector('button[aria-label="Sign out"]')).toBeNull();
   });
 
   it("renders the email-only registration design", async () => {
@@ -614,9 +614,7 @@ describe("App", () => {
       items: [{ name: "account A private rule" }],
     });
 
-    const signOutButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Sign out",
-    );
+    const signOutButton = container.querySelector<HTMLButtonElement>('button[aria-label="Sign out"]');
     if (!signOutButton) {
       throw new Error("Sign-out button not found.");
     }

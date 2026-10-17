@@ -1,4 +1,4 @@
-import { Moon, Settings, Sun } from "lucide-react";
+import { LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -417,26 +417,11 @@ export default function App() {
               <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
                 <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
               </span>
-              <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_24px] items-center gap-x-2 max-[860px]:flex max-[860px]:flex-none">
-                <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap max-[860px]:hidden">
+              <span className="min-w-0 flex-1 max-[860px]:hidden">
+                <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
                   {identityName(state.activeUser, activeAuthSession?.idToken)}
                 </strong>
-                <button
-                  type="button"
-                  aria-label="Settings"
-                  title="Settings"
-                  aria-current={settingsCurrent ? "page" : undefined}
-                  onClick={() => {
-                    navigate("/settings");
-                    window.scrollTo(0, 0);
-                  }}
-                  className={`grid h-6 w-6 flex-none place-items-center rounded-md border-0 transition-colors hover:bg-accent-soft hover:text-accent-strong focus-visible:outline-2 focus-visible:outline-accent max-[860px]:h-9 max-[860px]:w-9 ${
-                    settingsCurrent ? "bg-accent-soft text-accent-strong" : "bg-transparent text-faint"
-                  }`}
-                >
-                  <Settings size={16} strokeWidth={1.8} aria-hidden="true" />
-                </button>
-                <span className="col-span-2 block text-[0.74rem] font-bold whitespace-nowrap text-faint max-[860px]:hidden">human · your gull</span>
+                <span className="block text-[0.74rem] font-bold whitespace-nowrap text-faint">human · your gull</span>
               </span>
             </div>
           ) : null}
@@ -465,16 +450,35 @@ export default function App() {
               onClick={toggleTheme}
               aria-label="Toggle dark mode"
               title="Toggle dark mode"
-              className="grid h-9 w-9 place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-accent-soft"
+              className="grid h-9 w-9 flex-none place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-accent-soft hover:text-accent-strong focus-visible:outline-2 focus-visible:outline-accent"
             >
-              {resolvedTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              {resolvedTheme === "dark" ? <Sun size={16} strokeWidth={1.8} aria-hidden="true" /> : <Moon size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
+            {state.activeUser ? (
+              <button
+                type="button"
+                aria-label="Settings"
+                title="Settings"
+                aria-current={settingsCurrent ? "page" : undefined}
+                onClick={() => {
+                  navigate("/settings");
+                  window.scrollTo(0, 0);
+                }}
+                className={`grid h-9 w-9 flex-none place-items-center rounded-lg border-0 transition-colors hover:bg-accent-soft hover:text-accent-strong focus-visible:outline-2 focus-visible:outline-accent ${
+                  settingsCurrent ? "bg-accent-soft text-accent-strong" : "bg-transparent text-muted"
+                }`}
+              >
+                <Settings size={16} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={signOut}
-              className="min-h-9 flex-1 rounded-lg border-0 bg-transparent px-1.5 text-left text-[0.84rem] font-extrabold text-muted hover:text-accent-strong max-[860px]:flex-none"
+              aria-label="Sign out"
+              title="Sign out"
+              className="grid h-9 w-9 flex-none place-items-center rounded-lg border-0 bg-transparent text-muted hover:bg-accent-soft hover:text-accent-strong focus-visible:outline-2 focus-visible:outline-accent"
             >
-              Sign out
+              <LogOut size={16} strokeWidth={1.8} aria-hidden="true" />
             </button>
           </div>
         </div>

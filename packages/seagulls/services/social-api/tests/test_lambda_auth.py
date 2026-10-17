@@ -138,6 +138,38 @@ class FakeAiProviderRunClient:
         return {"run_id": "run_1", "state": "completed", "output_text": "reply from the agent"}
 
 
+class FakeLambdaPayload:
+    def __init__(self, value: dict[str, object]) -> None:
+        self.value = json.dumps(value).encode("utf-8")
+        self.closed = False
+
+    def read(self) -> bytes:
+        return self.value
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeLambdaClient:
+    def __init__(self, payload: dict[str, object], *, function_error: str | None = None) -> None:
+        self.payload = FakeLambdaPayload(payload)
+        self.function_error = function_error
+        self.calls: list[dict[str, object]] = []
+
+    def invoke(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        result: dict[str, object] = {"Payload": self.payload}
+        if self.function_error is not None:
+            result["FunctionError"] = self.function_error
+        return result
+
+
+class FakeBotocoreConfig(types.ModuleType):
+    class Config:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+
 class SocialApiLambdaChatDeliveryTest(TestCase):
     CLAIMS = {"sub": "alice-sub", "email": "alice@example.com"}
     HUB_ENV = {"MESSAGE_API_URL": "https://hub.test"}
@@ -303,6 +335,94 @@ class SocialApiLambdaAuthTest(TestCase):
         self.assertTrue(lambda_module.SOCIAL_AUTH_REQUIRED)
         self.assertEqual(401, response["statusCode"])
         self.assertEqual("authentication is required", response_body(response)["message"])
+
+    def test_ai_reply_enabled_accepts_direct_lambda_transport(self) -> None:
+        lambda_module = load_lambda_module()
+        lambda_module.AI_PROVIDER_FUNCTION_ARN = "arn:aws:lambda:ap-southeast-2:123:function:ai-provider"
+        lambda_module.AI_PROVIDER_API_URL = ""
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "admin-secret"
+        lambda_module.AI_REPLY_PROVIDER = "bedrock"
+        lambda_module.AI_REPLY_MODEL = "amazon.nova-micro-v1:0"
+
+        self.assertTrue(lambda_module.ai_reply_enabled())
+
+    def test_direct_ai_provider_invocation_builds_gateway_event_and_closes_payload(self) -> None:
+        lambda_module = load_lambda_module()
+        lambda_module.AI_PROVIDER_FUNCTION_ARN = "arn:aws:lambda:ap-southeast-2:123:function:ai-provider"
+        lambda_module.AI_PROVIDER_API_URL = ""
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "admin-secret"
+        lambda_module.AI_REPLY_PROVIDER = "bedrock"
+        lambda_module.AI_REPLY_MODEL = "amazon.nova-micro-v1:0"
+        fake_client = FakeLambdaClient(
+            {"statusCode": 200, "body": json.dumps({"run": {"run_id": "run_1"}})}
+        )
+        client_options: dict[str, object] = {}
+
+        def fake_boto3_client(service_name: str, **kwargs: object) -> FakeLambdaClient:
+            client_options.update(kwargs)
+            return fake_client
+
+        lambda_module.boto3.client = fake_boto3_client
+        fake_botocore = types.ModuleType("botocore")
+        fake_botocore_config = FakeBotocoreConfig("botocore.config")
+
+        with patch.dict(
+            sys.modules,
+            {"botocore": fake_botocore, "botocore.config": fake_botocore_config},
+        ):
+            run = lambda_module.AiProviderRunClient().create_run({"owner_user_id": "user_1"})
+
+        self.assertEqual({"run_id": "run_1"}, run)
+        self.assertTrue(fake_client.payload.closed)
+        config = client_options["config"]
+        self.assertEqual(3.0, config.kwargs["connect_timeout"])
+        self.assertEqual(20.0, config.kwargs["read_timeout"])
+        self.assertEqual({"max_attempts": 0}, config.kwargs["retries"])
+        self.assertEqual(1, len(fake_client.calls))
+        call = fake_client.calls[0]
+        self.assertEqual(lambda_module.AI_PROVIDER_FUNCTION_ARN, call["FunctionName"])
+        self.assertEqual("RequestResponse", call["InvocationType"])
+        invoke_event = json.loads(call["Payload"])
+        self.assertEqual("POST", invoke_event["requestContext"]["http"]["method"])
+        self.assertEqual("/ai-runs", invoke_event["rawPath"])
+        self.assertEqual("admin-secret", invoke_event["headers"]["x-seagull-admin-secret"])
+        request_body = json.loads(invoke_event["body"])
+        self.assertEqual("bedrock", request_body["provider"])
+        self.assertEqual("amazon.nova-micro-v1:0", request_body["model"])
+
+    def test_direct_ai_provider_errors_do_not_expose_admin_secret(self) -> None:
+        lambda_module = load_lambda_module()
+        lambda_module.AI_PROVIDER_FUNCTION_ARN = "arn:aws:lambda:ap-southeast-2:123:function:ai-provider"
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "super-secret"
+        lambda_module.AI_REPLY_PROVIDER = "bedrock"
+        lambda_module.AI_REPLY_MODEL = "amazon.nova-micro-v1:0"
+        fake_botocore = types.ModuleType("botocore")
+        fake_botocore_config = FakeBotocoreConfig("botocore.config")
+
+        with patch.dict(
+            sys.modules,
+            {"botocore": fake_botocore, "botocore.config": fake_botocore_config},
+        ):
+            for payload, function_error in (
+                ({"statusCode": 403, "body": "forbidden super-secret"}, None),
+                ({"statusCode": 200, "body": "{}"}, None),
+                ({"statusCode": 200, "body": "{}"}, "Unhandled"),
+            ):
+                fake_client = FakeLambdaClient(payload, function_error=function_error)
+                lambda_module.boto3.client = lambda service_name, client=fake_client, **kwargs: client
+                with self.assertRaises(RuntimeError) as raised:
+                    lambda_module.AiProviderRunClient().create_run({"owner_user_id": "user_1"})
+                self.assertNotIn("super-secret", str(raised.exception))
+                self.assertTrue(fake_client.payload.closed)
+
+            class RaisingLambdaClient:
+                def invoke(self, **kwargs: object) -> dict[str, object]:
+                    raise RuntimeError("transport failure super-secret")
+
+            lambda_module.boto3.client = lambda service_name, **kwargs: RaisingLambdaClient()
+            with self.assertRaises(RuntimeError) as raised:
+                lambda_module.AiProviderRunClient().create_run({"owner_user_id": "user_1"})
+            self.assertNotIn("super-secret", str(raised.exception))
 
     def test_authenticated_profile_create_uses_jwt_identity(self) -> None:
         lambda_module = load_lambda_module()

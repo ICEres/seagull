@@ -163,6 +163,17 @@ variable "ai_reply_model" {
   default     = ""
 }
 
+variable "ai_reply_max_output_tokens" {
+  type        = number
+  description = "Maximum output tokens for each hosted chat reply."
+  default     = 256
+
+  validation {
+    condition     = var.ai_reply_max_output_tokens >= 1 && var.ai_reply_max_output_tokens <= 4096
+    error_message = "ai_reply_max_output_tokens must be between 1 and 4096."
+  }
+}
+
 variable "mcp_dev_token" {
   type        = string
   description = "Optional development bearer token accepted by the hosted MCP connector."

@@ -8,6 +8,11 @@ output "lambda_function_name" {
   value       = aws_lambda_function.api.function_name
 }
 
+output "lambda_function_arn" {
+  description = "AI provider Lambda function ARN."
+  value       = aws_lambda_function.api.arn
+}
+
 output "worker_lambda_function_name" {
   description = "AI provider worker Lambda function name."
   value       = aws_lambda_function.worker.function_name

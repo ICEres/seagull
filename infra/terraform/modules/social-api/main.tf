@@ -692,6 +692,13 @@ resource "aws_iam_role_policy" "lambda" {
           ])
         },
       ],
+      var.ai_provider_function_arn == "" ? [] : [
+        {
+          Effect   = "Allow"
+          Action   = ["lambda:InvokeFunction"]
+          Resource = var.ai_provider_function_arn
+        },
+      ],
       var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.ai_provider_admin_secret_arn == "" && var.lambda_kms_key_arn == "" ? [] : [
         {
           Effect   = "Allow"
@@ -737,8 +744,10 @@ resource "aws_lambda_function" "api" {
         SOCIAL_AUTH_REQUIRED        = "true"
         MESSAGE_API_URL             = var.message_api_url
         AI_PROVIDER_API_URL         = var.ai_provider_api_url
+        AI_PROVIDER_FUNCTION_ARN    = var.ai_provider_function_arn
         AI_REPLY_PROVIDER           = var.ai_reply_provider
         AI_REPLY_MODEL              = var.ai_reply_model
+        AI_REPLY_MAX_OUTPUT_TOKENS  = tostring(var.ai_reply_max_output_tokens)
         HUMAN_PROXY_DOMAIN          = var.human_proxy_domain
         REQUIRE_AGENT_REGISTRY      = var.require_agent_registry ? "true" : "false"
       },

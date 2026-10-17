@@ -103,6 +103,21 @@ MCP_CONNECTOR_ADMIN_SECRET   # optional
 MCP_DEV_TOKEN                # optional; omitted when empty
 ```
 
+Hosted chat replies stay disabled unless the `AI_REPLY_PROVIDER` and
+`AI_REPLY_MODEL` repository variables are both set. When enabled, the Social
+API invokes the AI Provider Lambda through a narrowly scoped IAM permission;
+the API Gateway JWT authorizer is not used for this internal call. Configure
+the real provider and model through the AI Provider admin API, which stores the
+provider key in Secrets Manager. Each chat owner also needs an internal AI
+credit grant before replies can run; usage is charged by actual model tokens.
+`AI_REPLY_MAX_OUTPUT_TOKENS` defaults to 256 and may be lowered or raised up
+to 4096 through the repository variable.
+The public landing AI demo is disabled so model access is granted only to
+approved owners. For Bedrock Global GPT-6 Luna, set `AI_REPLY_PROVIDER=bedrock`
+and `AI_REPLY_MODEL=global.openai.gpt-6-luna`; AWS IAM supplies model access
+without an external provider API key. `AI_PROVIDER_ADMIN_SECRET` is required
+for the internal service call and must be configured as a repository secret.
+
 `MESSAGE_HUB_LEGACY_ROUTE_SECRET` authenticates Social API chat delivery to the
 Message Hub. Terraform stores it at
 `${project}-${environment}-message-hub/runtime/legacy-route-secret` and gives

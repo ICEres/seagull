@@ -34,7 +34,7 @@ locals {
       AI_MODEL_POLICIES_TABLE                   = aws_dynamodb_table.model_policies.name
       AI_PROVIDER_CONFIGS_TABLE                 = aws_dynamodb_table.provider_configs.name
       AI_PROVIDER_PUBLIC_DEMO_ACTOR_AGENT_ID    = "${var.name_prefix}-landing-demo-agent"
-      AI_PROVIDER_PUBLIC_DEMO_ENABLED           = "true"
+      AI_PROVIDER_PUBLIC_DEMO_ENABLED           = "false"
       AI_PROVIDER_PUBLIC_DEMO_INPUT_CHAR_LIMIT  = "360"
       AI_PROVIDER_PUBLIC_DEMO_MAX_OUTPUT_TOKENS = "64"
       AI_PROVIDER_PUBLIC_DEMO_OWNER_USER_ID     = "${var.name_prefix}-landing-demo"

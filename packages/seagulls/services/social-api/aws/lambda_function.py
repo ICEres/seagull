@@ -67,10 +67,11 @@ APP_NAME = os.environ.get("APP_NAME", "seagull-social-api")
 SOCIAL_AUTH_REQUIRED = os.environ.get("SOCIAL_AUTH_REQUIRED", "true").lower() not in {"0", "false", "no"}
 SOCIAL_AUTH_BYPASS_SECRET = secret_env("SOCIAL_AUTH_BYPASS_SECRET")
 AI_PROVIDER_API_URL = os.environ.get("AI_PROVIDER_API_URL", "").strip().rstrip("/")
+AI_PROVIDER_FUNCTION_ARN = os.environ.get("AI_PROVIDER_FUNCTION_ARN", "").strip()
 AI_PROVIDER_ADMIN_SECRET = secret_env("AI_PROVIDER_ADMIN_SECRET")
 AI_REPLY_PROVIDER = os.environ.get("AI_REPLY_PROVIDER", "").strip()
 AI_REPLY_MODEL = os.environ.get("AI_REPLY_MODEL", "").strip()
-AI_REPLY_MAX_OUTPUT_TOKENS = int(os.environ.get("AI_REPLY_MAX_OUTPUT_TOKENS", "512"))
+AI_REPLY_MAX_OUTPUT_TOKENS = int(os.environ.get("AI_REPLY_MAX_OUTPUT_TOKENS", "256"))
 AI_REPLY_TIMEOUT_SECONDS = float(os.environ.get("AI_REPLY_TIMEOUT_SECONDS", "20"))
 
 dynamodb = boto3.resource("dynamodb")
@@ -615,7 +616,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 
 def ai_reply_enabled() -> bool:
-    return bool(AI_PROVIDER_API_URL and AI_PROVIDER_ADMIN_SECRET and AI_REPLY_PROVIDER and AI_REPLY_MODEL)
+    return bool(
+        (AI_PROVIDER_FUNCTION_ARN or AI_PROVIDER_API_URL)
+        and AI_PROVIDER_ADMIN_SECRET
+        and AI_REPLY_PROVIDER
+        and AI_REPLY_MODEL
+    )
 
 
 class AiProviderRunClient:
@@ -630,6 +636,10 @@ class AiProviderRunClient:
             {key: value for key, value in body.items() if value is not None},
             separators=(",", ":"),
         ).encode("utf-8")
+        if AI_PROVIDER_FUNCTION_ARN:
+            return self._create_run_via_lambda(payload)
+        if not AI_PROVIDER_API_URL:
+            raise RuntimeError("AI provider transport is not configured")
         http_request = Request(
             f"{AI_PROVIDER_API_URL}/ai-runs",
             data=payload,
@@ -646,6 +656,63 @@ class AiProviderRunClient:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"AI provider run failed: HTTP {exc.code} {detail}") from exc
         parsed = json.loads(raw or "{}")
+        run = parsed.get("run") if isinstance(parsed, dict) else None
+        if not isinstance(run, dict):
+            raise RuntimeError("AI provider response must include a run object")
+        return run
+
+    def _create_run_via_lambda(self, payload: bytes) -> dict[str, Any]:
+        from botocore.config import Config
+
+        event = {
+            "rawPath": "/ai-runs",
+            "requestContext": {"http": {"method": "POST", "path": "/ai-runs"}},
+            "headers": {
+                "content-type": "application/json",
+                "x-seagull-admin-secret": AI_PROVIDER_ADMIN_SECRET,
+            },
+            "body": payload.decode("utf-8"),
+        }
+        try:
+            invoke_timeout = min(max(AI_REPLY_TIMEOUT_SECONDS, 1.0), 25.0)
+            result = boto3.client(
+                "lambda",
+                config=Config(
+                    connect_timeout=min(3.0, invoke_timeout),
+                    read_timeout=invoke_timeout,
+                    retries={"max_attempts": 0},
+                ),
+            ).invoke(
+                FunctionName=AI_PROVIDER_FUNCTION_ARN,
+                InvocationType="RequestResponse",
+                Payload=json.dumps(event, separators=(",", ":")).encode("utf-8"),
+            )
+        except Exception as exc:
+            raise RuntimeError("AI provider Lambda invocation failed") from exc
+
+        payload_stream = result.get("Payload")
+        try:
+            raw = payload_stream.read() if payload_stream is not None else b""
+        finally:
+            close = getattr(payload_stream, "close", None)
+            if callable(close):
+                close()
+        if result.get("FunctionError"):
+            raise RuntimeError("AI provider Lambda invocation failed")
+        try:
+            response = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw or "{}")
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("AI provider Lambda returned an invalid response") from exc
+        if not isinstance(response, dict):
+            raise RuntimeError("AI provider Lambda returned an invalid response")
+        status_code = response.get("statusCode")
+        if not isinstance(status_code, int) or not 200 <= status_code < 300:
+            raise RuntimeError("AI provider Lambda request failed")
+        response_body = response.get("body")
+        try:
+            parsed = json.loads(response_body or "{}") if isinstance(response_body, str) else response_body
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("AI provider Lambda returned an invalid response") from exc
         run = parsed.get("run") if isinstance(parsed, dict) else None
         if not isinstance(run, dict):
             raise RuntimeError("AI provider response must include a run object")

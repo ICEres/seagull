@@ -1108,7 +1108,7 @@ module "ai_provider" {
   name_prefix             = local.ai_provider_prefix
   lambda_package_path     = data.archive_file.ai_provider.output_path
   lambda_source_code_hash = data.archive_file.ai_provider.output_base64sha256
-  admin_secret_arn        = aws_secretsmanager_secret.ai_provider_admin.arn
+  admin_secret_arn        = aws_secretsmanager_secret_version.ai_provider_admin.secret_id
   jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
   jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
   message_hub_api_url     = "https://${var.message_api_domain}"
@@ -1331,9 +1331,11 @@ module "social_api" {
   message_hub_legacy_route_secret_arn = aws_secretsmanager_secret_version.message_hub_legacy_route.secret_id
 
   ai_provider_api_url          = module.ai_provider.api_endpoint
-  ai_provider_admin_secret_arn = aws_secretsmanager_secret.ai_provider_admin.arn
+  ai_provider_admin_secret_arn = aws_secretsmanager_secret_version.ai_provider_admin.secret_id
+  ai_provider_function_arn     = module.ai_provider.lambda_function_arn
   ai_reply_provider            = var.ai_reply_provider
   ai_reply_model               = var.ai_reply_model
+  ai_reply_max_output_tokens   = var.ai_reply_max_output_tokens
 
   # One network identity per human, in the same namespace as their agents,
   # rather than one proxy per agent domain they happen to chat.

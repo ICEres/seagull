@@ -61,6 +61,12 @@ variable "ai_provider_admin_secret_arn" {
   default     = ""
 }
 
+variable "ai_provider_function_arn" {
+  type        = string
+  description = "Optional AI provider Lambda ARN used for direct internal chat-reply invocation."
+  default     = ""
+}
+
 variable "ai_reply_provider" {
   type        = string
   description = "AI provider name used for chat reply runs (empty disables provider-backed replies)."
@@ -71,6 +77,17 @@ variable "ai_reply_model" {
   type        = string
   description = "AI model used for chat reply runs (empty disables provider-backed replies)."
   default     = ""
+}
+
+variable "ai_reply_max_output_tokens" {
+  type        = number
+  description = "Maximum output tokens for each provider-backed chat reply."
+  default     = 256
+
+  validation {
+    condition     = var.ai_reply_max_output_tokens >= 1 && var.ai_reply_max_output_tokens <= 4096
+    error_message = "ai_reply_max_output_tokens must be between 1 and 4096."
+  }
 }
 
 variable "lambda_kms_key_arn" {

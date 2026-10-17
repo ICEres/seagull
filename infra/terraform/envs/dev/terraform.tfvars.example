@@ -14,6 +14,9 @@ mcp_domain_name    = "mcp.gulls.ai"
 # Actions secrets or local environment-provided TF_VAR_* values.
 # Set TF_VAR_message_hub_legacy_route_secret to a dedicated random credential
 # of at least 32 characters when planning or applying this environment.
+# Set ai_reply_provider and ai_reply_model together to enable hosted AI chat
+# replies; leave both empty to keep that feature disabled.
+# ai_reply_max_output_tokens defaults to 256 (valid range: 1-4096).
 
 api_throttling_burst_limit    = 100
 api_throttling_rate_limit     = 50

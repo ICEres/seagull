@@ -113,10 +113,29 @@ credit grant before replies can run; usage is charged by actual model tokens.
 `AI_REPLY_MAX_OUTPUT_TOKENS` defaults to 256 and may be lowered or raised up
 to 4096 through the repository variable.
 The public landing AI demo is disabled so model access is granted only to
-approved owners. For Bedrock Global GPT-6 Luna, set `AI_REPLY_PROVIDER=bedrock`
-and `AI_REPLY_MODEL=global.openai.gpt-6-luna`; AWS IAM supplies model access
-without an external provider API key. `AI_PROVIDER_ADMIN_SECRET` is required
-for the internal service call and must be configured as a repository secret.
+approved owners. The recommended provider is direct OpenAI: set
+`AI_REPLY_PROVIDER=openai` and `AI_REPLY_MODEL=gpt-6-luna`. Configure the key
+through the deployed AI Provider admin endpoint using an authenticated admin
+request or a direct Lambda invocation:
+
+```text
+POST /admin/ai-providers/openai
+x-seagull-admin-secret: <AI_PROVIDER_ADMIN_SECRET>
+{
+  "admin_actor_id": "<admin-id>",
+  "enabled": true,
+  "allowed_models": ["gpt-6-luna"],
+  "api_key": "<OpenAI API key>"
+}
+```
+
+The endpoint stores the key in AWS Secrets Manager under the AI Provider
+namespace; do not put it in Terraform variables, repository variables, or chat
+messages. `AI_PROVIDER_ADMIN_SECRET` is required for the internal service call
+and must be configured as a repository secret. Bedrock remains an optional
+adapter: when an account has access, use
+`AI_REPLY_PROVIDER=bedrock` with an available inference profile such as
+`global.openai.gpt-6-luna`; no OpenAI key is needed for that path.
 
 `MESSAGE_HUB_LEGACY_ROUTE_SECRET` authenticates Social API chat delivery to the
 Message Hub. Terraform stores it at

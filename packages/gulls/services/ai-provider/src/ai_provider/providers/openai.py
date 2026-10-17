@@ -42,6 +42,8 @@ class OpenAIProviderAdapter:
             "max_output_tokens": request.max_output_tokens,
             "temperature": request.temperature,
         }
+        if request.model == "gpt-6-luna":
+            body["reasoning"] = {"effort": "none"}
         instructions = openai_instructions(request)
         if instructions:
             body["instructions"] = instructions

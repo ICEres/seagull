@@ -81,6 +81,26 @@ class OpenAIProviderAdapterTest(TestCase):
         self.assertEqual([{"role": "user", "content": "Hello"}], body["input"])
         self.assertEqual(12, body["max_output_tokens"])
         self.assertEqual(0.2, body["temperature"])
+        self.assertNotIn("reasoning", body)
+
+    def test_gpt_6_luna_sets_reasoning_none_for_temperature_compatibility(self) -> None:
+        opener = RecordingOpener({"id": "resp_luna", "status": "completed", "output_text": "Hello."})
+        adapter = OpenAIProviderAdapter(api_key_resolver=lambda provider: "sk-test", opener=opener)
+
+        adapter.generate(
+            ProviderRequest(
+                provider="openai",
+                model="gpt-6-luna",
+                actor_agent_id="agent_1",
+                owner_user_id="user_1",
+                input_messages=(ProviderMessage(role="user", content="Hello"),),
+                max_output_tokens=256,
+            )
+        )
+
+        body = json.loads(opener.requests[0].data.decode("utf-8"))  # type: ignore[attr-defined]
+        self.assertEqual({"effort": "none"}, body["reasoning"])
+        self.assertEqual(0.2, body["temperature"])
 
     def test_generate_passes_instructions_and_json_format(self) -> None:
         opener = RecordingOpener({"id": "resp_2", "status": "completed", "output_text": "{}"})

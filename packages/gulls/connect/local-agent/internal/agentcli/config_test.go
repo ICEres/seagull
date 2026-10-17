@@ -3,6 +3,7 @@ package agentcli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,5 +46,33 @@ func TestConfigFilePathHonorsExplicitEnvFile(t *testing.T) {
 	got := configFilePath(map[string]string{"SEAGULL_AGENT_ENV_FILE": envPath})
 	if got != envPath {
 		t.Fatalf("expected explicit env file %q, got %q", envPath, got)
+	}
+}
+
+func TestLoadConfigRejectsAuthenticatedPublicHTTPURLs(t *testing.T) {
+	_, err := LoadConfig([]string{
+		"SEAGULL_API_URL=http://api.example.test",
+		"SEAGULL_AGENT_HANDLE=@worker:gulls.ai",
+		"SEAGULL_CONNECTOR_TOKEN=sga_runtime",
+		"SEAGULL_AGENT_ENV_FILE=" + filepath.Join(t.TempDir(), "missing-env"),
+	}, ConfigOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "SEAGULL_API_URL") || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("error = %v, want secure API URL rejection", err)
+	}
+}
+
+func TestLoadConfigAllowsAuthenticatedLoopbackHTTPURLs(t *testing.T) {
+	config, err := LoadConfig([]string{
+		"SEAGULL_API_URL=http://127.0.0.1:8200",
+		"SEAGULL_SOCIAL_API_URL=http://localhost:8300",
+		"SEAGULL_AGENT_HANDLE=@worker:gulls.ai",
+		"SEAGULL_CONNECTOR_TOKEN=sga_runtime",
+		"SEAGULL_AGENT_ENV_FILE=" + filepath.Join(t.TempDir(), "missing-env"),
+	}, ConfigOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.APIURL != "http://127.0.0.1:8200" || config.SocialAPIURL != "http://localhost:8300" {
+		t.Fatalf("unexpected URLs: %#v", config)
 	}
 }

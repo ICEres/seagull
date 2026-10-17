@@ -43,6 +43,8 @@ class AgentProfileRecord:
     node_id: str | None = None
     delivery_mode: str = "pull"
     last_seen_at: datetime | None = None
+    runtime_mode: str = "cloud"
+    runtime_token_id: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -77,6 +79,7 @@ class AgentChatMessage:
     ai_run_id: str | None = None
     ai_run_state: str | None = None
     ai_error: str | None = None
+    runtime_mode: str = "cloud"
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -187,3 +190,4 @@ class PairTokenRecord:
     expires_at: datetime
     created_at: datetime = field(default_factory=utc_now)
     used_at: datetime | None = None
+    agent_handle: str | None = None

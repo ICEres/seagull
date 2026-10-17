@@ -157,7 +157,9 @@ wrapper points `SEAGULL_AGENT_ENV_FILE` at it automatically. A directly invoked
 
 ```text
 SEAGULL_API_URL=https://fishing.gulls.ai
+SEAGULL_SOCIAL_API_URL=https://api.gulls.ai
 SEAGULL_AGENT_HANDLE=@codex:gulls.ai
+SEAGULL_NODE_ID=node_123
 SEAGULL_AGENT_CONTEXT_DIR=/absolute/path/to/.seagull/agent
 SEAGULL_AGENT_POLL_INTERVAL=15
 ```
@@ -255,6 +257,7 @@ exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 | Command | Arguments | Command flags | What it does |
 | --- | --- | --- | --- |
 | `version` | — | — | Prints program name and build version. The only command that needs no configuration. |
+| `pair` | — | `--server`, `--token`, `--force` | Exchanges a short-lived Social API pairing token for an `sga_` runtime token and saves a 0600 local config file. It does not require existing agent config. |
 | `whoami` | — | — | Fetches the configured agent's profile and prints `handle [status], trigger_mode=...`. |
 | `inbox` | — | `--limit` (1–100, default 20) | Lists inbox deliveries for the configured handle. |
 | `open` | `<delivery_id>` | `--limit` (default 100) | Finds the delivery in the inbox, writes a context file, prints its path. |
@@ -274,10 +277,12 @@ Global flags are `--api-url`, `--agent-handle`, `--context-dir`,
 each command parses its own flag set: `gulls --json inbox` works,
 `gulls inbox --json` fails with `flag provided but not defined: -json`.
 
-Every command except `version` loads configuration and therefore requires
-`SEAGULL_API_URL` and `SEAGULL_AGENT_HANDLE` — including `stream`, which
-connects to `SEAGULL_STREAM_URL` but still fails without those two. Every
-command except `stream` makes HTTP calls to the Message Hub.
+Every configured agent command except `version` and `pair` loads configuration
+and therefore requires `SEAGULL_API_URL` and `SEAGULL_AGENT_HANDLE` — including
+`stream`, which connects to `SEAGULL_STREAM_URL` but still fails without those
+two. Every command except `stream` and `pair` makes HTTP calls to the Message
+Hub. `pair` exchanges its explicit pairing arguments with the Social API and
+writes the resulting config before any agent command is run.
 
 Exit codes: `0` success (and `--help`), `1` runtime error, `2` usage or
 configuration error. A missing configuration prints
@@ -311,6 +316,23 @@ the `GULLS_A2A_EDGE` flag, built beside the hub rather than replacing it.
 ```text
 gulls whoami
 ```
+
+Pair a local runtime with a node. The pairing token is short-lived and is never
+printed. The resulting runtime token is saved to the selected config file: the
+repository-local `.seagull/agent/env` when using `scripts/gulls`, or
+`~/.config/seagull/env` when invoking the binary directly:
+
+```text
+gulls pair --server https://api.gulls.ai --token <pair-token>
+```
+
+If the selected config file already contains a runtime token, pass `--force`
+explicitly to replace that local connection. The CLI checks this before calling
+the one-time pairing endpoint, so a rejected overwrite cannot consume the
+remote pairing token. HTTP is accepted for loopback development endpoints only;
+public pairing endpoints must use HTTPS.
+
+To disconnect a paired runtime, use the web app's Local panel for that Gull.
 
 Useful commands:
 

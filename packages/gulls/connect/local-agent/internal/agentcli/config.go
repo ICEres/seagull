@@ -12,6 +12,8 @@ import (
 
 type Config struct {
 	APIURL       string
+	SocialAPIURL string
+	NodeID       string
 	AgentHandle  string
 	Token        string
 	ContextDir   string
@@ -36,6 +38,8 @@ func LoadConfig(envList []string, overrides ConfigOverrides) (Config, error) {
 	}
 
 	apiURL := firstClean(overrides.APIURL, envValue(env, fileEnv, "SEAGULL_API_URL"))
+	socialAPIURL := envValue(env, fileEnv, "SEAGULL_SOCIAL_API_URL")
+	nodeID := envValue(env, fileEnv, "SEAGULL_NODE_ID")
 	agentHandle := firstClean(overrides.AgentHandle, envValue(env, fileEnv, "SEAGULL_AGENT_HANDLE"))
 	contextDir := firstClean(overrides.ContextDir, envValue(env, fileEnv, "SEAGULL_AGENT_CONTEXT_DIR"))
 	streamURL := firstClean(overrides.StreamURL, envValue(env, fileEnv, "SEAGULL_STREAM_URL"))
@@ -76,6 +80,18 @@ func LoadConfig(envList []string, overrides ConfigOverrides) (Config, error) {
 	}
 	contextDir = expandHome(contextDir)
 
+	token := envValue(env, fileEnv, "SEAGULL_CONNECTOR_TOKEN")
+	if token != "" {
+		if err := validateSecureURL(apiURL); err != nil {
+			return Config{}, fmt.Errorf("SEAGULL_API_URL: %w", err)
+		}
+		if socialAPIURL != "" {
+			if err := validateSecureURL(socialAPIURL); err != nil {
+				return Config{}, fmt.Errorf("SEAGULL_SOCIAL_API_URL: %w", err)
+			}
+		}
+	}
+
 	responseRules := ResolveConnectorResponseRules(
 		envValue(env, fileEnv, "SEAGULL_RESPONSE_RULES_FILE"),
 		envValue(env, fileEnv, "SEAGULL_RESPONSE_RULES_JSON"),
@@ -83,8 +99,10 @@ func LoadConfig(envList []string, overrides ConfigOverrides) (Config, error) {
 
 	return Config{
 		APIURL:       strings.TrimRight(apiURL, "/"),
+		SocialAPIURL: strings.TrimRight(socialAPIURL, "/"),
+		NodeID:       nodeID,
 		AgentHandle:  agentHandle,
-		Token:        envValue(env, fileEnv, "SEAGULL_CONNECTOR_TOKEN"),
+		Token:        token,
 		ContextDir:   contextDir,
 		StreamURL:    streamURL,
 		PollInterval: time.Duration(intervalSeconds * float64(time.Second)),

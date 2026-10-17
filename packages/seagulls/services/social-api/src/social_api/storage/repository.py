@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -114,6 +115,9 @@ class SocialRepository(Protocol):
 
     def get_pair_token(self, pair_token: str) -> PairTokenRecord | None:
         """Return a node pairing token."""
+
+    def consume_pair_token(self, pair_token: str, now: datetime) -> bool:
+        """Atomically consume an unexpired, unused pairing token."""
 
     def put_room(self, room: Room) -> None:
         """Create or replace a room."""

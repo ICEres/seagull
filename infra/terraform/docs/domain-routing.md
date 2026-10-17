@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-01.
+Last updated: 2026-10-17.
 
 Project domain:
 
@@ -156,6 +156,55 @@ gulls.ai
 
 The CloudFront viewer certificate is managed by ACM in `us-east-1`; the
 regional API certificate for `fishing.gulls.ai` remains in `ap-southeast-2`.
+
+## Internal Split-DNS Routing
+
+The deployed public path remains unchanged:
+
+```text
+public fishing.gulls.ai
+-> AWS API Gateway custom domain
+```
+
+The private network uses split DNS for `fishing.gulls.ai`, resolving it to the
+internal Traefik host at `<private-ip>`. Traefik now has a narrow TCP
+passthrough route on its internal `websecure` entrypoint:
+
+```text
+internal fishing.gulls.ai
+-> Traefik TLS passthrough
+-> <api-id>.execute-api.<region>.amazonaws.com:443
+```
+
+TLS passthrough is intentional. The client SNI remains `fishing.gulls.ai`, so
+the AWS endpoint returns the existing Amazon-issued certificate for that name;
+Traefik does not terminate this API connection with its default certificate.
+The route is internal-only and does not use `websecure-pub`, change public DNS,
+or alter the AWS API Gateway custom domain.
+
+The remote dynamic file is:
+
+```text
+<traefik-config-dir>/fishing-gulls-internal.yml
+```
+
+The pre-change file is preserved under a timestamped directory in:
+
+```text
+~/traefik/backups/fishing-gulls-before-20261017T145331Z/
+```
+
+Rollback is deleting the dynamic route file; Traefik watches the directory and
+will remove the route on reload. The public AWS endpoint remains the fallback.
+
+Verification on 2026-10-17:
+
+- Internal DNS: `fishing.gulls.ai -> <private-ip>`.
+- Public DNS remains on AWS API Gateway.
+- Internal and public `GET /agent/me` both return the expected `401` JSON
+  response when no bearer token is supplied.
+- Internal and public TLS both present `CN=fishing.gulls.ai`, issued by
+  Amazon RSA 2048 M04.
 
 ## Recommended Next Step
 

@@ -83,6 +83,15 @@ function setNativeValue(element: HTMLTextAreaElement, value: string): void {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function setNativeSelect(element: HTMLSelectElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  if (!setter) {
+    throw new Error("Native select setter unavailable.");
+  }
+  setter.call(element, value);
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -370,5 +379,76 @@ describe("FlockPage per-gull prompts", () => {
     });
     await waitForText("Reply prompt");
     expect(urls[0]).toContain("owner_user_id=user_2");
+  });
+
+  it("keeps local runtime settings owner-only and persists the selected mode", async () => {
+    const requests: Array<{ method: string; url: string; body?: string }> = [];
+    await renderFlock({
+      profiles: [agent(), agent({ agent_id: "agent_2", owner_user_id: "user_2", handle: "@other:seagull.local", display_name: "Other" })],
+      fetchImpl: async (input, init) => {
+        requests.push({ method: init?.method ?? "GET", url: String(input), body: init?.body as string | undefined });
+        if ((init?.method ?? "GET") === "PUT") {
+          return response({ runtime: { mode: "local", node_id: "node_1", connected: false, last_seen_at: null } });
+        }
+        return response({ runtime: { mode: "cloud", node_id: null, connected: false, last_seen_at: null } });
+      },
+    });
+
+    expect(articleFor("Other").textContent).not.toContain("Local");
+    await act(async () => {
+      button("Local", articleFor("Researcher")).click();
+    });
+    await waitForText("Cloud — use the hosted AI runtime");
+    const select = container?.querySelector('section[aria-label^="Local connection"] select');
+    if (!(select instanceof HTMLSelectElement)) throw new Error("Runtime mode select not found.");
+    setNativeSelect(select, "local");
+    await waitForText("Waiting for your local computer to connect.");
+    expect(requests.map((request) => request.method)).toEqual(["GET", "PUT"]);
+    expect(JSON.parse(requests[1].body ?? "{}")).toEqual({ mode: "local" });
+  });
+
+  it("shows a one-time local pairing command and retries failed preparation", async () => {
+    let pairAttempts = 0;
+    await renderFlock({
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url.includes("/runtime")) {
+          return response({ runtime: { mode: "cloud", node_id: null, connected: false, last_seen_at: null } });
+        }
+        if (url.includes("local-pair-tokens")) {
+          pairAttempts += 1;
+          if (pairAttempts === 1) return response({ error: "temporarily unavailable" }, 503);
+          return response({
+            pair_token: {
+              pair_token: pairAttempts === 2 ? "pair_once" : "pair_twice",
+              expires_at: pairAttempts === 2 ? "2026-10-17T12:00:00Z" : "2026-10-17T12:10:00Z",
+            },
+            social_api_url: "https://sea.gulls.ai/api",
+          });
+        }
+        return response({});
+      },
+    });
+
+    await act(async () => {
+      button("Local", articleFor("Researcher")).click();
+    });
+    await waitForText("Cloud — use the hosted AI runtime");
+    expect(container?.textContent).toContain("Pairing does not change the active reply mode");
+    await act(async () => {
+      button("Create pairing command", articleFor("Researcher")).click();
+    });
+    await waitForText("Could not prepare local pairing.");
+    await act(async () => {
+      button("Try again", articleFor("Researcher")).click();
+    });
+    await waitForText("gulls pair --server https://sea.gulls.ai/api --token pair_once");
+    expect(pairAttempts).toBe(2);
+    expect(container?.textContent).toContain("Expires 2026-10-17T12:00:00Z");
+    await act(async () => {
+      button("Create new command", articleFor("Researcher")).click();
+    });
+    await waitForText("gulls pair --server https://sea.gulls.ai/api --token pair_twice");
+    expect(pairAttempts).toBe(3);
   });
 });

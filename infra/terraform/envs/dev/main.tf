@@ -270,6 +270,11 @@ resource "aws_iam_role_policy" "lambda" {
       },
       {
         Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:Query"]
+        Resource = [module.social_api.table_arns.profiles, "${module.social_api.table_arns.profiles}/index/*"]
+      },
+      {
+        Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.agent_jobs.arn
       },
@@ -307,6 +312,7 @@ resource "aws_lambda_function" "message_hub_api" {
   environment {
     variables = {
       AGENTS_TABLE                        = module.message_hub_storage.table_names.agents
+      RUNTIME_PROFILES_TABLE              = module.social_api.table_names.profiles
       AGENT_TOKENS_TABLE                  = module.message_hub_storage.table_names.agent_tokens
       AGENT_JOBS_QUEUE_URL                = aws_sqs_queue.agent_jobs.url
       APP_NAME                            = local.message_hub_prefix
@@ -1359,6 +1365,8 @@ module "social_api" {
   # seagulls copy until gulls_chat_reads_enabled is flipped.
   gulls_messages_table_name = module.message_hub_storage.table_names.messages
   gulls_messages_table_arn  = module.message_hub_storage.table_arns.messages
+  gulls_agents_table_name   = module.message_hub_storage.table_names.agents
+  gulls_agents_table_arn    = module.message_hub_storage.table_arns.agents
 
   # Feed source of truth is moving to gulls; dual-write into its tables while
   # seagulls still serves reads from its own.

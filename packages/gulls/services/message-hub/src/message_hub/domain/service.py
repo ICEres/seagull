@@ -96,6 +96,9 @@ class InvalidTaskTransitionError(MessageHubError):
     """Raised when a task state change is not a valid lifecycle transition."""
 
 
+RUNTIME_MODES = frozenset({"cloud", "local", "manual"})
+
+
 # Settlement states credit the worker's reputation and release funds, so only the
 # requester (the counterparty) may set them; otherwise a worker could self-award
 # acceptance/completion and inflate its own reputation.
@@ -758,8 +761,12 @@ class MessageHubService:
         visibility: str = "direct",
         thread_id: str | None = None,
         idempotency_key: str | None = None,
+        runtime_mode: str | None = None,
         safety_evaluator: SafetyEvaluator | None = None,
     ) -> SendMessageResult:
+        normalized_runtime_mode = normalized_optional_string(runtime_mode)
+        if normalized_runtime_mode is not None and normalized_runtime_mode not in RUNTIME_MODES:
+            raise InvalidMessageError("runtime_mode must be cloud, local, or manual")
         message_refs = tuple(normalize_message_ref(ref) for ref in refs)
         normalized_content_ref = normalized_optional_string(content_ref)
         if content is None and normalized_content_ref is None and not message_refs:
@@ -823,6 +830,7 @@ class MessageHubService:
             content_ref=stored_content_ref,
             refs=message_refs,
             safety_status=safety_status_for(safety_decision),
+            runtime_mode=normalized_runtime_mode,
             created_at=now,
         )
 
@@ -2421,6 +2429,7 @@ class MessageHubService:
         action_runtime: str = "cloud",
         requires_approval: bool = True,
         note: str | None = None,
+        runtime_mode: str | None = None,
     ) -> AgentDecisionResult:
         delivery = self._require_delivery_for_recipient(delivery_id, agent_handle)
         self._require_delivery_not_held(delivery)
@@ -2452,6 +2461,7 @@ class MessageHubService:
                 intent="reply",
                 visibility="direct",
                 thread_id=delivery.thread_id,
+                runtime_mode=runtime_mode,
             )
             updated = replace(
                 delivery,

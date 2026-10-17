@@ -80,6 +80,12 @@ class NullAgentRegistry:
         return None
 
 
+class LocalRuntimeHub(Protocol):
+    def issue_token(self, *, handle: str, owner_user_id: str, node_id: str) -> dict[str, Any]: ...
+
+    def revoke_token(self, token_id: str) -> None: ...
+
+
 class SocialApiError(Exception):
     """Base error for social API domain failures."""
 
@@ -625,6 +631,7 @@ class SocialApiService:
     ) -> AgentChatMessage:
         chat = self._require_agent_chat(chat_id)
         self._require_chat_owner(owner_user_id, chat)
+        profile = self.get_owned_profile(owner_user_id=owner_user_id, agent_handle=chat.agent_handle)
         now = self._clock()
         message = AgentChatMessage(
             chat_message_id=self._new_id("chatmsg"),
@@ -632,6 +639,7 @@ class SocialApiService:
             owner_user_id=owner_user_id,
             sender_type="human",
             content=normalized_required(content, "content"),
+            runtime_mode=profile.runtime_mode,
             created_at=now,
             updated_at=now,
         )
@@ -647,10 +655,37 @@ class SocialApiService:
     ) -> tuple[AgentChatMessage, ...]:
         chat = self._require_agent_chat(chat_id)
         self._require_chat_owner(owner_user_id, chat)
+        self._sync_local_chat_replies(chat)
         messages = self._repository.list_agent_chat_messages_by_chat(chat.chat_id)
         # Which messages, in what order, stays a seagulls projection; what each
         # one says comes from the gulls Inbox once a source is configured.
         return apply_chat_source(messages, self._chat_source)
+
+    def _sync_local_chat_replies(self, chat: AgentChatSession) -> None:
+        reader = getattr(self._chat_source, "replies_for", None)
+        if reader is None or chat.hub_thread_id is None or chat.sender_handle is None:
+            return
+        existing = self._repository.list_agent_chat_messages_by_chat(chat.chat_id)
+        known = {message.hub_message_id for message in existing if message.hub_message_id}
+        for reply in reader(chat.hub_thread_id, chat.agent_handle, chat.sender_handle):
+            if reply.message_id in known:
+                continue
+            self._repository.put_agent_chat_message(
+                AgentChatMessage(
+                    chat_message_id=f"chatmsg_hub_{reply.message_id}",
+                    chat_id=chat.chat_id,
+                    owner_user_id=chat.owner_user_id,
+                    sender_type="agent",
+                    content=reply.content,
+                    hub_message_id=reply.message_id,
+                    hub_thread_id=chat.hub_thread_id,
+                    delivery_status="delivered",
+                    runtime_mode="local",
+                    created_at=reply.created_at,
+                    updated_at=reply.created_at,
+                )
+            )
+            known.add(reply.message_id)
 
     def record_agent_chat_message_delivery(
         self,
@@ -732,6 +767,105 @@ class SocialApiService:
         )
         self._repository.put_agent_chat_message(updated)
         return updated
+
+    def get_agent_runtime(self, *, owner_user_id: str, agent_handle: str) -> dict[str, Any]:
+        profile = self.get_owned_profile(owner_user_id=owner_user_id, agent_handle=agent_handle)
+        node = self._repository.get_node(profile.node_id) if profile.node_id else None
+        last_seen = None if node is None else node.last_seen_at
+        connected = bool(
+            profile.runtime_token_id and last_seen
+            and (self._clock() - last_seen).total_seconds() < 90
+        )
+        return {
+            "mode": profile.runtime_mode,
+            "node_id": profile.node_id,
+            "connected": connected,
+            "last_seen_at": None if last_seen is None else last_seen.isoformat(),
+        }
+
+    def set_agent_runtime(self, *, owner_user_id: str, agent_handle: str, mode: str) -> dict[str, Any]:
+        if mode not in {"cloud", "local", "manual"}:
+            raise InvalidSocialRequestError("mode must be cloud, local, or manual")
+        profile = self.get_owned_profile(owner_user_id=owner_user_id, agent_handle=agent_handle)
+        self._repository.put_agent_profile(replace(profile, runtime_mode=mode, updated_at=self._clock()))
+        return self.get_agent_runtime(owner_user_id=owner_user_id, agent_handle=agent_handle)
+
+    def create_local_pair_token(self, *, owner_user_id: str, agent_handle: str) -> PairTokenRecord:
+        profile = self.get_owned_profile(owner_user_id=owner_user_id, agent_handle=agent_handle)
+        now = self._clock()
+        node = NodeRecord(
+            node_id=self._new_id("node"), owner_user_id=owner_user_id,
+            node_type="lan", status="offline", created_at=now, updated_at=now,
+        )
+        self._repository.put_node(node)
+        token = PairTokenRecord(
+            pair_token=self._new_id("pair"), node_id=node.node_id,
+            owner_user_id=owner_user_id, agent_handle=profile.handle,
+            expires_at=now + timedelta(minutes=10), created_at=now,
+        )
+        self._repository.put_pair_token(token)
+        return token
+
+    def pair_local_runtime(self, *, pair_token: str, hub: LocalRuntimeHub) -> dict[str, Any]:
+        token = self._repository.get_pair_token(normalized_required(pair_token, "pair_token"))
+        now = self._clock()
+        if token is None or token.agent_handle is None or token.used_at is not None or token.expires_at <= now:
+            raise InvalidSocialRequestError("pair_token is invalid, expired, or already used")
+        profile = self.get_owned_profile(owner_user_id=token.owner_user_id, agent_handle=token.agent_handle)
+        node = self.get_node(owner_user_id=token.owner_user_id, node_id=token.node_id)
+        if not self._repository.consume_pair_token(token.pair_token, now):
+            raise InvalidSocialRequestError("pair_token is invalid, expired, or already used")
+        try:
+            issued = hub.issue_token(handle=profile.handle, owner_user_id=profile.owner_user_id, node_id=node.node_id)
+            raw_token = issued.get("token")
+            record = issued.get("record", {})
+            token_id = record.get("token_id") if isinstance(record, dict) else None
+            if not isinstance(raw_token, str) or not raw_token.startswith("sga_") or not isinstance(token_id, str):
+                raise ValueError("invalid local runtime credential response")
+        except Exception as exc:
+            raise AgentRegistryUnavailableError("Local pairing failed. Generate a new pairing code and try again.") from exc
+        # Read again after the remote call so pairing preserves a mode change
+        # the owner made while the credential was being created.
+        profile = self.get_owned_profile(owner_user_id=token.owner_user_id, agent_handle=token.agent_handle)
+        previous_token_id = profile.runtime_token_id
+        self._repository.put_agent_profile(replace(
+            profile, node_id=node.node_id, runtime_token_id=token_id, updated_at=now,
+        ))
+        self._repository.put_node(replace(node, agent_count=1, status="online", last_seen_at=now, updated_at=now))
+        if previous_token_id:
+            try:
+                hub.revoke_token(previous_token_id)
+            except Exception:
+                # The hub also checks the active profile binding on every
+                # node-token request, so an old binding has already lost access.
+                LOGGER.warning("could not revoke replaced local runtime credential")
+        return {"agent_handle": profile.handle, "node_id": node.node_id, "token": raw_token, "token_id": token_id}
+
+    def heartbeat_local_runtime(self, principal: dict[str, Any]) -> None:
+        owner = principal.get("owner_user_id")
+        handle = principal.get("agent_handle")
+        if not isinstance(owner, str) or not isinstance(handle, str):
+            raise PermissionDeniedError("a paired local runtime credential is required")
+        profile = self.get_owned_profile(owner_user_id=owner, agent_handle=handle)
+        if not profile.runtime_token_id or profile.runtime_token_id != principal.get("token_id") or profile.node_id != principal.get("node_id"):
+            raise PermissionDeniedError("local runtime is disconnected or replaced")
+        node = self.get_node(owner_user_id=owner, node_id=profile.node_id)
+        now = self._clock()
+        self._repository.put_node(replace(node, status="online", last_seen_at=now, updated_at=now))
+
+    def disconnect_local_runtime(self, *, owner_user_id: str, agent_handle: str, hub: LocalRuntimeHub) -> dict[str, Any]:
+        profile = self.get_owned_profile(owner_user_id=owner_user_id, agent_handle=agent_handle)
+        if profile.runtime_token_id:
+            try:
+                hub.revoke_token(profile.runtime_token_id)
+            except Exception as exc:
+                raise AgentRegistryUnavailableError("Local disconnect is temporarily unavailable. Try again.") from exc
+        self._repository.put_agent_profile(replace(
+            profile, node_id=None, runtime_token_id=None,
+            runtime_mode="manual" if profile.runtime_mode == "local" else profile.runtime_mode,
+            updated_at=self._clock(),
+        ))
+        return self.get_agent_runtime(owner_user_id=owner_user_id, agent_handle=agent_handle)
 
     def create_node(
         self,

@@ -183,6 +183,18 @@ variable "gulls_messages_table_name" {
   default     = ""
 }
 
+variable "gulls_agents_table_name" {
+  description = "Hub agents table used to verify senders of local chat replies."
+  type        = string
+  default     = ""
+}
+
+variable "gulls_agents_table_arn" {
+  description = "Read-only access to hub agent identities for local chat reconciliation."
+  type        = string
+  default     = ""
+}
+
 variable "gulls_chat_reads_enabled" {
   description = <<-EOT
     Serve chat message content from the gulls Inbox instead of the stored

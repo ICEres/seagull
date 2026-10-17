@@ -115,6 +115,25 @@ class FailingGatewayOpener:
         raise URLError("safety gateway is down")
 
 
+class FakeRuntimeProfilesTable:
+    def __init__(self, *items: dict[str, object]) -> None:
+        self.items = {str(item["agent_id"]): dict(item) for item in items}
+        self.queries = 0
+        self.strong_reads = 0
+
+    def query(self, **kwargs: object) -> dict[str, object]:
+        self.queries += 1
+        handle = kwargs.get("KeyConditionExpression")
+        if not isinstance(handle, str):
+            return {"Items": list(self.items.values())[:1]}
+        return {"Items": [item for item in self.items.values() if item.get("handle") == handle]}
+
+    def get_item(self, **kwargs: object) -> dict[str, object]:
+        self.strong_reads += int(kwargs.get("ConsistentRead") is True)
+        key = kwargs.get("Key") or {}
+        return {"Item": self.items.get(str(key.get("agent_id")))}
+
+
 class RecordingEvaluator:
     """Plain recording SafetyEvaluator that allows everything."""
 
@@ -562,6 +581,206 @@ class MessageHubLambdaAuthTest(LambdaAdapterTestCase):
         self.assertEqual(409, second["statusCode"])
         self.assertEqual("conflict", response_body(second)["error"])
         self.assertNotIn("token", response_body(second))
+
+    def test_internal_token_issuance_requires_legacy_secret_and_supports_revoke(self) -> None:
+        body = {
+            "handle": "@sender:seagull.local",
+            "owner_user_id": "user_1",
+            "node_id": "node_1",
+            "name": "local runtime",
+            "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+        }
+
+        missing = self.handle("POST", "/internal/agent-tokens", body)
+        self.assertEqual(401, missing["statusCode"])
+
+        wrong = self.handle(
+            "POST",
+            "/internal/agent-tokens",
+            body,
+            headers={"x-seagull-legacy-secret": "wrong"},
+        )
+        self.assertEqual(401, wrong["statusCode"])
+
+        with patch.dict(os.environ, {"MESSAGE_HUB_LEGACY_ROUTE_SECRET": "internal-secret"}):
+            LAMBDA._RUNTIME["secrets"].clear()  # noqa: SLF001 - reset cached test secret
+            issued = self.handle(
+                "POST",
+                "/internal/agent-tokens",
+                body,
+                headers={"x-seagull-legacy-secret": "internal-secret"},
+            )
+            self.assertEqual(201, issued["statusCode"])
+            issued_body = response_body(issued)
+            token = str(issued_body["token"])
+            token_id = str(issued_body["record"]["token_id"])
+            self.assertTrue(token.startswith("sga_"))
+            self.assertEqual("node_1", issued_body["record"]["node_id"])
+            self.assertEqual("user_1", issued_body["record"]["owner_user_id"])
+            self.assertNotIn("token_hash", issued_body["record"])
+            profiles = FakeRuntimeProfilesTable(
+                {
+                    "agent_id": issued_body["agent"]["agent_id"],
+                    "handle": "@sender:seagull.local",
+                    "owner_user_id": "user_1",
+                    "node_id": "node_1",
+                    "runtime_token_id": token_id,
+                    "runtime_mode": "local",
+                    "status": "active",
+                }
+            )
+            LAMBDA._RUNTIME["runtime_profiles_table"] = profiles  # noqa: SLF001
+
+            me = self.handle("GET", "/agent/me", headers={"authorization": f"Bearer {token}"})
+            self.assertEqual(200, me["statusCode"])
+            self.assertEqual(1, profiles.strong_reads)
+
+            revoked = self.handle(
+                "POST",
+                f"/internal/agent-tokens/{token_id}/revoke",
+                headers={"x-seagull-legacy-secret": "internal-secret"},
+            )
+            self.assertEqual(200, revoked["statusCode"])
+            self.assertIsNotNone(response_body(revoked)["record"]["revoked_at"])
+
+            after_revoke = self.handle("GET", "/agent/me", headers={"authorization": f"Bearer {token}"})
+            self.assertEqual(401, after_revoke["statusCode"])
+
+    def test_agent_thread_routes_derive_requester_and_enforce_membership(self) -> None:
+        self.gateway.responses.append(decision("decision_thread", "allow"))
+        sent = self.handle(
+            "POST",
+            "/messages",
+            {
+                "sender_handle": "@sender:seagull.local",
+                "recipient_handles": ["@recipient:seagull.local"],
+                "content": "hello",
+            },
+        )
+        self.assertEqual(201, sent["statusCode"])
+        thread_id = str(response_body(sent)["thread"]["thread_id"])
+        with patch.dict(os.environ, {"MESSAGE_HUB_LEGACY_ROUTE_SECRET": "internal-secret"}):
+            LAMBDA._RUNTIME["secrets"].clear()  # noqa: SLF001 - reset cached test secret
+            issued = self.handle(
+                "POST",
+                "/internal/agent-tokens",
+                {"handle": "@recipient:seagull.local", "scopes": ["agent:read"]},
+                headers={"x-seagull-legacy-secret": "internal-secret"},
+            )
+        self.assertEqual(201, issued["statusCode"])
+        recipient_token = str(response_body(issued)["token"])
+        other_token = self.issue_agent_token("@other:seagull.local", ["agent:read"])
+
+        thread = self.handle(
+            "GET",
+            f"/agent/threads/{thread_id}",
+            headers={"authorization": f"Bearer {recipient_token}"},
+        )
+        self.assertEqual(200, thread["statusCode"])
+        context = self.handle(
+            "GET",
+            f"/agent/threads/{thread_id}/context",
+            headers={"authorization": f"Bearer {recipient_token}"},
+        )
+        self.assertEqual(200, context["statusCode"])
+
+        denied = self.handle(
+            "GET",
+            f"/agent/threads/{thread_id}",
+            headers={"authorization": f"Bearer {other_token}"},
+        )
+        self.assertEqual(403, denied["statusCode"])
+
+    def test_node_bound_agent_cannot_reply_to_cloud_owned_delivery(self) -> None:
+        self.gateway.responses.append(decision("decision_cloud", "allow"))
+        sent = self.handle(
+            "POST",
+            "/messages",
+            {
+                "sender_handle": "@sender:seagull.local",
+                "recipient_handles": ["@recipient:seagull.local"],
+                "content": "cloud-owned",
+                "runtime_mode": "cloud",
+            },
+        )
+        self.assertEqual(201, sent["statusCode"])
+        sent_body = response_body(sent)
+        self.assertEqual("cloud", sent_body["message"]["runtime_mode"])
+        delivery_id = str(sent_body["deliveries"][0]["delivery_id"])
+
+        with patch.dict(os.environ, {"MESSAGE_HUB_LEGACY_ROUTE_SECRET": "internal-secret"}):
+            LAMBDA._RUNTIME["secrets"].clear()  # noqa: SLF001 - reset cached test secret
+            issued = self.handle(
+                "POST",
+                "/internal/agent-tokens",
+                {
+                    "handle": "@recipient:seagull.local",
+                    "node_id": "node_1",
+                    "scopes": ["agent:post"],
+                },
+                headers={"x-seagull-legacy-secret": "internal-secret"},
+            )
+        token = str(response_body(issued)["token"])
+        issued_body = response_body(issued)
+        LAMBDA._RUNTIME["runtime_profiles_table"] = FakeRuntimeProfilesTable(  # noqa: SLF001
+            {
+                "agent_id": issued_body["agent"]["agent_id"],
+                "handle": "@recipient:seagull.local",
+                "owner_user_id": None,
+                "node_id": "node_1",
+                "runtime_token_id": issued_body["record"]["token_id"],
+                "runtime_mode": "cloud",
+                "status": "active",
+            }
+        )
+        rejected = self.handle(
+            "POST",
+            f"/agent/deliveries/{delivery_id}/decision",
+            {"decision": "reply", "content": "local reply"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(409, rejected["statusCode"])
+        self.assertEqual("runtime_conflict", response_body(rejected)["error"])
+
+    def test_node_binding_rejects_replaced_token_and_cloud_mode_send(self) -> None:
+        self.register_agent("@bound:seagull.local")
+        with patch.dict(os.environ, {"MESSAGE_HUB_LEGACY_ROUTE_SECRET": "internal-secret"}):
+            LAMBDA._RUNTIME["secrets"].clear()  # noqa: SLF001 - reset cached test secret
+            issued = self.handle(
+                "POST",
+                "/internal/agent-tokens",
+                {"handle": "@bound:seagull.local", "owner_user_id": "owner_1", "node_id": "node_1", "scopes": ["agent:read", "agent:post"]},
+                headers={"x-seagull-legacy-secret": "internal-secret"},
+            )
+        self.assertEqual(201, issued["statusCode"])
+        body = response_body(issued)
+        token = str(body["token"])
+        profiles = FakeRuntimeProfilesTable(
+            {
+                "agent_id": body["agent"]["agent_id"],
+                "handle": "@bound:seagull.local",
+                "owner_user_id": "owner_1",
+                "node_id": "node_1",
+                "runtime_token_id": "replaced-token",
+                "runtime_mode": "local",
+                "status": "active",
+            }
+        )
+        LAMBDA._RUNTIME["runtime_profiles_table"] = profiles  # noqa: SLF001
+        rejected = self.handle("GET", "/agent/me", headers={"authorization": f"Bearer {token}"})
+        self.assertEqual(403, rejected["statusCode"])
+        self.assertEqual(1, profiles.strong_reads)
+
+        profiles.items[body["agent"]["agent_id"]]["runtime_token_id"] = body["record"]["token_id"]
+        profiles.items[body["agent"]["agent_id"]]["runtime_mode"] = "cloud"
+        rejected_send = self.handle(
+            "POST",
+            "/agent/posts",
+            {"recipient_handles": ["@recipient:seagull.local"], "content": "local post"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(409, rejected_send["statusCode"])
+        self.assertEqual("runtime_conflict", response_body(rejected_send)["error"])
 
     def test_legacy_handle_inbox_requires_matching_agent_token(self) -> None:
         sender_token = self.issue_agent_token("@sender2:seagull.local", ["agent:inbox"])

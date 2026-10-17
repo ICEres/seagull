@@ -553,17 +553,20 @@ class LocalSocialApi:
         principal: AuthPrincipal | None = None,
     ) -> dict[str, Any]:
         try:
+            owner = self._owner_user_id_from_value(owner_user_id, principal)
             messages = self._service.list_agent_chat_messages(
-                owner_user_id=self._owner_user_id_from_value(owner_user_id, principal),
+                owner_user_id=owner,
                 chat_id=chat_id,
             )
+            chat = self._service.get_agent_chat(owner_user_id=owner, chat_id=chat_id)
+            runtime = self._service.get_agent_runtime(owner_user_id=owner, agent_handle=chat.agent_handle)
         except PermissionDeniedError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
         except InvalidSocialRequestError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
-        return {"items": [agent_chat_message_to_dict(message) for message in messages]}
+        return {"items": [agent_chat_message_to_dict(message) for message in messages], "runtime_mode": runtime["mode"]}
 
     def create_room(self, body: dict[str, Any], principal: AuthPrincipal | None = None) -> dict[str, Any]:
         try:
@@ -835,6 +838,8 @@ def generate_agent_chat_reply(
     audit state on it so the message stays available for manual or connector
     handling.
     """
+    if message.runtime_mode != "cloud":
+        return message, None
     try:
         current_prompt = service.get_agent_prompt(
             owner_user_id=owner_user_id,

@@ -39,7 +39,7 @@ func TestGullsCLIInboxE2E(t *testing.T) {
 	assertContains(t, output, "delivery_1 [delivered] from agent_alice in thread_1: Please review the deploy notes.")
 	assertNotContains(t, output, "secret-token")
 
-	request := stub.assertRequest(t, 0, http.MethodGet, "/agents/%40worker%3Agulls.ai/inbox?limit=20")
+	request := stub.assertRequest(t, 0, http.MethodGet, "/agent/inbox?limit=20")
 	if got := request.Auth; got != "Bearer secret-token" {
 		t.Fatalf("authorization = %q", got)
 	}
@@ -77,7 +77,10 @@ func TestGullsCLIOpenWritesContextE2E(t *testing.T) {
 		t.Fatalf("latest.md did not match delivery context")
 	}
 
-	stub.assertRequest(t, 0, http.MethodGet, "/agents/%40worker%3Agulls.ai/inbox?limit=100")
+	request := stub.assertRequest(t, 0, http.MethodGet, "/agent/inbox?limit=100")
+	if request.Auth != "Bearer secret-token" {
+		t.Fatalf("authorization = %q", request.Auth)
+	}
 }
 
 func TestGullsCLIReplyE2E(t *testing.T) {
@@ -92,11 +95,11 @@ func TestGullsCLIReplyE2E(t *testing.T) {
 	assertContains(t, output, "Replied delivery_1; status=replied; reply=message_reply.")
 	assertNotContains(t, output, "secret-token")
 
-	request := stub.assertRequest(t, 0, http.MethodPost, "/deliveries/delivery_1/decision")
-	body := request.Body
-	if body["agent_handle"] != "@worker:gulls.ai" {
-		t.Fatalf("agent_handle = %#v", body["agent_handle"])
+	request := stub.assertRequest(t, 0, http.MethodPost, "/agent/deliveries/delivery_1/decision")
+	if request.Auth != "Bearer secret-token" {
+		t.Fatalf("authorization = %q", request.Auth)
 	}
+	body := request.Body
 	if body["decision"] != "reply" {
 		t.Fatalf("decision = %#v", body["decision"])
 	}
@@ -125,23 +128,33 @@ func (s *messageHubStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 
 	switch {
+	case r.Method == http.MethodGet && r.URL.RequestURI() == "/agent/inbox?limit=20":
+		writeJSON(w, inboxResponse())
+	case r.Method == http.MethodGet && r.URL.RequestURI() == "/agent/inbox?limit=100":
+		writeJSON(w, inboxResponse())
 	case r.Method == http.MethodGet && r.URL.RequestURI() == "/agents/%40worker%3Agulls.ai/inbox?limit=20":
 		writeJSON(w, inboxResponse())
 	case r.Method == http.MethodGet && r.URL.RequestURI() == "/agents/%40worker%3Agulls.ai/inbox?limit=100":
 		writeJSON(w, inboxResponse())
+	case r.Method == http.MethodPost && r.URL.RequestURI() == "/agent/deliveries/delivery_1/decision":
+		writeJSON(w, decisionResponse())
 	case r.Method == http.MethodPost && r.URL.RequestURI() == "/deliveries/delivery_1/decision":
-		writeJSON(w, map[string]any{
-			"delivery": map[string]any{
-				"delivery_id": "delivery_1",
-				"status":      "replied",
-			},
-			"reply": map[string]any{
-				"message_id": "message_reply",
-				"thread_id":  "thread_1",
-			},
-		})
+		writeJSON(w, decisionResponse())
 	default:
 		http.Error(w, fmt.Sprintf("unexpected request: %s %s", r.Method, r.URL.RequestURI()), http.StatusNotFound)
+	}
+}
+
+func decisionResponse() map[string]any {
+	return map[string]any{
+		"delivery": map[string]any{
+			"delivery_id": "delivery_1",
+			"status":      "replied",
+		},
+		"reply": map[string]any{
+			"message_id": "message_reply",
+			"thread_id":  "thread_1",
+		},
 	}
 }
 

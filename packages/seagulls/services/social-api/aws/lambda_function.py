@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, unquote
 from urllib.error import HTTPError
@@ -195,9 +196,6 @@ def _build_chat_source():
     Wrapped so a gulls-side failure degrades to the stored seagulls copy rather
     than emptying a conversation.
     """
-    if not _env_flag("GULLS_CHAT_READS"):
-        return None
-
     # Chat content lives in the hub's messages table, which the Feed repository
     # deliberately leaves unconfigured -- so this needs its own binding rather
     # than reusing the one the Feed mirror built.
@@ -211,13 +209,14 @@ def _build_chat_source():
     return SafeChatSource(
         GullsChatSource(
             DynamoDbMessageHubRepository(
-                agents_table=None,
+                agents_table=dynamodb.Table(os.environ["GULLS_AGENTS_TABLE"]) if os.environ.get("GULLS_AGENTS_TABLE") else None,
                 messages_table=dynamodb.Table(messages_table_name),
                 threads_table=None,
                 deliveries_table=None,
                 idempotency_table=None,
                 thread_summaries_table=None,
-            )
+            ),
+            read_content=_env_flag("GULLS_CHAT_READS"),
         )
     )
 
@@ -279,6 +278,58 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         if method == "GET" and path == "/health":
             return response(200, {"ok": True, "app": APP_NAME, "storage": "dynamodb"})
+
+        if method == "POST" and path == "/local-connections/pair":
+            body = parse_body(event)
+            public_url = social_public_url(event)
+            result = service.pair_local_runtime(pair_token=required_string(body, "pair_token"), hub=MessageHubRuntimeClient())
+            return response(200, {
+                **result,
+                "api_url": os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/"),
+                "social_api_url": public_url,
+            })
+
+        if method == "POST" and path == "/local-connections/heartbeat":
+            principal = MessageHubRuntimeClient().principal(event)
+            service.heartbeat_local_runtime(principal)
+            owner_user_id = principal["owner_user_id"]
+            agent_handle = principal["agent_handle"]
+            profile = service.get_owned_profile(owner_user_id=owner_user_id, agent_handle=agent_handle)
+            prompt = service.get_agent_prompt(owner_user_id=owner_user_id, agent_handle=agent_handle)
+            return response(
+                200,
+                {
+                    "connected": True,
+                    "local_runtime": {
+                        "agent_handle": profile.handle,
+                        "mode": profile.runtime_mode,
+                        "instructions": "" if prompt is None else prompt.instructions,
+                    },
+                },
+            )
+
+        if path.startswith("/profiles/") and path.endswith("/runtime") and method in {"GET", "PUT"}:
+            handle = path_param(path, "/profiles/", "/runtime")
+            body = parse_body(event) if method == "PUT" else {}
+            owner = owner_user_id_from_value(event, optional_string(body, "owner_user_id"))
+            if method == "PUT":
+                runtime = service.set_agent_runtime(owner_user_id=owner, agent_handle=handle, mode=required_string(body, "mode"))
+            else:
+                runtime = service.get_agent_runtime(owner_user_id=owner, agent_handle=handle)
+            return response(200, {"runtime": runtime})
+
+        if method == "POST" and path.startswith("/profiles/") and path.endswith("/local-pair-tokens"):
+            handle = path_param(path, "/profiles/", "/local-pair-tokens")
+            owner = owner_user_id_from_body(event, parse_body(event))
+            public_url = social_public_url(event)
+            token = service.create_local_pair_token(owner_user_id=owner, agent_handle=handle)
+            return response(200, {"pair_token": pair_token_to_dict(token), "social_api_url": public_url})
+
+        if method == "DELETE" and path.startswith("/profiles/") and path.endswith("/local-connection"):
+            handle = path_param(path, "/profiles/", "/local-connection")
+            owner = owner_user_id_from_value(event, None)
+            runtime = service.disconnect_local_runtime(owner_user_id=owner, agent_handle=handle, hub=MessageHubRuntimeClient())
+            return response(200, {"runtime": runtime})
 
         if method == "GET" and path == "/me":
             identity = identity_from_event(event)
@@ -495,7 +546,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
             message = deliver_agent_chat_message(owner_user_id, chat, message)
             reply = None
-            if ai_reply_enabled():
+            if ai_reply_enabled() and message.runtime_mode == "cloud":
                 # Re-read: delivery stamps hub_thread_id on the session, and the
                 # reply has to land in that same thread rather than opening a new one.
                 chat = service.get_agent_chat(owner_user_id=owner_user_id, chat_id=chat.chat_id)
@@ -519,11 +570,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET" and path.startswith("/agent-chats/") and path.endswith("/messages"):
             query = event.get("queryStringParameters") or {}
             chat_id = path_param(path, "/agent-chats/", "/messages")
+            owner = owner_user_id_from_query(event, query)
             messages = service.list_agent_chat_messages(
-                owner_user_id=owner_user_id_from_query(event, query),
+                owner_user_id=owner,
                 chat_id=chat_id,
             )
-            return response(200, {"items": [agent_chat_message_to_dict(message) for message in messages]})
+            chat = service.get_agent_chat(owner_user_id=owner, chat_id=chat_id)
+            runtime = service.get_agent_runtime(owner_user_id=owner, agent_handle=chat.agent_handle)
+            return response(200, {"items": [agent_chat_message_to_dict(message) for message in messages], "runtime_mode": runtime["mode"]})
 
         if method == "PATCH" and path.startswith("/profiles/"):
             body = parse_body(event)
@@ -834,6 +888,7 @@ def deliver_agent_chat_message(owner_user_id: str, chat: Any, message: Any) -> A
         message,
         sender_handle=chat.sender_handle,
         recipient_handle=chat.agent_handle,
+        runtime_mode=message.runtime_mode,
     )
 
 
@@ -862,6 +917,7 @@ def deliver_chat_message_to_hub(
     *,
     sender_handle: str | None,
     recipient_handle: str | None,
+    runtime_mode: str | None = None,
 ) -> Any:
     if not sender_handle or not recipient_handle:
         return message
@@ -876,6 +932,7 @@ def deliver_chat_message_to_hub(
         "thread_id": chat.hub_thread_id,
         "intent": "chat",
         "visibility": "direct",
+        "runtime_mode": runtime_mode,
     }
     try:
         try:
@@ -929,6 +986,57 @@ def post_message_hub_json(base_url: str, path: str, body: dict[str, Any]) -> dic
     if not isinstance(parsed, dict):
         raise BadRequest("message hub response must be a JSON object")
     return parsed
+
+
+def social_public_url(event: dict[str, Any]) -> str:
+    configured = os.environ.get("SOCIAL_PUBLIC_API_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    domain = event.get("requestContext", {}).get("domainName")
+    if isinstance(domain, str) and domain and "/" not in domain:
+        return f"https://{domain}"
+    raise UpstreamServiceError("The public local connection endpoint is not configured")
+
+
+class MessageHubRuntimeClient:
+    def issue_token(self, *, handle: str, owner_user_id: str, node_id: str) -> dict[str, Any]:
+        base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+        if not base_url:
+            raise UpstreamServiceError("Local connection service is not configured")
+        register_message_hub_agent(base_url, handle)
+        return post_message_hub_json(base_url, "/internal/agent-tokens", {
+            "handle": handle, "owner_user_id": owner_user_id, "node_id": node_id,
+            "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+            "name": "Local connector",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
+        })
+
+    def revoke_token(self, token_id: str) -> None:
+        base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+        if not base_url:
+            raise UpstreamServiceError("Local connection service is not configured")
+        post_message_hub_json(base_url, f"/internal/agent-tokens/{quote(token_id, safe='')}/revoke", {})
+
+    def principal(self, event: dict[str, Any]) -> dict[str, Any]:
+        headers = {str(key).lower(): str(value) for key, value in (event.get("headers") or {}).items()}
+        authorization = headers.get("authorization", "")
+        if not authorization.startswith("Bearer sga_"):
+            raise Unauthorized("A paired local runtime credential is required")
+        base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+        if not base_url:
+            raise UpstreamServiceError("Local connection service is not configured")
+        request = Request(f"{base_url}/agent/me", headers={"authorization": authorization}, method="GET")
+        try:
+            with urlopen(request, timeout=5) as result:
+                payload = json.loads(result.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise Unauthorized("Local runtime credential is invalid or disconnected") from exc
+            raise UpstreamServiceError("Local connection service is unavailable") from exc
+        principal = payload.get("principal") if isinstance(payload, dict) else None
+        if not isinstance(principal, dict) or not principal.get("node_id"):
+            raise Unauthorized("A paired local runtime credential is required")
+        return principal
 
 
 def optional_payload_string(payload: dict[str, Any], field_name: str) -> str | None:
@@ -1078,7 +1186,7 @@ def cors_response() -> dict[str, Any]:
 def cors_headers() -> dict[str, str]:
     return {
         "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,OPTIONS,PATCH,POST,PUT",
+        "access-control-allow-methods": "GET,OPTIONS,PATCH,POST,PUT,DELETE",
         "access-control-allow-headers": "authorization,content-type,x-seagull-auth-bypass-secret",
         "access-control-max-age": "300",
     }

@@ -314,6 +314,7 @@ class Message:
     refs: tuple[MessageRef, ...] = ()
     schema_version: str = "seagull.message.v1"
     safety_status: str = "approved"
+    runtime_mode: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 

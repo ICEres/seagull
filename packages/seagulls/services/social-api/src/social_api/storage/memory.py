@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime
+from threading import Lock
+
 from pet_assets import InMemoryPetAssetRepository
 
 from social_api.domain.models import (
@@ -38,6 +42,7 @@ class InMemorySocialRepository:
         self._nodes: dict[str, NodeRecord] = {}
         self._node_ids_by_owner: dict[str, set[str]] = {}
         self._pair_tokens: dict[str, PairTokenRecord] = {}
+        self._pair_token_lock = Lock()
         self._rooms: dict[str, Room] = {}
         self._room_by_slug: dict[str, str] = {}
         self._memberships: dict[tuple[str, str], RoomMembership] = {}
@@ -170,6 +175,14 @@ class InMemorySocialRepository:
 
     def get_pair_token(self, pair_token: str) -> PairTokenRecord | None:
         return self._pair_tokens.get(pair_token)
+
+    def consume_pair_token(self, pair_token: str, now: datetime) -> bool:
+        with self._pair_token_lock:
+            token = self._pair_tokens.get(pair_token)
+            if token is None or token.used_at is not None or token.expires_at <= now:
+                return False
+            self._pair_tokens[pair_token] = replace(token, used_at=now)
+            return True
 
     def put_room(self, room: Room) -> None:
         self._rooms[room.room_id] = room

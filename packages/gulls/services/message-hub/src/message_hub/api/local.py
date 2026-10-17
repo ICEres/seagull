@@ -317,6 +317,45 @@ class LocalMessageHubApi:
             "record": agent_token_record_to_dict(issued.record),
         }
 
+    def issue_internal_agent_token(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Issue a scoped runtime token for an already registered agent.
+
+        The deployed adapter protects this method with the owner-to-hub
+        internal secret. Keeping the actual issuance here preserves one token
+        validation and serialization path for bootstrap and owner flows.
+        """
+        try:
+            handle = required_string(body, "handle")
+            agent = self._service.get_agent(handle)
+            issued = self._service.issue_agent_token(
+                agent.handle,
+                scopes=agent_registration_scopes(body),
+                agent=agent,
+                name=optional_string(body, "name"),
+                owner_user_id=optional_string(body, "owner_user_id"),
+                node_id=optional_string(body, "node_id"),
+                expires_at=optional_datetime(body, "expires_at"),
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+
+        return {
+            "agent": agent_to_dict(agent),
+            "token": issued.token,
+            "record": agent_token_record_to_dict(issued.record),
+        }
+
+    def revoke_internal_agent_token(self, token_id: str) -> dict[str, Any]:
+        try:
+            record = self._service.revoke_agent_token(token_id)
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"record": agent_token_record_to_dict(record)}
+
     def read_agent(self, handle: str) -> dict[str, Any]:
         try:
             agent = self._service.get_agent(handle)
@@ -339,6 +378,7 @@ class LocalMessageHubApi:
                 visibility=optional_string(body, "visibility") or "direct",
                 thread_id=optional_string(body, "thread_id"),
                 idempotency_key=optional_string(body, "idempotency_key"),
+                runtime_mode=optional_string(body, "runtime_mode"),
             )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
@@ -420,6 +460,52 @@ class LocalMessageHubApi:
         principal = self._require_agent_token(authorization, required_scope="agent:inbox")
         return self.read_inbox(principal.agent_handle, limit=limit)
 
+    def agent_thread(self, authorization: str | None, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:read")
+        try:
+            self._service.get_context_pack(
+                thread_id,
+                requester_handle=principal.agent_handle,
+                max_recent_messages=0,
+                max_payload_refs=0,
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return self.read_thread(thread_id, limit=limit)
+
+    def agent_thread_context(
+        self,
+        authorization: str | None,
+        thread_id: str,
+        *,
+        recent_limit: int = 10,
+    ) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:read")
+        return self.read_thread_context_for(
+            thread_id,
+            requester_handle=principal.agent_handle,
+            recent_limit=recent_limit,
+        )
+
+    def agent_ack_message(self, authorization: str | None, message_id: str) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:ack")
+        try:
+            result = self._service.ack_message(
+                message_id,
+                {"recipient_handle": principal.agent_handle},
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        return {"message_id": message_id, **result}
+
     def agent_list_tasks(
         self,
         authorization: str | None,
@@ -490,7 +576,14 @@ class LocalMessageHubApi:
 
     def agent_post(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:post")
-        wrapped = {**body, "sender_handle": principal.agent_handle}
+        self._reject_cloud_owned_thread(principal, optional_string(body, "thread_id"))
+        wrapped = {
+            key: value
+            for key, value in body.items()
+            if key != "runtime_mode"
+        }
+        wrapped["sender_handle"] = principal.agent_handle
+        wrapped["runtime_mode"] = "local"
         return self.create_message(wrapped)
 
     def agent_ack_delivery(self, authorization: str | None, delivery_id: str) -> dict[str, Any]:
@@ -511,8 +604,34 @@ class LocalMessageHubApi:
 
     def agent_decide_delivery(self, authorization: str | None, delivery_id: str, body: dict[str, Any]) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:post")
-        wrapped = {**body, "agent_handle": principal.agent_handle}
+        if optional_string(body, "decision") == "reply":
+            self._reject_cloud_owned_delivery(principal, delivery_id)
+        wrapped = {key: value for key, value in body.items() if key != "runtime_mode"}
+        wrapped["agent_handle"] = principal.agent_handle
+        if optional_string(body, "decision") == "reply":
+            wrapped["runtime_mode"] = "local"
         return self.submit_delivery_decision(delivery_id, wrapped)
+
+    def _reject_cloud_owned_delivery(self, principal: Any, delivery_id: str) -> None:
+        if principal.node_id is None:
+            return
+        delivery = self._service._repository.get_delivery(delivery_id)  # noqa: SLF001
+        if delivery is None:
+            return
+        message = self._service._repository.get_message(delivery.message_id)  # noqa: SLF001
+        if message is not None and message.runtime_mode == "cloud":
+            raise ApiError(409, "runtime_conflict", "cloud runtime already owns this delivery")
+
+    def _reject_cloud_owned_thread(self, principal: Any, thread_id: str | None) -> None:
+        if principal.node_id is None or thread_id is None:
+            return
+        inbound = [
+            message
+            for message in self._service._repository.list_thread_messages(thread_id)  # noqa: SLF001
+            if principal.agent_id in message.recipient_agent_ids
+        ]
+        if inbound and inbound[-1].runtime_mode == "cloud":
+            raise ApiError(409, "runtime_conflict", "cloud runtime already owns this thread")
 
     def agent_request_task(self, authorization: str | None, body: dict[str, Any]) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:post")
@@ -1591,6 +1710,7 @@ class LocalMessageHubApi:
                 action_runtime=optional_string(body, "action_runtime") or "cloud",
                 requires_approval=optional_bool(body, "requires_approval", default=True),
                 note=optional_string(body, "note"),
+                runtime_mode=optional_string(body, "runtime_mode"),
             )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
@@ -1794,6 +1914,7 @@ def message_to_dict(message: Message) -> dict[str, Any]:
         "refs": [message_ref_to_dict(ref) for ref in message.refs],
         "schema_version": message.schema_version,
         "safety_status": message.safety_status,
+        "runtime_mode": message.runtime_mode,
         "created_at": datetime_to_string(message.created_at),
     }
 

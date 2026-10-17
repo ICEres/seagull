@@ -679,8 +679,18 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:Scan"
         ]
         Resource = local.table_resources
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:UpdateItem"]
+        Resource = [aws_dynamodb_table.pair_tokens.arn]
       }
       ],
+      var.gulls_agents_table_arn == "" ? [] : [{
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:Query"]
+        Resource = [var.gulls_agents_table_arn, "${var.gulls_agents_table_arn}/index/*"]
+      }],
       var.message_hub_legacy_route_secret_arn == "" && var.auth_bypass_secret_arn == "" && var.ai_provider_admin_secret_arn == "" ? [] : [
         {
           Effect = "Allow"
@@ -743,6 +753,7 @@ resource "aws_lambda_function" "api" {
         ROOMS_TABLE                 = aws_dynamodb_table.rooms.name
         SOCIAL_AUTH_REQUIRED        = "true"
         MESSAGE_API_URL             = var.message_api_url
+        SOCIAL_PUBLIC_API_URL       = aws_apigatewayv2_api.http.api_endpoint
         AI_PROVIDER_API_URL         = var.ai_provider_api_url
         AI_PROVIDER_FUNCTION_ARN    = var.ai_provider_function_arn
         AI_REPLY_PROVIDER           = var.ai_reply_provider
@@ -774,6 +785,7 @@ resource "aws_lambda_function" "api" {
       # Chat content lives in the hub's messages table, not the Feed tables.
       var.gulls_messages_table_name == "" ? {} : {
         GULLS_MESSAGES_TABLE = var.gulls_messages_table_name
+        GULLS_AGENTS_TABLE   = var.gulls_agents_table_name
         GULLS_CHAT_READS     = var.gulls_chat_reads_enabled ? "true" : "false"
       }
     )
@@ -793,7 +805,7 @@ resource "aws_apigatewayv2_api" "http" {
 
   cors_configuration {
     allow_headers = ["authorization", "content-type", "x-seagull-auth-bypass-secret"]
-    allow_methods = ["GET", "PATCH", "POST", "PUT", "OPTIONS"]
+    allow_methods = ["GET", "PATCH", "POST", "PUT", "DELETE", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
   }
@@ -837,6 +849,18 @@ resource "aws_apigatewayv2_route" "health" {
 resource "aws_apigatewayv2_route" "agent_registrations" {
   api_id    = aws_apigatewayv2_api.http.id
   route_key = "POST /agent-registrations"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "local_pair" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "POST /local-connections/pair"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "local_heartbeat" {
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "POST /local-connections/heartbeat"
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 

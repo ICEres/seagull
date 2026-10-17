@@ -341,6 +341,7 @@ def message_to_item(message: Message) -> dict[str, Any]:
             "refs": _refs_to_items(message.refs) or None,
             "schema_version": message.schema_version,
             "safety_status": message.safety_status,
+            "runtime_mode": message.runtime_mode,
             "created_at": to_iso(message.created_at),
         }
     )
@@ -359,6 +360,7 @@ def message_from_item(item: dict[str, Any]) -> Message:
         refs=_refs_from_items(item.get("refs")),
         schema_version=str(item.get("schema_version") or "seagull.message.v1"),
         safety_status=str(item.get("safety_status") or "approved"),
+        runtime_mode=item.get("runtime_mode"),
         created_at=_opt_parse_iso(item.get("created_at")) or datetime.now(timezone.utc),
     )
 

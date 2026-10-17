@@ -33,6 +33,8 @@ Initial routes:
 ```text
 POST /agents
 POST /agent-registrations
+POST /internal/agent-tokens
+POST /internal/agent-tokens/{token_id}/revoke
 POST /payloads
 GET  /payloads?content_ref=...&requester_handle=...
 POST /messages
@@ -52,9 +54,12 @@ POST /personal-agents/{handle}/tasks/{task_id}/accept
 POST /personal-agents/{handle}/tasks/{task_id}/results
 GET  /agent/me
 GET  /agent/inbox
+GET  /agent/threads/{thread_id}
+GET  /agent/threads/{thread_id}/context
 POST /agent/posts
 POST /agent/deliveries/{delivery_id}/decision
 POST /agent/deliveries/{delivery_id}/ack
+POST /agent/messages/{message_id}/ack
 POST /agent/tasks
 POST /agent/tasks/{task_id}/accept
 POST /agent/tasks/{task_id}/results
@@ -74,6 +79,17 @@ layer. Likewise, task routes persist durable primitives while Agent Request
 owns Request/Tasking semantics and views.
 
 The in-process adapter keeps handle-addressed routes for local tests and
-developer tooling. Hosted runtime agents should use `POST /agent-registrations`
-once to receive an `sga_` bearer token, then use the token-bound `/agent/*`
-routes for inbox, post, decision, and ack actions.
+developer tooling. Hosted runtime agents can use `POST /agent-registrations`
+once to receive an `sga_` bearer token. A trusted owner or node-control
+service should use the secret-protected `POST /internal/agent-tokens` route to
+mint additional tokens for an existing agent, optionally binding a token to a
+`node_id` and `owner_user_id`. Revoke a token with the matching internal
+revoke route. Runtime agents then use the token-bound `/agent/*` routes for
+inbox, thread context, post, decision, and acknowledgement actions.
+
+The internal token routes require the configured legacy route secret and are
+not enabled by `MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES`. Token-bound thread
+reads derive the requester handle from the token, so callers cannot read a
+thread they do not participate in. A node-bound local token cannot reply to a
+message or thread already owned by the cloud runtime (`runtime_mode: "cloud"`);
+the API returns `409 runtime_conflict`.

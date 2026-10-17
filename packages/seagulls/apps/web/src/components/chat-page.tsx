@@ -3,13 +3,17 @@ import { useNavigate, useParams } from "react-router";
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
-import type { AgentChatMessage, AgentProfile, LoopState } from "../lib/social";
+import type { AgentChatMessage, AgentProfile, LoopState, RuntimeMode } from "../lib/social";
 import { formatRelativeTime } from "../lib/state";
 import { GullAvatar, Wing, YOUR_WING, statusDotColor, wingFor } from "@seagulls/ui";
 import { Chip, EmptyState, shortHandle, shortId, type Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;
 type SendChatMessage = { chatId: string; content: string; owner: string };
+type AgentChatMessagesResponse = {
+  items: AgentChatMessage[];
+  runtime_mode?: RuntimeMode | null;
+};
 
 export function ChatPage({
   api,
@@ -108,14 +112,16 @@ export function ChatPage({
         created_at: now,
         updated_at: now,
       };
-      queryClient.setQueryData<{ items: AgentChatMessage[] }>(queryKey, (current) => ({
+      queryClient.setQueryData<AgentChatMessagesResponse>(queryKey, (current) => ({
+        ...current,
         items: [...(current?.items ?? []), optimisticMessage],
       }));
       return { queryKey, optimisticMessage };
     },
     onSuccess: ({ message, reply }, _variables, context) => {
       const confirmed = reply ? [message, reply] : [message];
-      queryClient.setQueryData<{ items: AgentChatMessage[] }>(context.queryKey, (current) => ({
+      queryClient.setQueryData<AgentChatMessagesResponse>(context.queryKey, (current) => ({
+        ...current,
         items: [
           ...(current?.items ?? []).filter(
             (item) => item.chat_message_id !== context.optimisticMessage.chat_message_id &&
@@ -136,7 +142,8 @@ export function ChatPage({
     },
     onError: (error: AppMutationError, _variables, context) => {
       if (context) {
-        queryClient.setQueryData<{ items: AgentChatMessage[] }>(context.queryKey, (current) => ({
+        queryClient.setQueryData<AgentChatMessagesResponse>(context.queryKey, (current) => ({
+          ...current,
           items: (current?.items ?? []).filter(
             (item) => item.chat_message_id !== context.optimisticMessage.chat_message_id,
           ),
@@ -165,8 +172,13 @@ export function ChatPage({
     queryFn: () => api.getAgentChatMessages(selectedChat!.chat_id, ownerUserId ?? undefined),
     enabled: Boolean(ownerUserId && selectedChat) && !sendingToSelectedChat,
     staleTime: 5000,
+    refetchInterval: selectedChat && !sendingToSelectedChat ? 5000 : false,
   });
   const messages = messagesQuery.data?.items ?? [];
+  const runtimeMode: RuntimeMode =
+    messagesQuery.data?.runtime_mode ??
+    [...messages].reverse().find((message) => message.runtime_mode)?.runtime_mode ??
+    "cloud";
   const recoveryMessages = unconfirmedMessages.filter(
     (message) => message.chat_id === selectedChat?.chat_id && message.owner_user_id === ownerUserId,
   );
@@ -206,7 +218,7 @@ export function ChatPage({
   }
 
   function chatSnippet(chatId: string, fallback: string): string {
-    const cached = queryClient.getQueryData<{ items: AgentChatMessage[] }>([
+    const cached = queryClient.getQueryData<AgentChatMessagesResponse>([
       "social-agent-chat-messages",
       api.baseUrl,
       ownerUserId,
@@ -323,6 +335,7 @@ export function ChatPage({
                   />
                   {shortHandle(selectedChat.agent_handle)}
                   {chatAgent ? ` · ${chatAgent.status}` : ""}
+                  {` · ${runtimeModeLabel(runtimeMode)}`}
                 </span>
               </span>
               <span className="ml-auto flex flex-wrap justify-end gap-1.5">
@@ -361,7 +374,7 @@ export function ChatPage({
               {sendingToSelectedChat ? (
                 <div role="status" className="flex items-center gap-2.5 py-2 text-[0.8rem] font-bold text-muted">
                   <GullAvatar handle={selectedChat.agent_handle} size={26} />
-                  <span className="motion-safe:animate-pulse">Waiting for reply…</span>
+                  <span className="motion-safe:animate-pulse">{waitingForRuntimeLabel(runtimeMode)}</span>
                 </div>
               ) : null}
             </div>
@@ -432,6 +445,18 @@ export function ChatPage({
       </div>
     </div>
   );
+}
+
+function runtimeModeLabel(mode: RuntimeMode): string {
+  return mode === "local" ? "Local" : mode === "manual" ? "Manual" : "Cloud";
+}
+
+function waitingForRuntimeLabel(mode: RuntimeMode): string {
+  return mode === "local"
+    ? "Waiting for local connection or reply…"
+    : mode === "manual"
+      ? "Waiting for your reply…"
+      : "Generating a cloud reply — waiting for reply…";
 }
 
 function ChatBubble({

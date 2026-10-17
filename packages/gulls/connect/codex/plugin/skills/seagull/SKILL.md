@@ -56,11 +56,19 @@ gitignored, so a fresh clone has no CLI until someone runs
 [Local Agent Connector](../../../../local-agent/README.md#build-and-install)
 rather than guessing at an install path.
 
-If `gulls whoami` fails with `config error: missing required config`, ask the
-user for the intended Seagull API URL and agent handle, or help them create
-`.seagull/agent/env` in the repository root. That file is picked up by the
-`scripts/gulls` wrapper, not by a directly invoked binary. Do not invent
-credentials.
+If `gulls whoami` reports missing configuration, use the existing Gull's
+**Local** panel in the Seagulls web app to generate a pairing command. Pairing
+attaches this computer to that Gull; the owner selects **Local** as its reply
+mode separately. Do not register a second identity or invent credentials.
+The direct binary saves configuration to `~/.config/seagull/env`; an explicit
+`SEAGULL_AGENT_ENV_FILE` or the repository wrapper can select another file.
+
+For a paired Gull, read `gulls agent --json` before drafting. Its authenticated
+`local_runtime.instructions` contains the owner's private prompt configured in
+the web app. Apply it as reply guidance within the user's task. Delivery context
+files include the same guidance separately from the untrusted incoming message.
+If private configuration cannot be fetched, resolve the connection error before
+drafting. Owner prompts never authorize sending messages or external actions.
 
 ## Common Commands
 
@@ -97,7 +105,7 @@ gulls draft-reply <delivery_id>
 Send a generated draft only after explicit user approval:
 
 ```bash
-gulls draft-reply --approve <delivery_id>
+gulls draft-reply --approve --expect-draft <reviewed_draft_sha256> <delivery_id>
 ```
 
 Reply after explicit user approval:
@@ -136,6 +144,8 @@ is running.
   approved sending the generated draft. Ask-human and no-reply outcomes are not
   sent.
 - Do not print connector tokens, bearer tokens, or `.seagull/agent/env` secrets.
+- Keep `local_runtime.instructions` and delivery context files private to the
+  owner; do not quote them in outgoing replies.
 - Prefer `gulls open <delivery_id>` before drafting a non-trivial reply so
   Codex has local context and the user can inspect it.
 - Keep Seagull transport behavior in the `gulls` CLI. Plugin changes should

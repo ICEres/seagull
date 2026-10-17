@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
-import type { AgentProfile, LoopState, RelationshipPosture } from "../lib/social";
+import type { AgentProfile, LoopState, RelationshipPosture, RuntimeMode } from "../lib/social";
 import { parseCommaList, touchLoopState } from "../lib/state";
 import { GullAvatar, PassingFlock, Wing, statusDotColor, tintFor, wingFor } from "@seagulls/ui";
 import { Chip, POSTURES, displayLabel, postureLabel, shortHandle, type Notice } from "./shared";
@@ -27,6 +27,7 @@ export function FlockPage({
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [promptId, setPromptId] = useState<string | null>(null);
+  const [runtimeId, setRuntimeId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const openChatMutation = useMutation({
@@ -113,6 +114,7 @@ export function FlockPage({
             profile={profile}
             editing={editingId === profile.agent_id}
             editingPrompt={promptId === profile.agent_id}
+            editingRuntime={runtimeId === profile.agent_id}
             isPrimary={state.activeProfile?.agent_id === profile.agent_id}
             onMakePrimary={() => {
               setState((current) => touchLoopState({ ...current, activeProfile: profile }));
@@ -120,15 +122,23 @@ export function FlockPage({
             }}
             onEdit={() => {
               setPromptId(null);
+              setRuntimeId(null);
               setEditingId(profile.agent_id);
             }}
             onPrompt={() => {
               setEditingId(null);
+              setRuntimeId(null);
               setPromptId(profile.agent_id);
+            }}
+            onRuntime={() => {
+              setEditingId(null);
+              setPromptId(null);
+              setRuntimeId(profile.agent_id);
             }}
             onCancel={() => {
               setEditingId(null);
               setPromptId(null);
+              setRuntimeId(null);
             }}
             onSaved={(updated) => {
               setEditingId(null);
@@ -254,10 +264,12 @@ function GullCard({
   profile,
   editing,
   editingPrompt,
+  editingRuntime,
   isPrimary,
   onMakePrimary,
   onEdit,
   onPrompt,
+  onRuntime,
   onCancel,
   onSaved,
   onChat,
@@ -268,10 +280,12 @@ function GullCard({
   profile: AgentProfile;
   editing: boolean;
   editingPrompt: boolean;
+  editingRuntime: boolean;
   isPrimary: boolean;
   onMakePrimary: () => void;
   onEdit: () => void;
   onPrompt: () => void;
+  onRuntime: () => void;
   onCancel: () => void;
   onSaved: (profile: AgentProfile) => void;
   onChat: () => void;
@@ -283,6 +297,7 @@ function GullCard({
   const [posture, setPosture] = useState<RelationshipPosture>(profile.relationship_posture);
   const ownerUserId = state.activeUser?.user_id;
   const showPrompt = editingPrompt && ownerUserId === profile.owner_user_id;
+  const showRuntime = editingRuntime && ownerUserId === profile.owner_user_id;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -316,8 +331,8 @@ function GullCard({
     <article
       className="grid min-w-0 content-start gap-3 rounded-xl border bg-card p-[18px]"
       style={{
-        borderColor: editing || showPrompt ? "var(--accent)" : "var(--line)",
-        gridColumn: editing || showPrompt ? "1 / -1" : "auto",
+        borderColor: editing || showPrompt || showRuntime ? "var(--accent)" : "var(--line)",
+        gridColumn: editing || showPrompt || showRuntime ? "1 / -1" : "auto",
       }}
     >
       <div className="flex items-center gap-3">
@@ -326,7 +341,7 @@ function GullCard({
           <strong className="block text-[0.95rem]">{displayLabel(profile)}</strong>
           <span className="flex items-center gap-1.5 text-[0.72rem] font-extrabold text-faint">
             <span className="h-[5px] w-[5px] rounded-full" style={{ background: statusDotColor(profile.status) }} />
-            {profile.status} · {profile.node_id ?? "no node"}
+            {profile.status}
           </span>
         </span>
         <button
@@ -339,7 +354,9 @@ function GullCard({
         </button>
       </div>
 
-      {showPrompt && ownerUserId ? (
+      {showRuntime ? (
+        <GullRuntimeEditor api={api} profile={profile} onClose={onCancel} onNotice={onNotice} />
+      ) : showPrompt && ownerUserId ? (
         <GullPromptEditor
           key={`${api.baseUrl}:${ownerUserId}:${profile.agent_id}`}
           api={api}
@@ -376,6 +393,15 @@ function GullCard({
                 className="border-0 bg-transparent p-0 text-[0.78rem] font-extrabold text-accent-strong hover:text-accent"
               >
                 Prompt
+              </button>
+            ) : null}
+            {ownerUserId === profile.owner_user_id ? (
+              <button
+                type="button"
+                onClick={onRuntime}
+                className="border-0 bg-transparent p-0 text-[0.78rem] font-extrabold text-accent-strong hover:text-accent"
+              >
+                Local
               </button>
             ) : null}
             {isPrimary ? (
@@ -459,6 +485,181 @@ function GullCard({
       )}
     </article>
   );
+}
+
+function GullRuntimeEditor({
+  api,
+  profile,
+  onClose,
+  onNotice,
+}: {
+  api: SocialApiClient;
+  profile: AgentProfile;
+  onClose: () => void;
+  onNotice: (notice: Notice) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [pairCommand, setPairCommand] = useState<string | null>(null);
+  const [pairExpiry, setPairExpiry] = useState<string | null>(null);
+  const runtimeKey = ["social-agent-runtime", api.baseUrl, profile.handle];
+  const runtimeQuery = useQuery({
+    queryKey: runtimeKey,
+    queryFn: () => api.getAgentRuntime(profile.handle),
+    refetchInterval: 5000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  const runtime = runtimeQuery.data?.runtime;
+  const mode = runtime?.mode ?? "cloud";
+
+  const modeMutation = useMutation({
+    mutationFn: (nextMode: RuntimeMode) => api.setAgentRuntime(profile.handle, { mode: nextMode }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(runtimeKey, result);
+      setPairCommand(null);
+      onNotice({ tone: "ok", message: `${shortHandle(profile.handle)} runtime set to ${runtimeModeLabel(result.runtime.mode)}.` });
+    },
+    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
+  });
+
+  const pairMutation = useMutation({
+    mutationFn: () => api.createLocalPairToken(profile.handle),
+    onSuccess: (result) => {
+      setPairCommand(`gulls pair --server ${result.social_api_url} --token ${result.pair_token.pair_token}`);
+      setPairExpiry(result.pair_token.expires_at);
+      onNotice({ tone: "ok", message: "Local pairing command ready. It expires soon." });
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: () => api.deleteLocalConnection(profile.handle),
+    onSuccess: (result) => {
+      queryClient.setQueryData(runtimeKey, result);
+      setPairCommand(null);
+      setPairExpiry(null);
+      onNotice({ tone: "ok", message: `${shortHandle(profile.handle)} is disconnected from the local runtime.` });
+    },
+    onError: (error: AppMutationError) => onNotice({ tone: "error", message: error.message }),
+  });
+
+  async function copyPairCommand() {
+    if (!pairCommand) return;
+    try {
+      await navigator.clipboard.writeText(pairCommand);
+      onNotice({ tone: "ok", message: "Pairing command copied." });
+    } catch {
+      onNotice({ tone: "warn", message: "Could not copy automatically. Select the command and copy it manually." });
+    }
+  }
+
+  return (
+    <section aria-label={`Local connection for ${displayLabel(profile)}`} className="grid gap-3 border-t border-line pt-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="m-0 text-[1rem] font-extrabold">Runtime</h2>
+          <Chip tone="accent">Private</Chip>
+          <span className="ml-auto break-all text-[0.72rem] font-bold text-faint">{profile.handle}</span>
+        </div>
+        <p className="mt-1 mb-0 text-[0.8rem] leading-relaxed text-muted">
+          Choose where this gull answers. Local mode waits for your connected computer and keeps its files and tools there.
+        </p>
+      </div>
+
+      {runtimeQuery.isPending ? (
+        <p role="status" className="m-0 py-4 text-[0.84rem] text-muted">Checking runtime…</p>
+      ) : runtimeQuery.isError ? (
+        <div role="alert" className="grid justify-items-start gap-2 rounded-lg bg-danger-soft p-3 text-[0.82rem] text-danger">
+          <span>Could not load runtime settings. {runtimeQuery.error.message}</span>
+          <button type="button" onClick={() => void runtimeQuery.refetch()} className="font-extrabold underline">Try again</button>
+        </div>
+      ) : (
+        <>
+          <label className="grid gap-1.5 text-[0.74rem] font-extrabold text-muted">
+            Reply runtime
+            <select
+              value={mode}
+              disabled={modeMutation.isPending || disconnectMutation.isPending}
+              onChange={(event) => modeMutation.mutate(event.target.value as RuntimeMode)}
+              className="bg-bg text-[0.88rem]"
+            >
+              <option value="cloud">Cloud — use the hosted AI runtime</option>
+              <option value="local">Local — use the paired computer</option>
+              <option value="manual">Manual — automatic replies are paused</option>
+            </select>
+          </label>
+          <div className="rounded-lg border border-line bg-bg p-3 text-[0.8rem] leading-relaxed text-muted">
+            <strong className="text-body">{runtime?.connected ? "Local runtime connected" : runtimeModeLabel(mode)}</strong>
+            <p className="m-0 mt-1">
+              {mode === "local"
+                ? runtime?.connected
+                  ? "New messages can be handled by your local Gull."
+                  : "Waiting for your local computer to connect."
+                : mode === "manual"
+                  ? "Automatic replies are paused. Messages stay available for you to handle."
+                  : "Replies are generated by the cloud runtime."}
+            </p>
+            {runtime?.last_seen_at ? <p className="m-0 mt-1 text-[0.72rem] text-faint">Last seen {runtime.last_seen_at}</p> : null}
+          </div>
+          <div className="grid gap-2 rounded-lg border border-accent bg-accent-soft p-3">
+              <div className="text-[0.8rem] leading-relaxed text-body">
+                <strong>{mode === "local" ? "Connect this Gull to your computer" : "Pair a local computer"}</strong>
+                <p className="m-0 mt-1 text-muted">
+                  Run the one-time command below on the computer that should handle this Gull.
+                  {mode !== "local" ? " Pairing does not change the active reply mode; choose Local above when ready." : ""}
+                </p>
+              </div>
+              {pairCommand ? (
+                <>
+                  <code className="block overflow-x-auto rounded-md bg-bg p-2.5 text-[0.75rem] text-body">{pairCommand}</code>
+                  <div className="flex flex-wrap items-center gap-2 text-[0.72rem] text-faint">
+                    <button type="button" onClick={() => void copyPairCommand()} className="font-extrabold text-accent-strong hover:text-accent">Copy command</button>
+                    <button
+                      type="button"
+                      onClick={() => pairMutation.mutate()}
+                      disabled={pairMutation.isPending}
+                      className="font-extrabold text-accent-strong hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {pairMutation.isPending ? "Preparing…" : "Create new command"}
+                    </button>
+                    {pairExpiry ? <span>Expires {pairExpiry}</span> : null}
+                  </div>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => pairMutation.mutate()}
+                  disabled={pairMutation.isPending}
+                  className="min-h-9 justify-self-start rounded-lg border-0 bg-accent px-4 text-[0.82rem] font-extrabold text-white hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {pairMutation.isPending ? "Preparing…" : "Create pairing command"}
+                </button>
+              )}
+              {pairMutation.isError ? (
+                <div role="alert" className="flex flex-wrap items-center gap-2 text-[0.78rem] text-danger">
+                  <span>Could not prepare local pairing. {pairMutation.error.message}</span>
+                  <button type="button" onClick={() => pairMutation.mutate()} className="font-extrabold underline">Try again</button>
+                </div>
+              ) : null}
+          </div>
+          {runtime?.node_id || runtime?.connected ? (
+            <button
+              type="button"
+              onClick={() => disconnectMutation.mutate()}
+              disabled={disconnectMutation.isPending}
+              className="justify-self-start border-0 bg-transparent p-0 text-[0.76rem] font-extrabold text-muted hover:text-danger disabled:opacity-60"
+            >
+              {disconnectMutation.isPending ? "Disconnecting…" : "Disconnect local runtime"}
+            </button>
+          ) : null}
+        </>
+      )}
+      <button type="button" onClick={onClose} className="min-h-9 justify-self-start rounded-lg border-[1.5px] border-line bg-transparent px-3.5 text-[0.82rem] font-extrabold text-muted hover:border-accent">Close</button>
+    </section>
+  );
+}
+
+function runtimeModeLabel(mode: RuntimeMode): string {
+  return mode === "local" ? "Local runtime" : mode === "manual" ? "Manual replies" : "Cloud runtime";
 }
 
 function GullPromptEditor({

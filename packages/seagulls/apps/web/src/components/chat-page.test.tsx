@@ -165,8 +165,8 @@ function chatListResponse(chats: AgentChatSession[]): Response {
   return response({ items: chats });
 }
 
-function messagesResponse(items: AgentChatMessage[]): Response {
-  return response({ items });
+function messagesResponse(items: AgentChatMessage[], runtime_mode?: "cloud" | "local" | "manual"): Response {
+  return response({ items, ...(runtime_mode ? { runtime_mode } : {}) });
 }
 
 function messageTextarea(): HTMLTextAreaElement {
@@ -198,6 +198,26 @@ beforeEach(() => {
 });
 
 describe("ChatPage", () => {
+  it("uses the chat runtime mode returned alongside the message list", async () => {
+    const chatA = chat({ chat_id: "chat_a" });
+
+    await renderChatPage({
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/agent-chats" && url.search === "?owner_user_id=user_1") {
+          return chatListResponse([chatA]);
+        }
+        if (url.pathname === "/agent-chats/chat_a/messages") {
+          return messagesResponse([message({ runtime_mode: null })], "local");
+        }
+        return response({ error: "not_found" }, 404);
+      },
+    });
+
+    await waitForText(container!, "Local");
+    expect(container?.textContent).not.toContain("Cloud");
+  });
+
   it("shows the sent message and waiting state immediately while clearing the textarea", async () => {
     const chatA = chat({ chat_id: "chat_a" });
     let resolveSend: ((result: Response) => void) | null = null;

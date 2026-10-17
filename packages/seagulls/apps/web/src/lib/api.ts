@@ -19,6 +19,8 @@ import type {
   RelationshipPosture,
   Room,
   RoomMembership,
+  GullRuntime,
+  RuntimeMode,
 } from "./social";
 
 export { trimBaseUrl };
@@ -195,6 +197,24 @@ export class SocialApiClient extends JsonApiClient {
     return this.request("PUT", `/profiles/${encodeURIComponent(handle)}/prompt`, body);
   }
 
+  getAgentRuntime(handle: string): Promise<{ runtime: GullRuntime }> {
+    return this.request("GET", `/profiles/${encodeURIComponent(handle)}/runtime`);
+  }
+
+  setAgentRuntime(handle: string, body: { mode: RuntimeMode }): Promise<{ runtime: GullRuntime }> {
+    return this.request("PUT", `/profiles/${encodeURIComponent(handle)}/runtime`, body);
+  }
+
+  createLocalPairToken(
+    handle: string,
+  ): Promise<{ pair_token: { pair_token: string; expires_at: string }; social_api_url: string }> {
+    return this.request("POST", `/profiles/${encodeURIComponent(handle)}/local-pair-tokens`, {});
+  }
+
+  deleteLocalConnection(handle: string): Promise<{ runtime: GullRuntime }> {
+    return this.request("DELETE", `/profiles/${encodeURIComponent(handle)}/local-connection`);
+  }
+
   createPersonalAgentAsset(body: {
     owner_user_id: string;
     asset_type: PersonalAgentAssetType;
@@ -291,7 +311,10 @@ export class SocialApiClient extends JsonApiClient {
     return this.request("POST", `/agent-chats/${encodeURIComponent(chatId)}/messages`, body);
   }
 
-  getAgentChatMessages(chatId: string, ownerUserId?: string): Promise<{ items: AgentChatMessage[] }> {
+  getAgentChatMessages(
+    chatId: string,
+    ownerUserId?: string,
+  ): Promise<{ items: AgentChatMessage[]; runtime_mode?: RuntimeMode | null }> {
     const query = new URLSearchParams();
     if (ownerUserId) {
       query.set("owner_user_id", ownerUserId);

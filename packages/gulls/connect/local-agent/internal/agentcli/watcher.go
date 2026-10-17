@@ -28,7 +28,7 @@ func PollOnce(client Client, config Config, limit int, notify bool, notifier Not
 	}
 	state := SeenDeliveryStore{Path: filepath.Join(config.ContextDir, "seen-deliveries.json")}
 	seen := state.Load()
-	inbox, err := client.GetInbox(config.AgentHandle, limit)
+	inbox, err := getInboxForContext(client, config.AgentHandle, limit)
 	if err != nil {
 		return WatchResult{}, err
 	}
@@ -157,7 +157,7 @@ func (s SeenDeliveryStore) Load() map[string]bool {
 }
 
 func (s SeenDeliveryStore) Save(seen map[string]bool) error {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
 		return err
 	}
 	values := []string{}

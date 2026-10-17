@@ -23,6 +23,17 @@ type Client interface {
 	DecideDelivery(deliveryID string, agentHandle string, decision string, content string, note string) (map[string]any, error)
 }
 
+type contextInboxClient interface {
+	GetInboxForContext(handle string, limit int) (map[string]any, error)
+}
+
+func getInboxForContext(client Client, handle string, limit int) (map[string]any, error) {
+	if contextClient, ok := client.(contextInboxClient); ok {
+		return contextClient.GetInboxForContext(handle, limit)
+	}
+	return client.GetInbox(handle, limit)
+}
+
 // statusError carries the HTTP status of a rejected request so callers can
 // classify failures (e.g. auth) without matching message text.
 type statusError struct {
@@ -33,10 +44,12 @@ type statusError struct {
 func (e *statusError) Error() string { return fmt.Sprintf("%d: %s", e.code, e.message) }
 
 type HTTPClient struct {
-	APIURL  string
-	Token   string
-	Timeout time.Duration
-	Client  *http.Client
+	APIURL       string
+	SocialAPIURL string
+	NodeID       string
+	Token        string
+	Timeout      time.Duration
+	Client       *http.Client
 }
 
 func NewHTTPClient(apiURL string, token string) *HTTPClient {
@@ -49,20 +62,72 @@ func NewHTTPClient(apiURL string, token string) *HTTPClient {
 }
 
 func (c *HTTPClient) GetAgent(handle string) (map[string]any, error) {
+	if c.Token != "" {
+		localRuntime, err := c.heartbeat()
+		if err != nil {
+			return nil, err
+		}
+		if c.hasPairedRuntime() && localRuntime == nil {
+			return nil, fmt.Errorf("authenticated local runtime instructions are unavailable")
+		}
+		result, err := c.request(http.MethodGet, "/agent/me", nil)
+		if err != nil {
+			return nil, err
+		}
+		attachLocalRuntime(result, localRuntime)
+		return result, nil
+	}
 	return c.request(http.MethodGet, "/agents/"+escapePathValue(handle), nil)
 }
 
 func (c *HTTPClient) GetInbox(handle string, limit int) (map[string]any, error) {
+	if c.Token != "" {
+		localRuntime, _ := c.heartbeat()
+		return c.getInbox(handle, limit, localRuntime)
+	}
 	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
 	return c.request(http.MethodGet, "/agents/"+escapePathValue(handle)+"/inbox?"+query.Encode(), nil)
 }
 
+// GetInboxForContext is used when writing a local handoff file. A paired
+// runtime must have a current, authenticated owner instruction set before the
+// file is created; callers that only need inbox polling may use GetInbox.
+func (c *HTTPClient) GetInboxForContext(handle string, limit int) (map[string]any, error) {
+	if c.Token == "" {
+		return c.GetInbox(handle, limit)
+	}
+	localRuntime, err := c.heartbeat()
+	if err != nil {
+		return nil, err
+	}
+	if c.hasPairedRuntime() && localRuntime == nil {
+		return nil, fmt.Errorf("authenticated local runtime instructions are unavailable")
+	}
+	return c.getInbox(handle, limit, localRuntime)
+}
+
+func (c *HTTPClient) getInbox(handle string, limit int, localRuntime map[string]any) (map[string]any, error) {
+	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
+	result, err := c.request(http.MethodGet, "/agent/inbox?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	attachLocalRuntime(result, localRuntime)
+	return result, nil
+}
+
 func (c *HTTPClient) GetThread(threadID string, limit int) (map[string]any, error) {
 	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
+	if c.Token != "" {
+		return c.request(http.MethodGet, "/agent/threads/"+escapePathValue(threadID)+"?"+query.Encode(), nil)
+	}
 	return c.request(http.MethodGet, "/threads/"+escapePathValue(threadID)+"?"+query.Encode(), nil)
 }
 
 func (c *HTTPClient) GetThreadContext(threadID string, requesterHandle string) (map[string]any, error) {
+	if c.Token != "" {
+		return c.request(http.MethodGet, "/agent/threads/"+escapePathValue(threadID)+"/context", nil)
+	}
 	query := url.Values{"requester_handle": []string{requesterHandle}}
 	return c.request(http.MethodGet, "/threads/"+escapePathValue(threadID)+"/context?"+query.Encode(), nil)
 }
@@ -78,6 +143,10 @@ func (c *HTTPClient) SendMessage(senderHandle string, recipientHandles []string,
 	if threadID != "" {
 		body["thread_id"] = threadID
 	}
+	if c.Token != "" {
+		delete(body, "sender_handle")
+		return c.request(http.MethodPost, "/agent/posts", body)
+	}
 	return c.request(http.MethodPost, "/messages", body)
 }
 
@@ -91,6 +160,9 @@ func (c *HTTPClient) CreateRoutingRule(name string, routeToHandles []string, mod
 }
 
 func (c *HTTPClient) AckMessage(messageID string, recipientHandle string) (map[string]any, error) {
+	if c.Token != "" {
+		return c.request(http.MethodPost, "/agent/messages/"+escapePathValue(messageID)+"/ack", nil)
+	}
 	return c.request(http.MethodPost, "/messages/"+escapePathValue(messageID)+"/ack", map[string]any{
 		"recipient_handle": recipientHandle,
 	})
@@ -107,7 +179,14 @@ func (c *HTTPClient) DecideDelivery(deliveryID string, agentHandle string, decis
 	if note != "" {
 		body["note"] = note
 	}
-	return c.request(http.MethodPost, "/deliveries/"+escapePathValue(deliveryID)+"/decision", body)
+	if c.Token != "" {
+		delete(body, "agent_handle")
+	}
+	path := "/deliveries/" + escapePathValue(deliveryID) + "/decision"
+	if c.Token != "" {
+		path = "/agent/deliveries/" + escapePathValue(deliveryID) + "/decision"
+	}
+	return c.request(http.MethodPost, path, body)
 }
 
 func escapePathValue(value string) string {
@@ -115,6 +194,10 @@ func escapePathValue(value string) string {
 }
 
 func (c *HTTPClient) request(method string, path string, body map[string]any) (map[string]any, error) {
+	return c.requestBase(c.APIURL, method, path, body)
+}
+
+func (c *HTTPClient) requestBase(baseURL string, method string, path string, body map[string]any) (map[string]any, error) {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -124,7 +207,7 @@ func (c *HTTPClient) request(method string, path string, body map[string]any) (m
 		reader = bytes.NewReader(payload)
 	}
 
-	req, err := http.NewRequest(method, c.APIURL+path, reader)
+	req, err := http.NewRequest(method, strings.TrimRight(baseURL, "/")+path, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -170,4 +253,37 @@ func (c *HTTPClient) request(method string, path string, body map[string]any) (m
 		return nil, err
 	}
 	return result, nil
+}
+
+func (c *HTTPClient) heartbeat() (map[string]any, error) {
+	if c.SocialAPIURL == "" || c.NodeID == "" || c.Token == "" {
+		return nil, nil
+	}
+	body := map[string]any{}
+	body["node_id"] = c.NodeID
+	result, err := c.requestBase(c.SocialAPIURL, http.MethodPost, "/local-connections/heartbeat", body)
+	if err != nil {
+		return nil, err
+	}
+	return objectValue(result, "local_runtime"), nil
+}
+
+func (c *HTTPClient) hasPairedRuntime() bool {
+	return c.Token != "" && c.SocialAPIURL != "" && c.NodeID != ""
+}
+
+func attachLocalRuntime(result map[string]any, localRuntime map[string]any) {
+	if result == nil || localRuntime == nil {
+		return
+	}
+	result["local_runtime"] = localRuntime
+	items, ok := result["items"].([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range items {
+		if item, ok := raw.(map[string]any); ok {
+			item["local_runtime"] = localRuntime
+		}
+	}
 }

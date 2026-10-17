@@ -102,7 +102,7 @@ class DynamoDbSocialRepository:
 
     def get_agent_profile(self, agent_id: str) -> AgentProfileRecord | None:
         return optional_item(
-            self._profiles_table.get_item(Key={"agent_id": agent_id}).get("Item"),
+            self._profiles_table.get_item(Key={"agent_id": agent_id}, ConsistentRead=True).get("Item"),
             item_to_agent_profile,
         )
 
@@ -115,7 +115,8 @@ class DynamoDbSocialRepository:
         items = result.get("Items", [])
         if not items:
             return None
-        return item_to_agent_profile(items[0])
+        profile = self.get_agent_profile(items[0]["agent_id"])
+        return profile if profile is not None and profile.handle == handle else None
 
     def list_agent_profiles_by_owner(self, owner_user_id: str) -> tuple[AgentProfileRecord, ...]:
         result = self._profiles_table.query(
@@ -231,7 +232,7 @@ class DynamoDbSocialRepository:
 
     def get_node(self, node_id: str) -> NodeRecord | None:
         return optional_item(
-            self._nodes_table.get_item(Key={"node_id": node_id}).get("Item"),
+            self._nodes_table.get_item(Key={"node_id": node_id}, ConsistentRead=True).get("Item"),
             item_to_node,
         )
 
@@ -248,9 +249,23 @@ class DynamoDbSocialRepository:
 
     def get_pair_token(self, pair_token: str) -> PairTokenRecord | None:
         return optional_item(
-            self._pair_tokens_table.get_item(Key={"pair_token": pair_token}).get("Item"),
+            self._pair_tokens_table.get_item(Key={"pair_token": pair_token}, ConsistentRead=True).get("Item"),
             item_to_pair_token,
         )
+
+    def consume_pair_token(self, pair_token: str, now: datetime) -> bool:
+        try:
+            self._pair_tokens_table.update_item(
+                Key={"pair_token": pair_token},
+                UpdateExpression="SET used_at = :now",
+                ConditionExpression="attribute_exists(pair_token) AND attribute_not_exists(used_at) AND expires_at_epoch > :epoch",
+                ExpressionAttributeValues={":now": now.isoformat(), ":epoch": int(now.timestamp())},
+            )
+        except Exception as exc:
+            if getattr(exc, "response", {}).get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+        return True
 
     def put_room(self, room: Room) -> None:
         self._rooms_table.put_item(Item=room_to_item(room))
@@ -479,6 +494,8 @@ def agent_profile_to_item(profile: AgentProfileRecord) -> dict[str, Any]:
             "node_id": profile.node_id,
             "delivery_mode": profile.delivery_mode,
             "last_seen_at": None if profile.last_seen_at is None else profile.last_seen_at.isoformat(),
+            "runtime_mode": profile.runtime_mode,
+            "runtime_token_id": profile.runtime_token_id,
             "created_at": profile.created_at.isoformat(),
             "updated_at": profile.updated_at.isoformat(),
         }
@@ -502,6 +519,8 @@ def item_to_agent_profile(item: dict[str, Any]) -> AgentProfileRecord:
         node_id=item.get("node_id"),
         delivery_mode=item.get("delivery_mode", "pull"),
         last_seen_at=None if item.get("last_seen_at") is None else datetime.fromisoformat(item["last_seen_at"]),
+        runtime_mode=item.get("runtime_mode", "cloud"),
+        runtime_token_id=item.get("runtime_token_id"),
         created_at=datetime.fromisoformat(item["created_at"]),
         updated_at=datetime.fromisoformat(item["updated_at"]),
     )
@@ -558,6 +577,7 @@ def agent_chat_message_to_item(message: AgentChatMessage) -> dict[str, Any]:
             "ai_run_id": message.ai_run_id,
             "ai_run_state": message.ai_run_state,
             "ai_error": message.ai_error,
+            "runtime_mode": message.runtime_mode,
             "created_at": message.created_at.isoformat(),
             "updated_at": message.updated_at.isoformat(),
         }
@@ -578,6 +598,7 @@ def item_to_agent_chat_message(item: dict[str, Any]) -> AgentChatMessage:
         ai_run_id=item.get("ai_run_id"),
         ai_run_state=item.get("ai_run_state"),
         ai_error=item.get("ai_error"),
+        runtime_mode=item.get("runtime_mode", "cloud"),
         created_at=datetime.fromisoformat(item["created_at"]),
         updated_at=datetime.fromisoformat(item["updated_at"]),
     )
@@ -621,6 +642,7 @@ def pair_token_to_item(token: PairTokenRecord) -> dict[str, Any]:
             "expires_at_epoch": int(token.expires_at.timestamp()),
             "created_at": token.created_at.isoformat(),
             "used_at": None if token.used_at is None else token.used_at.isoformat(),
+            "agent_handle": token.agent_handle,
         }
     )
 
@@ -633,6 +655,7 @@ def item_to_pair_token(item: dict[str, Any]) -> PairTokenRecord:
         expires_at=datetime.fromisoformat(item["expires_at"]),
         created_at=datetime.fromisoformat(item["created_at"]),
         used_at=None if item.get("used_at") is None else datetime.fromisoformat(item["used_at"]),
+        agent_handle=item.get("agent_handle"),
     )
 
 

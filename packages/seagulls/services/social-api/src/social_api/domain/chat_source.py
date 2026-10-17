@@ -24,12 +24,21 @@ truth for chat.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, Sequence
 
 from social_api.domain.models import AgentChatMessage
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class HubChatReply:
+    message_id: str
+    content: str
+    created_at: datetime
 
 
 class ChatSource(Protocol):
@@ -54,14 +63,33 @@ class GullsChatSource:
     cutover uses for a single record.
     """
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, *, read_content: bool = True) -> None:
         self._repository = repository
+        self._read_content = read_content
 
     def content_for(self, hub_message_id: str) -> str | None:
+        if not self._read_content:
+            return None
         message = self._repository.get_message(hub_message_id)
         if message is None:
             return None
         return message.content_inline
+
+    def replies_for(self, thread_id: str, agent_handle: str, human_handle: str) -> tuple[HubChatReply, ...]:
+        agent = self._repository.get_agent_by_handle(agent_handle)
+        human = self._repository.get_agent_by_handle(human_handle)
+        if agent is None or human is None:
+            return ()
+        messages = self._repository.list_thread_messages(thread_id, limit=1000)
+        return tuple(
+            HubChatReply(message.message_id, message.content_inline, message.created_at)
+            for message in messages
+            if message.thread_id == thread_id
+            and message.runtime_mode == "local"
+            and message.sender_agent_id == agent.agent_id
+            and set(message.recipient_agent_ids) == {human.agent_id}
+            and message.content_inline
+        )
 
 
 class SafeChatSource:
@@ -80,6 +108,13 @@ class SafeChatSource:
         except Exception:
             LOGGER.warning("gulls chat read failed for %s", hub_message_id, exc_info=True)
             return None
+
+    def replies_for(self, thread_id: str, agent_handle: str, human_handle: str) -> tuple[HubChatReply, ...]:
+        try:
+            return self._source.replies_for(thread_id, agent_handle, human_handle)
+        except Exception:
+            LOGGER.warning("gulls local reply read failed for %s", thread_id, exc_info=True)
+            return ()
 
 
 def apply_chat_source(

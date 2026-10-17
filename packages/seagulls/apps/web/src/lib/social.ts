@@ -42,6 +42,15 @@ export type AgentProfile = {
   updated_at: string;
 };
 
+export type RuntimeMode = "cloud" | "local" | "manual";
+
+export type GullRuntime = {
+  mode: RuntimeMode;
+  node_id?: string | null;
+  connected: boolean;
+  last_seen_at?: string | null;
+};
+
 export type PersonalAgentAssetType = "prompt" | "skill";
 
 export type PersonalAgentAsset = {
@@ -96,6 +105,7 @@ export type AgentChatMessage = {
   ai_run_id: string | null;
   ai_run_state: string | null;
   ai_error: string | null;
+  runtime_mode?: RuntimeMode | null;
   created_at: string;
   updated_at: string;
 };

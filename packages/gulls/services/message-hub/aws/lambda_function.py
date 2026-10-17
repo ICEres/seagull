@@ -33,7 +33,9 @@ from message_hub.api import (
     accept_prefers_html,
     render_agent_card_html,
 )
+from message_hub.api.local import bearer_token_from_authorization
 from message_hub.domain import (
+    AgentTokenVerificationError,
     DeliveryStatus,
     MessageHubError,
     MessageHubService,
@@ -517,7 +519,7 @@ def _build_repository(config: dict[str, str] | None) -> DynamoDbMessageHubReposi
     )
 
 
-_RUNTIME: dict[str, Any] = {"api": None, "secrets": {}}
+_RUNTIME: dict[str, Any] = {"api": None, "secrets": {}, "runtime_profiles_table": None}
 
 
 def _int_env(name: str, default: int) -> int:
@@ -565,6 +567,7 @@ def configure_api(api: LocalMessageHubApi) -> None:
 def reset_runtime() -> None:
     _RUNTIME["api"] = None
     _RUNTIME["secrets"].clear()
+    _RUNTIME["runtime_profiles_table"] = None
 
 
 def _cached_secret(name: str) -> str:
@@ -604,6 +607,15 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
 
     if method == "POST" and path == "/agent-registrations":
         return response(201, get_api().agent_registration(parse_body(event)))
+
+    if method == "POST" and path == "/internal/agent-tokens":
+        require_legacy_route_secret(event)
+        return response(201, get_api().issue_internal_agent_token(parse_body(event)))
+
+    if method == "POST" and path.startswith("/internal/agent-tokens/") and path.endswith("/revoke"):
+        require_legacy_route_secret(event)
+        token_id = path_param(path, "/internal/agent-tokens/", "/revoke")
+        return response(200, get_api().revoke_internal_agent_token(token_id))
 
     if path == "/agent" or path.startswith("/agent/"):
         return route_agent_runtime(method, path, event)
@@ -853,10 +865,93 @@ def ack_message(message_id: str, event: dict[str, Any]) -> dict[str, Any]:
     return response(200, {"message_id": message_id, **result})
 
 
+def runtime_profiles_table() -> Any:
+    """Return the optional Social agent-profile table used for node binding."""
+    table = _RUNTIME.get("runtime_profiles_table")
+    if table is not None:
+        return table
+    table_name = os.environ.get("RUNTIME_PROFILES_TABLE", "").strip()
+    if not table_name:
+        return None
+    try:
+        import boto3
+
+        table = boto3.resource("dynamodb").Table(table_name)
+    except Exception:
+        return None
+    _RUNTIME["runtime_profiles_table"] = table
+    return table
+
+
+def enforce_node_runtime_binding(api: LocalMessageHubApi, authorization: str | None) -> dict[str, Any] | None:
+    """Require a current Social profile binding for node-bound bearer tokens.
+
+    The handle GSI only locates the profile. The second read is a strongly
+    consistent primary-key read so a replaced profile cannot authorize a stale
+    node token through an eventually consistent index result.
+    """
+    try:
+        principal = api._service.verify_agent_token(  # noqa: SLF001 - adapter boundary check
+            bearer_token_from_authorization(authorization)
+        )
+    except AgentTokenVerificationError as exc:
+        status_code = 403 if str(exc).startswith("missing agent token scope") else 401
+        error = "forbidden" if status_code == 403 else "unauthorized"
+        raise ApiError(status_code, error, str(exc)) from exc
+
+    if principal.node_id is None:
+        return None
+
+    table = runtime_profiles_table()
+    if table is None:
+        raise ApiError(403, "forbidden", "node runtime binding is unavailable")
+
+    try:
+        try:
+            from boto3.dynamodb.conditions import Key
+            key_condition: Any = Key("handle").eq(principal.agent_handle)
+        except ImportError:
+            # The dependency-free adapter tests inject a fake table. Deployed
+            # Lambda always has boto3 and uses the real DynamoDB expression.
+            key_condition = principal.agent_handle
+
+        located = table.query(
+            IndexName="handle-index",
+            KeyConditionExpression=key_condition,
+            Limit=1,
+        ).get("Items", [])
+        if not located or not located[0].get("agent_id"):
+            raise ApiError(403, "forbidden", "node runtime binding is invalid")
+        item = table.get_item(
+            Key={"agent_id": located[0]["agent_id"]},
+            ConsistentRead=True,
+        ).get("Item")
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(403, "forbidden", "node runtime binding is unavailable") from exc
+
+    if not item or item.get("status", "active") != "active":
+        raise ApiError(403, "forbidden", "node runtime binding is invalid")
+    if (
+        item.get("owner_user_id") != principal.owner_user_id
+        or item.get("node_id") != principal.node_id
+        or item.get("runtime_token_id") != principal.token_id
+    ):
+        raise ApiError(403, "forbidden", "node runtime binding is invalid")
+    return item
+
+
+def require_local_runtime_mode(profile: dict[str, Any] | None) -> None:
+    if profile is not None and profile.get("runtime_mode", "cloud") not in {"local", "manual"}:
+        raise ApiError(409, "runtime_conflict", "agent runtime mode is cloud-owned")
+
+
 def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     api = get_api()
     authorization = authorization_header(event)
+    runtime_profile = enforce_node_runtime_binding(api, authorization)
 
     if method == "GET" and parts == ["agent", "me"]:
         return response(200, api.agent_me(authorization))
@@ -864,6 +959,21 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
     if method == "GET" and parts == ["agent", "inbox"]:
         limit = query_limit(event, default=20, maximum=100)
         return response(200, api.agent_inbox(authorization, limit=limit))
+
+    if method == "GET" and len(parts) == 3 and parts[:2] == ["agent", "threads"]:
+        thread_id = parts[2]
+        return response(200, api.agent_thread(authorization, thread_id, limit=query_limit(event, default=50, maximum=100)))
+
+    if method == "GET" and len(parts) == 4 and parts[:2] == ["agent", "threads"] and parts[3] == "context":
+        thread_id = parts[2]
+        return response(
+            200,
+            api.agent_thread_context(
+                authorization,
+                thread_id,
+                recent_limit=query_limit(event, default=10, maximum=20),
+            ),
+        )
 
     if method == "POST" and parts == ["agent", "inbox-posture"]:
         return response(200, api.agent_set_inbox_posture(authorization, parse_body(event)))
@@ -875,13 +985,19 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
         return response(201, api.agent_mint_guest_invite(authorization, parse_body(event)))
 
     if method == "POST" and parts == ["agent", "posts"]:
+        require_local_runtime_mode(runtime_profile)
         return response(201, api.agent_post(authorization, message_body(parse_body(event))))
 
     if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "decision":
+        if parse_body(event).get("decision") == "reply":
+            require_local_runtime_mode(runtime_profile)
         return response(200, api.agent_decide_delivery(authorization, parts[2], parse_body(event)))
 
     if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "ack":
         return response(200, api.agent_ack_delivery(authorization, parts[2]))
+
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "messages"] and parts[3] == "ack":
+        return response(200, api.agent_ack_message(authorization, parts[2]))
 
     if method == "GET" and parts == ["agent", "tasks"]:
         params = query_params(event)

@@ -76,6 +76,34 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		payload := map[string]any{"program": global.ProgramName, "version": Version}
 		printJSONOrText(stdout, global.JSON, payload, global.ProgramName+" version "+Version)
 		return 0, nil
+	case "pair":
+		fs := commandFlagSet("pair", stderr)
+		server := fs.String("server", "", "Social API HTTPS base URL")
+		pairToken := fs.String("token", "", "short-lived pairing token")
+		force := fs.Bool("force", false, "replace a different existing paired agent")
+		if err := parseCommand(fs, commandArgs); err != nil {
+			return 0, err
+		}
+		if strings.TrimSpace(*server) == "" {
+			return 0, usage("pair requires --server")
+		}
+		if strings.TrimSpace(*pairToken) == "" {
+			return 0, usage("pair requires --token")
+		}
+		result, err := PairLocalConnection(*server, *pairToken, *force, env)
+		if err != nil {
+			return 0, err
+		}
+		if global.JSON {
+			printJSON(stdout, map[string]any{
+				"agent_handle": result.AgentHandle,
+				"node_id":      result.NodeID,
+				"config_path":  result.ConfigPath,
+			})
+		} else {
+			fmt.Fprintf(stdout, "Paired %s to node %s. Configuration saved to %s.\n", result.AgentHandle, result.NodeID, result.ConfigPath)
+		}
+		return 0, nil
 	case "whoami":
 		config, client, err := loadRuntime(global, env, client, nil)
 		if err != nil {
@@ -463,6 +491,10 @@ func loadRuntime(global globalOptions, env []string, client Client, interval *fl
 	}
 	if client == nil {
 		client = NewHTTPClient(config.APIURL, config.Token)
+		if httpClient, ok := client.(*HTTPClient); ok {
+			httpClient.SocialAPIURL = config.SocialAPIURL
+			httpClient.NodeID = config.NodeID
+		}
 	}
 	return config, client, nil
 }
@@ -481,7 +513,7 @@ func parseCommand(fs *flag.FlagSet, args []string) error {
 }
 
 func requireInboxDelivery(client Client, config Config, deliveryID string, limit int) (map[string]any, error) {
-	inbox, err := client.GetInbox(config.AgentHandle, limit)
+	inbox, err := getInboxForContext(client, config.AgentHandle, limit)
 	if err != nil {
 		return nil, err
 	}

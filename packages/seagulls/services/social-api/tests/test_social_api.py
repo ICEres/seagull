@@ -97,6 +97,28 @@ class FakeAiRunClient:
         return self._run
 
 
+class FakeAiUsageReader:
+    def __init__(self, summary: dict[str, object] | None = None, error: Exception | None = None) -> None:
+        self.summary = summary or {
+            "owner_user_id": "",
+            "balance": {"owner_user_id": "", "available_credits": 0},
+            "usage": [],
+            "entries": [],
+        }
+        self.error = error
+        self.owner_user_ids: list[str] = []
+
+    def read_owner_usage_summary(self, owner_user_id: str) -> dict[str, object]:
+        self.owner_user_ids.append(owner_user_id)
+        if self.error is not None:
+            raise self.error
+        return {
+            **self.summary,
+            "owner_user_id": owner_user_id,
+            "balance": {"owner_user_id": owner_user_id, "available_credits": 0},
+        }
+
+
 class RecordingAgentRegistry:
     def __init__(self, error: Exception | None = None) -> None:
         self.registered: list[tuple[str, str | None]] = []
@@ -827,6 +849,29 @@ class SocialApiServiceTest(TestCase):
 
 
 class LocalSocialApiTest(TestCase):
+    def test_local_api_ai_usage_is_owner_scoped_and_reports_provider_outage(self) -> None:
+        reader = FakeAiUsageReader()
+        api = LocalSocialApi.in_memory(auth_required=True, ai_usage_reader=reader)
+        principal = AuthPrincipal(provider="cognito", subject="alice-sub", email="alice@example.com")
+
+        summary = api.ai_usage(principal=principal)
+        self.assertEqual(summary["owner_user_id"], reader.owner_user_ids[0])
+        self.assertEqual(0, summary["balance"]["available_credits"])
+        with self.assertRaises(ApiError) as spoofed:
+            api.ai_usage(owner_user_id="user_other", principal=principal)
+        self.assertEqual(403, spoofed.exception.status_code)
+        with self.assertRaises(ApiError) as unauthenticated:
+            api.ai_usage()
+        self.assertEqual(401, unauthenticated.exception.status_code)
+
+        failing = LocalSocialApi.in_memory(
+            auth_required=True,
+            ai_usage_reader=FakeAiUsageReader(error=RuntimeError("provider down")),
+        )
+        with self.assertRaises(ApiError) as unavailable:
+            failing.ai_usage(principal=principal)
+        self.assertEqual(503, unavailable.exception.status_code)
+
     def test_local_api_phase3_loop(self) -> None:
         api = LocalSocialApi.in_memory()
 

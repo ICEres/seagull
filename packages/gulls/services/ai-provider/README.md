@@ -49,3 +49,8 @@ Run local tests from the repository root:
 ```text
 make ai-provider-test
 ```
+
+The owner-scoped read-only endpoint `GET /owners/{owner_user_id}/ai-usage-summary`
+returns the current balance, usage records, and credit ledger entries together.
+It requires the existing owner authentication or admin secret; it does not add
+any payment or credit mutation behavior.

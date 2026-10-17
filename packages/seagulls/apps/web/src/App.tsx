@@ -13,6 +13,7 @@ import {
 } from "@seagulls/ui";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
+import { AiUsagePage } from "./components/ai-usage-page";
 import { ChatPage } from "./components/chat-page";
 import { FlockPage } from "./components/flock-page";
 import { ServerPage } from "./components/server-page";
@@ -47,6 +48,7 @@ const NAV_ITEMS: Array<{ to: string; label: string }> = [
   // Work is the Agent Request surface: requests, delegation, and results.
   { to: "/work", label: "Work" },
   { to: "/flock", label: "Flock" },
+  { to: "/ai-usage", label: "AI Usage" },
   { to: "/server", label: "Server" },
 ];
 
@@ -371,7 +373,7 @@ export default function App() {
 
   return (
     <div className="grid min-h-screen grid-cols-[208px_minmax(0,1fr)] max-[860px]:grid-cols-1">
-      <aside className="sticky top-0 box-border flex h-screen flex-col gap-8 border-r border-line px-3.5 pt-6 pb-5 max-[860px]:static max-[860px]:h-auto max-[860px]:flex-row max-[860px]:items-center max-[860px]:gap-4 max-[860px]:border-r-0 max-[860px]:border-b max-[860px]:py-3">
+      <aside className="sticky top-0 box-border flex h-screen flex-col gap-8 border-r border-line px-3.5 pt-6 pb-5 max-[860px]:static max-[860px]:h-auto max-[860px]:flex-row max-[860px]:flex-wrap max-[860px]:items-center max-[860px]:gap-4 max-[860px]:border-r-0 max-[860px]:border-b max-[860px]:py-3">
         <div className="flex items-center gap-2.5 px-2.5">
           <span className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-accent text-[0.85rem] font-black text-white">
             S
@@ -379,7 +381,7 @@ export default function App() {
           <strong className="font-extrabold tracking-[-0.01em] max-[860px]:hidden">seagulls</strong>
         </div>
 
-        <nav aria-label="Primary" className="grid gap-0.5 max-[860px]:flex max-[860px]:gap-1">
+        <nav aria-label="Primary" className="grid gap-0.5 max-[860px]:order-last max-[860px]:w-full max-[860px]:min-w-0 max-[860px]:grid-cols-3 max-[860px]:gap-1">
           {NAV_ITEMS.map((item) => {
             const current = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
             return (
@@ -391,7 +393,7 @@ export default function App() {
                   window.scrollTo(0, 0);
                 }}
                 aria-current={current ? "page" : undefined}
-                className={`flex min-h-10 items-center gap-2 rounded-lg border-0 bg-transparent px-2.5 text-left text-[0.94rem] font-extrabold hover:text-accent-strong ${
+                className={`flex min-h-10 shrink-0 items-center gap-2 rounded-lg border-0 bg-transparent px-2.5 text-left text-[0.94rem] font-extrabold whitespace-nowrap hover:text-accent-strong ${
                   current ? "text-ink" : "text-muted"
                 }`}
               >
@@ -527,6 +529,14 @@ export default function App() {
                   profiles={dashboardProfiles}
                   onNotice={setNotice}
                 />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/ai-usage"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated}>
+                <AiUsagePage api={api} state={state} profiles={dashboardProfiles} />
               </ProtectedRoute>
             }
           />

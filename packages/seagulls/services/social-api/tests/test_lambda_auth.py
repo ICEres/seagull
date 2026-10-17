@@ -339,6 +339,113 @@ class SocialApiLambdaAuthTest(TestCase):
         self.assertEqual(401, response["statusCode"])
         self.assertEqual("authentication is required", response_body(response)["message"])
 
+    def test_my_ai_usage_proxies_current_identity_to_provider(self) -> None:
+        lambda_module = load_lambda_module()
+        claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        identity = lambda_module.service.identify_human(
+            provider="cognito",
+            subject="alice-sub",
+            email="alice@example.com",
+        )
+        summary = {
+            "owner_user_id": identity.user_id,
+            "balance": {"owner_user_id": identity.user_id, "available_credits": 20000},
+            "usage": [],
+            "entries": [],
+        }
+        lambda_module.AI_PROVIDER_API_URL = "https://ai-provider.test"
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "provider-secret"
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(summary).encode("utf-8")
+
+        requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float) -> FakeResponse:
+            requests.append(request)
+            return FakeResponse()
+
+        lambda_module.urlopen = fake_urlopen
+        response = lambda_module.handler(
+            event("GET", "/me/ai-usage", claims=claims, query={"owner_user_id": "spoofed"}),
+            None,
+        )
+        self.assertEqual(200, response["statusCode"])
+        self.assertEqual(summary, response_body(response))
+        self.assertEqual(1, len(requests))
+        self.assertIn(f"/owners/{identity.user_id}/ai-usage-summary", requests[0].full_url)
+        self.assertEqual(
+            "provider-secret",
+            next(value for key, value in requests[0].headers.items() if key.casefold() == "x-seagull-admin-secret"),
+        )
+
+        unauthenticated = lambda_module.handler(event("GET", "/me/ai-usage"), None)
+        self.assertEqual(401, unauthenticated["statusCode"])
+
+        lambda_module.urlopen = lambda request, timeout: (_ for _ in ()).throw(RuntimeError("provider down"))
+        unavailable = lambda_module.handler(event("GET", "/me/ai-usage", claims=claims), None)
+        self.assertEqual(503, unavailable["statusCode"])
+
+    def test_my_ai_usage_uses_lambda_provider_transport_and_maps_failures(self) -> None:
+        lambda_module = load_lambda_module()
+        claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        identity = lambda_module.service.identify_human(
+            provider="cognito",
+            subject="alice-sub",
+            email="alice@example.com",
+        )
+        lambda_module.AI_PROVIDER_FUNCTION_ARN = "arn:aws:lambda:ap-southeast-2:123:function:ai-provider"
+        lambda_module.AI_PROVIDER_API_URL = ""
+        lambda_module.AI_PROVIDER_ADMIN_SECRET = "provider-secret"
+        summary = {
+            "owner_user_id": identity.user_id,
+            "balance": {"owner_user_id": identity.user_id, "available_credits": 20_000},
+            "usage": [],
+            "entries": [],
+        }
+
+        success_client = FakeLambdaClient(
+            {"statusCode": 200, "body": json.dumps(summary)},
+        )
+        fake_botocore = types.ModuleType("botocore")
+        fake_botocore_config = FakeBotocoreConfig("botocore.config")
+
+        def invoke_with_client(client: FakeLambdaClient) -> dict[str, object]:
+            lambda_module.boto3.client = lambda service_name, **kwargs: client
+            with patch.dict(
+                sys.modules,
+                {"botocore": fake_botocore, "botocore.config": fake_botocore_config},
+            ):
+                return lambda_module.handler(event("GET", "/me/ai-usage", claims=claims), None)
+
+        success = invoke_with_client(success_client)
+        self.assertEqual(200, success["statusCode"])
+        self.assertEqual(summary, response_body(success))
+        self.assertEqual(1, len(success_client.calls))
+        invoked = json.loads(success_client.calls[0]["Payload"])
+        self.assertEqual("GET", invoked["requestContext"]["http"]["method"])
+        self.assertEqual(
+            f"/owners/{identity.user_id}/ai-usage-summary",
+            invoked["rawPath"],
+        )
+        self.assertEqual("provider-secret", invoked["headers"]["x-seagull-admin-secret"])
+
+        for payload, function_error in (
+            ({"statusCode": 500, "body": "{}"}, None),
+            ({"statusCode": 200, "body": "{}"}, "Unhandled"),
+        ):
+            with self.subTest(payload=payload, function_error=function_error):
+                failed_client = FakeLambdaClient(payload, function_error=function_error)
+                failed = invoke_with_client(failed_client)
+                self.assertEqual(503, failed["statusCode"])
+
     def test_prompt_routes_are_owner_scoped_and_preserve_saved_prompt_on_bad_put(self) -> None:
         lambda_module = load_lambda_module()
         alice_claims = {"sub": "alice-sub", "email": "alice@example.com"}

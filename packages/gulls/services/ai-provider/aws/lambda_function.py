@@ -231,6 +231,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 },
             )
 
+        if method == "GET" and path.startswith("/owners/") and path.endswith("/ai-usage-summary"):
+            owner_user_id = path_param(path, "/owners/", "/ai-usage-summary")
+            require_owner_or_admin(event, owner_user_id)
+            return response(
+                200,
+                {
+                    "owner_user_id": owner_user_id,
+                    "balance": user_credit_balance_to_dict(service.get_user_credit_balance(owner_user_id)),
+                    "usage": [
+                        usage_record_to_dict(record)
+                        for record in service.list_usage_by_owner(owner_user_id)
+                    ],
+                    "entries": [
+                        user_credit_ledger_entry_to_dict(entry)
+                        for entry in service.list_user_credit_ledger(owner_user_id)
+                    ],
+                },
+            )
+
         if method == "GET" and path.startswith("/agents/") and path.endswith("/ai-usage"):
             require_admin(event)
             agent_id = path_param(path, "/agents/", "/ai-usage")

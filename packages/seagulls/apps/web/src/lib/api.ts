@@ -1,4 +1,5 @@
 import { ApiError, JsonApiClient, trimBaseUrl } from "./http";
+import type { MyAiUsage } from "./ai-provider";
 import type {
   AgentAssetBinding,
   AgentChatMessage,
@@ -53,6 +54,15 @@ export class SocialApiClient extends JsonApiClient {
 
   me(): Promise<{ identity: HumanIdentity }> {
     return this.request("GET", "/me");
+  }
+
+  getMyAiUsage(ownerUserId?: string): Promise<MyAiUsage> {
+    const query = new URLSearchParams();
+    if (ownerUserId) {
+      query.set("owner_user_id", ownerUserId);
+    }
+    const suffix = query.size ? `?${query}` : "";
+    return this.request("GET", `/me/ai-usage${suffix}`);
   }
 
   getDashboard(): Promise<DashboardSummary> {

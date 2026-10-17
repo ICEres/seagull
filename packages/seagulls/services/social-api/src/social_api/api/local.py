@@ -77,6 +77,11 @@ class AiRunClient(Protocol):
         """Execute one AI run and return the run payload."""
 
 
+class AiUsageReader(Protocol):
+    def read_owner_usage_summary(self, owner_user_id: str) -> dict[str, Any]:
+        """Read one owner's provider usage summary."""
+
+
 class LocalSocialApi:
     """Dependency-free local API adapter for the Phase 3 social loop."""
 
@@ -87,11 +92,13 @@ class LocalSocialApi:
         auth_required: bool = False,
         message_hub_sender: MessageHubSender | None = None,
         ai_run_client: AiRunClient | None = None,
+        ai_usage_reader: AiUsageReader | None = None,
     ) -> None:
         self._service = service
         self._auth_required = auth_required
         self._message_hub_sender = message_hub_sender
         self._ai_run_client = ai_run_client
+        self._ai_usage_reader = ai_usage_reader
 
     @classmethod
     def in_memory(
@@ -100,6 +107,7 @@ class LocalSocialApi:
         auth_required: bool = False,
         message_hub_sender: MessageHubSender | None = None,
         ai_run_client: AiRunClient | None = None,
+        ai_usage_reader: AiUsageReader | None = None,
         agent_registry: AgentRegistry | None = None,
         feed_mirror: FeedMirror | None = None,
         feed_source: FeedSource | None = None,
@@ -118,6 +126,7 @@ class LocalSocialApi:
             auth_required=auth_required,
             message_hub_sender=message_hub_sender,
             ai_run_client=ai_run_client,
+            ai_usage_reader=ai_usage_reader,
         )
 
     def health(self) -> dict[str, Any]:
@@ -125,6 +134,23 @@ class LocalSocialApi:
 
     def me(self, principal: AuthPrincipal | None = None) -> dict[str, Any]:
         return {"identity": human_identity_to_dict(self._identity_from_principal(principal))}
+
+    def ai_usage(
+        self,
+        *,
+        owner_user_id: str | None = None,
+        principal: AuthPrincipal | None = None,
+    ) -> dict[str, Any]:
+        owner = self._owner_user_id_from_value(owner_user_id, principal)
+        if self._ai_usage_reader is None:
+            raise ApiError(503, "service_unavailable", "AI usage provider is not configured")
+        try:
+            summary = self._ai_usage_reader.read_owner_usage_summary(owner)
+        except Exception as exc:
+            raise ApiError(503, "service_unavailable", "AI usage provider is unavailable") from exc
+        if not isinstance(summary, dict):
+            raise ApiError(503, "service_unavailable", "AI usage provider returned an invalid response")
+        return summary
 
     def dashboard(self, principal: AuthPrincipal | None = None) -> dict[str, Any]:
         return dashboard_summary_to_dict(

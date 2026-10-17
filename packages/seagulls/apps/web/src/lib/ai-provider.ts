@@ -23,6 +23,38 @@ export type ServerCreditBalance = {
   available_credits: number;
 };
 
+export type AiUsageRecord = {
+  usage_id: string;
+  run_id: string;
+  provider: string;
+  model: string;
+  owner_user_id: string;
+  agent_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  estimated_cost_units: number;
+  created_at: string | null;
+};
+
+export type UserCreditLedgerEntry = {
+  entry_id: string;
+  owner_user_id: string;
+  entry_type: "credit_grant" | "ai_run_charge";
+  credit_delta: number;
+  reason: string;
+  run_id: string | null;
+  usage_id: string | null;
+  created_at: string | null;
+};
+
+export type MyAiUsage = {
+  owner_user_id: string;
+  balance: { owner_user_id: string; available_credits: number };
+  usage: AiUsageRecord[];
+  entries: UserCreditLedgerEntry[];
+};
+
 export type ServerCreditLedgerEntry = {
   entry_id: string;
   entry_type: string;

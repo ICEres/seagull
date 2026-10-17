@@ -5,7 +5,7 @@ import hmac
 import json
 import os
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -252,6 +252,10 @@ class Unauthorized(ValueError):
     pass
 
 
+class UpstreamServiceError(RuntimeError):
+    """Raised when the configured AI Provider cannot serve a read request."""
+
+
 def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
     # Headers carry the caller's Authorization token plus x-seagull-admin-secret /
     # x-seagull-legacy-secret / x-seagull-auth-bypass-secret; the body carries
@@ -279,6 +283,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if method == "GET" and path == "/me":
             identity = identity_from_event(event)
             return response(200, {"identity": human_identity_to_dict(identity)})
+
+        if method == "GET" and path == "/me/ai-usage":
+            identity = identity_from_event(event)
+            summary = AiProviderUsageClient().read_owner_usage_summary(identity.user_id)
+            return response(200, summary)
 
         if method == "GET" and path == "/dashboard":
             identity = identity_from_event(event)
@@ -617,6 +626,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response(401, {"error": "unauthorized", "message": str(exc)})
     except BadRequest as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
+    except UpstreamServiceError as exc:
+        return response(503, {"error": "service_unavailable", "message": str(exc)})
     except InvalidSocialRequestError as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
     except PermissionDeniedError as exc:
@@ -641,6 +652,84 @@ def ai_reply_enabled() -> bool:
         and AI_REPLY_PROVIDER
         and AI_REPLY_MODEL
     )
+
+
+class AiProviderUsageClient:
+    """Read owner usage through the server-side AI Provider boundary."""
+
+    def read_owner_usage_summary(self, owner_user_id: str) -> dict[str, Any]:
+        encoded_owner = quote(owner_user_id, safe="")
+        path = f"/owners/{encoded_owner}/ai-usage-summary"
+        if AI_PROVIDER_FUNCTION_ARN:
+            return self._read_via_lambda(path)
+        if not AI_PROVIDER_API_URL or not AI_PROVIDER_ADMIN_SECRET:
+            raise UpstreamServiceError("AI usage provider is not configured")
+        request = Request(
+            f"{AI_PROVIDER_API_URL}{path}",
+            headers={"x-seagull-admin-secret": AI_PROVIDER_ADMIN_SECRET},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=AI_REPLY_TIMEOUT_SECONDS) as result:
+                raw = result.read().decode("utf-8")
+        except Exception as exc:
+            raise UpstreamServiceError("AI usage provider is unavailable") from exc
+        return self._parse_summary(raw)
+
+    def _read_via_lambda(self, path: str) -> dict[str, Any]:
+        from botocore.config import Config
+
+        event = {
+            "rawPath": path,
+            "requestContext": {"http": {"method": "GET", "path": path}},
+            "headers": {"x-seagull-admin-secret": AI_PROVIDER_ADMIN_SECRET},
+        }
+        try:
+            invoke_timeout = min(max(AI_REPLY_TIMEOUT_SECONDS, 1.0), 25.0)
+            result = boto3.client(
+                "lambda",
+                config=Config(
+                    connect_timeout=min(3.0, invoke_timeout),
+                    read_timeout=invoke_timeout,
+                    retries={"max_attempts": 0},
+                ),
+            ).invoke(
+                FunctionName=AI_PROVIDER_FUNCTION_ARN,
+                InvocationType="RequestResponse",
+                Payload=json.dumps(event, separators=(",", ":")).encode("utf-8"),
+            )
+        except Exception as exc:
+            raise UpstreamServiceError("AI usage provider is unavailable") from exc
+
+        payload_stream = result.get("Payload")
+        try:
+            raw = payload_stream.read() if payload_stream is not None else b""
+        finally:
+            close = getattr(payload_stream, "close", None)
+            if callable(close):
+                close()
+        if result.get("FunctionError"):
+            raise UpstreamServiceError("AI usage provider is unavailable")
+        try:
+            response_payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw or "{}")
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise UpstreamServiceError("AI usage provider returned an invalid response") from exc
+        if not isinstance(response_payload, dict) or not isinstance(response_payload.get("statusCode"), int):
+            raise UpstreamServiceError("AI usage provider returned an invalid response")
+        if not 200 <= response_payload["statusCode"] < 300:
+            raise UpstreamServiceError("AI usage provider is unavailable")
+        body = response_payload.get("body")
+        return self._parse_summary(body if isinstance(body, str) else json.dumps(body or {}))
+
+    @staticmethod
+    def _parse_summary(raw: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError as exc:
+            raise UpstreamServiceError("AI usage provider returned an invalid response") from exc
+        if not isinstance(parsed, dict) or not all(key in parsed for key in ("owner_user_id", "balance", "usage", "entries")):
+            raise UpstreamServiceError("AI usage provider returned an invalid response")
+        return parsed
 
 
 class AiProviderRunClient:

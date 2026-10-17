@@ -86,6 +86,17 @@ class LocalAiProviderApi:
         records = self._service.list_usage_by_owner(owner_user_id)
         return {"owner_user_id": owner_user_id, "usage": [usage_record_to_dict(record) for record in records]}
 
+    def read_owner_usage_summary(self, owner_user_id: str) -> dict[str, Any]:
+        return {
+            "owner_user_id": owner_user_id,
+            "balance": user_credit_balance_to_dict(self._service.get_user_credit_balance(owner_user_id)),
+            "usage": [usage_record_to_dict(record) for record in self._service.list_usage_by_owner(owner_user_id)],
+            "entries": [
+                user_credit_ledger_entry_to_dict(entry)
+                for entry in self._service.list_user_credit_ledger(owner_user_id)
+            ],
+        }
+
     def read_agent_usage(self, agent_id: str) -> dict[str, Any]:
         records = self._service.list_usage_by_agent(agent_id)
         return {"agent_id": agent_id, "usage": [usage_record_to_dict(record) for record in records]}

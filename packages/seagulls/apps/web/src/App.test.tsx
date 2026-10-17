@@ -283,6 +283,71 @@ describe("App", () => {
     expect(container.textContent).toContain("Mentions");
   });
 
+  it("opens AI Usage from primary navigation and loads the signed-in owner's usage", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    vi.stubGlobal("scrollTo", vi.fn());
+    saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+      "/profiles?owner_user_id=user_1": { items: [profile] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/profiles/%40researcher%3Aseagull.local/notifications?owner_user_id=user_1&limit=50": {
+        items: [],
+      },
+      "/moderation?limit=50": { items: [] },
+      "/me/ai-usage?owner_user_id=user_1": {
+        owner_user_id: "user_1",
+        balance: { owner_user_id: "user_1", available_credits: 9800 },
+        usage: [
+          {
+            usage_id: "usage_1",
+            run_id: "run_1",
+            provider: "openai",
+            model: "gpt-6-luna",
+            owner_user_id: "user_1",
+            agent_id: "agent_1",
+            input_tokens: 100,
+            output_tokens: 40,
+            cached_tokens: 20,
+            estimated_cost_units: 140,
+            created_at: "2026-10-17T09:00:00Z",
+          },
+        ],
+        entries: [],
+      },
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "The sky");
+    const usageNav = Array.from(container.querySelectorAll('nav[aria-label="Primary"] button')).find((item) =>
+      /usage/i.test(item.textContent ?? ""),
+    );
+    expect(usageNav).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => {
+      (usageNav as HTMLButtonElement).click();
+    });
+    await waitForText(container, "9,800");
+    expect(container.textContent).toContain("AI Usage");
+    expect(container.textContent).toContain("Researcher");
+
+    const usageCall = vi.mocked(fetch).mock.calls.find(([input]) =>
+      String(input).includes("/me/ai-usage?owner_user_id=user_1"),
+    );
+    expect(usageCall).toBeDefined();
+  });
+
+  it("redirects unauthenticated AI Usage access to login", async () => {
+    window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+    });
+
+    const container = renderApp("/ai-usage");
+    await waitForText(container, "Your sky is waiting");
+    expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Available tokens");
+  });
+
   it("redirects legacy routes into the new screens", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });

@@ -217,6 +217,30 @@ class AiProviderLambdaAuthTest(TestCase):
         self.assertEqual(1, len(body(allowed)["usage"]))
         self.assertEqual(401, denied["statusCode"])
 
+        summary = self.lambda_module.handler(
+            event("GET", "/owners/user_1/ai-usage-summary", claims={"custom:seagull_user_id": "user_1"}),
+            None,
+        )
+        self.assertEqual(200, summary["statusCode"])
+        self.assertEqual("user_1", body(summary)["owner_user_id"])
+        self.assertEqual(991, body(summary)["balance"]["available_credits"])
+        self.assertEqual(1, len(body(summary)["usage"]))
+        self.assertEqual(2, len(body(summary)["entries"]))
+
+        summary_denied = self.lambda_module.handler(
+            event("GET", "/owners/user_1/ai-usage-summary", claims={"custom:seagull_user_id": "user_2"}),
+            None,
+        )
+        self.assertEqual(401, summary_denied["statusCode"])
+        empty = self.lambda_module.handler(
+            event("GET", "/owners/user_2/ai-usage-summary", claims={"custom:seagull_user_id": "user_2"}),
+            None,
+        )
+        self.assertEqual(200, empty["statusCode"])
+        self.assertEqual(0, body(empty)["balance"]["available_credits"])
+        self.assertEqual([], body(empty)["usage"])
+        self.assertEqual([], body(empty)["entries"])
+
     def test_agent_usage_is_admin_only(self) -> None:
         self.lambda_module.handler(
             event("POST", "/ai-runs", body=run_body(), claims={"custom:seagull_user_id": "user_1"}),

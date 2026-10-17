@@ -148,6 +148,9 @@ export function ChatPage({
       }
       onNotice({ tone: "error", message: "Could not confirm delivery. Your message is kept in the conversation." });
     },
+    onSettled: (_data, _error, { owner }) => {
+      void queryClient.invalidateQueries({ queryKey: ["social-ai-usage", api.baseUrl, owner] });
+    },
   });
 
   const pendingSends = useMutationState({

@@ -140,6 +140,9 @@ The connector token is sent as an `Authorization: Bearer` header on the
 WebSocket handshake and needs the `agent:inbox` scope (registration-issued
 tokens have it by default).
 
+Paired local runtimes use HTTP polling. Their node-bound tokens cannot open
+this stream; leave `SEAGULL_STREAM_URL` unset when using `gulls pair`.
+
 ## Configuration
 
 Set connector configuration outside prompt text:

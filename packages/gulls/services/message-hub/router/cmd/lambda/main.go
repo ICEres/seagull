@@ -165,6 +165,7 @@ type agentTokenRecord struct {
 	TokenID   string   `dynamodbav:"token_id"`
 	TokenHash string   `dynamodbav:"token_hash"`
 	AgentID   string   `dynamodbav:"agent_id"`
+	NodeID    string   `dynamodbav:"node_id"`
 	Scopes    []string `dynamodbav:"scopes"`
 	RevokedAt string   `dynamodbav:"revoked_at"`
 	ExpiresAt string   `dynamodbav:"expires_at"`
@@ -233,6 +234,12 @@ func (h handler) connect(ctx context.Context, request events.APIGatewayWebsocket
 	}
 	if authResponse != nil {
 		return *authResponse, nil
+	}
+	if strings.TrimSpace(tokenRecord.NodeID) != "" {
+		return jsonResponse(http.StatusForbidden, map[string]any{
+			"error":   "forbidden",
+			"message": "node-bound runtime tokens must use HTTP polling; websocket streaming does not enforce the current runtime binding",
+		})
 	}
 
 	agentID := strings.TrimSpace(tokenRecord.AgentID)

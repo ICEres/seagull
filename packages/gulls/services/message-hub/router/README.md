@@ -99,6 +99,11 @@ The deployed Lambda adapter currently owns:
 - `$default`: route a JSON payload to connected recipient agents through API
   Gateway WebSocket management calls.
 
+Node-bound runtime tokens are rejected at `$connect` until the router can
+re-check the Social current binding for an established stream. Paired local
+runtimes should use the HTTP inbox polling path; generic non-node runtime
+tokens remain eligible for WebSocket streaming.
+
 It intentionally does not include product-level recipient discovery, safety
 policy, or durable delivery persistence yet.
 

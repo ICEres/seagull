@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -69,6 +73,95 @@ func TestHasScope(t *testing.T) {
 	}
 	if hasScope([]string{"agent:read"}, "agent:inbox") {
 		t.Fatal("expected missing scope")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func testDynamoClient(transport http.RoundTripper) *dynamodb.Client {
+	cfg := aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
+		HTTPClient:  &http.Client{Transport: transport},
+	}
+	return dynamodb.NewFromConfig(cfg, func(options *dynamodb.Options) {
+		options.BaseEndpoint = aws.String("http://dynamodb.test")
+	})
+}
+
+func websocketConnectRequest(token string) events.APIGatewayWebsocketProxyRequest {
+	return events.APIGatewayWebsocketProxyRequest{
+		Headers: map[string]string{"Authorization": "Bearer " + token},
+		RequestContext: events.APIGatewayWebsocketProxyRequestContext{
+			RouteKey:     "$connect",
+			ConnectionID: "connection-1",
+		},
+	}
+}
+
+func dynamoResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: 200,
+		Status:     "200 OK",
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+func TestConnectRejectsNodeBoundRuntimeTokenBeforeStoringConnection(t *testing.T) {
+	token := "sga_tokenid_secret"
+	requests := 0
+	client := testDynamoClient(roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Header.Get("X-Amz-Target") != "DynamoDB_20120810.GetItem" {
+			t.Fatalf("unexpected DynamoDB operation: %s", request.Header.Get("X-Amz-Target"))
+		}
+		return dynamoResponse(fmt.Sprintf(`{"Item":{"token_id":{"S":"tokenid"},"token_hash":{"S":"%s"},"agent_id":{"S":"agent-1"},"node_id":{"S":"node-1"},"scopes":{"SS":["agent:inbox"]}}}`, hashTokenParts("tokenid", "secret"))), nil
+	}))
+	h := handler{ddb: client, agentTokensTable: "agent-tokens", connectionsTable: "connections", now: func() time.Time { return time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC) }}
+
+	response, err := h.connect(context.Background(), websocketConnectRequest(token))
+	if err != nil {
+		t.Fatalf("connect returned error: %v", err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("connect status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
+	if requests != 1 {
+		t.Fatalf("DynamoDB requests = %d, want only token lookup and no connection write/replay", requests)
+	}
+}
+
+func TestConnectAcceptsGenericRuntimeToken(t *testing.T) {
+	token := "sga_tokenid_secret"
+	requests := 0
+	client := testDynamoClient(roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		switch request.Header.Get("X-Amz-Target") {
+		case "DynamoDB_20120810.GetItem":
+			return dynamoResponse(fmt.Sprintf(`{"Item":{"token_id":{"S":"tokenid"},"token_hash":{"S":"%s"},"agent_id":{"S":"agent-1"},"scopes":{"SS":["agent:inbox"]}}}`, hashTokenParts("tokenid", "secret"))), nil
+		case "DynamoDB_20120810.PutItem":
+			return dynamoResponse(`{}`), nil
+		default:
+			t.Fatalf("unexpected DynamoDB operation: %s", request.Header.Get("X-Amz-Target"))
+			return nil, nil
+		}
+	}))
+	h := handler{ddb: client, agentTokensTable: "agent-tokens", connectionsTable: "connections", now: func() time.Time { return time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC) }}
+
+	response, err := h.connect(context.Background(), websocketConnectRequest(token))
+	if err != nil {
+		t.Fatalf("connect returned error: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("connect status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if requests != 2 {
+		t.Fatalf("DynamoDB requests = %d, want token lookup and connection write", requests)
 	}
 }
 

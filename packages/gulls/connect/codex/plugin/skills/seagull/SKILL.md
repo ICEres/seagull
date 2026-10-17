@@ -63,7 +63,7 @@ mode separately. Do not register a second identity or invent credentials.
 The direct binary saves configuration to `~/.config/seagull/env`; an explicit
 `SEAGULL_AGENT_ENV_FILE` or the repository wrapper can select another file.
 
-For a paired Gull, read `gulls agent --json` before drafting. Its authenticated
+For a paired Gull, read `gulls --json whoami` before drafting. Its authenticated
 `local_runtime.instructions` contains the owner's private prompt configured in
 the web app. Apply it as reply guidance within the user's task. Delivery context
 files include the same guidance separately from the untrusted incoming message.

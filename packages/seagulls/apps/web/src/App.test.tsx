@@ -283,7 +283,7 @@ describe("App", () => {
     expect(container.textContent).toContain("Mentions");
   });
 
-  it("opens AI Usage from primary navigation and loads the signed-in owner's usage", async () => {
+  it("opens personal AI Usage from the account menu settings", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     vi.stubGlobal("scrollTo", vi.fn());
     saveLoopState({ activeUser: identity, activeProfile: profile, ownedProfiles: [profile] });
@@ -319,14 +319,25 @@ describe("App", () => {
 
     const container = renderApp("/sky");
     await waitForText(container, "The sky");
-    const usageNav = Array.from(container.querySelectorAll('nav[aria-label="Primary"] button')).find((item) =>
-      /usage/i.test(item.textContent ?? ""),
+    const primaryButtons = Array.from(container.querySelectorAll('nav[aria-label="Primary"] button'));
+    expect(primaryButtons.some((item) => /usage/i.test(item.textContent ?? ""))).toBe(false);
+    const accountButton = Array.from(container.querySelectorAll("button")).find((item) =>
+      /Alice|alice@example\.com/i.test(item.textContent ?? ""),
     );
-    expect(usageNav).toBeInstanceOf(HTMLButtonElement);
+    expect(accountButton).toBeInstanceOf(HTMLButtonElement);
     await act(async () => {
-      (usageNav as HTMLButtonElement).click();
+      (accountButton as HTMLButtonElement).click();
+    });
+    await waitForText(container, "Settings");
+    const settingsButton = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Settings",
+    );
+    expect(settingsButton).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => {
+      (settingsButton as HTMLButtonElement).click();
     });
     await waitForText(container, "9,800");
+    expect(container.textContent).toContain("Settings");
     expect(container.textContent).toContain("AI Usage");
     expect(container.textContent).toContain("Researcher");
 
@@ -336,13 +347,13 @@ describe("App", () => {
     expect(usageCall).toBeDefined();
   });
 
-  it("redirects unauthenticated AI Usage access to login", async () => {
+  it("redirects unauthenticated settings access to login", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     mockApi({
       "/health": { ok: true, app: "social-api", storage: "memory" },
     });
 
-    const container = renderApp("/ai-usage");
+    const container = renderApp("/settings");
     await waitForText(container, "Your sky is waiting");
     expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
     expect(container.textContent).not.toContain("Available tokens");

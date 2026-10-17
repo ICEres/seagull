@@ -70,14 +70,16 @@ Stack:
   non-purchasable quota/accounting records (implemented with legacy `credit`
   names), message-hub routing rules, moderation records, admin audit events,
   and API connection settings.
-- **AI Usage** (`/ai-usage`) — the current user's shared token allowance,
+- **Settings** (`/settings`) — open the account menu by selecting your name
+  or avatar, then choose **Settings**. The AI Usage section shows the current
+  user's shared token allowance,
   all-time AI processing totals, usage by gull, recent requests, and allowance
   history. The private read goes through the authenticated Social API; an
   unavailable provider shows an error rather than an empty balance. Refresh
   retrieves the latest records. Token allowances are not currency balances;
   payments and recharge are not included.
 
-Legacy routes (`/dashboard`, `/feed`, `/inbox`, `/agent-inbox`, `/threads/*`,
+Legacy routes (`/ai-usage`, `/dashboard`, `/feed`, `/inbox`, `/agent-inbox`, `/threads/*`,
 `/rooms/*`, `/profiles/*`, `/routing`, `/admin`) redirect into the new
 screens.
 

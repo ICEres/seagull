@@ -1,5 +1,5 @@
-import { Moon, Sun } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronUp, Moon, Sun } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -48,7 +48,6 @@ const NAV_ITEMS: Array<{ to: string; label: string }> = [
   // Work is the Agent Request surface: requests, delegation, and results.
   { to: "/work", label: "Work" },
   { to: "/flock", label: "Flock" },
-  { to: "/ai-usage", label: "AI Usage" },
   { to: "/server", label: "Server" },
 ];
 
@@ -60,6 +59,9 @@ export default function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuthSession());
   const [state, setState] = useState<LoopState>(() => loadLoopState());
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const accountButtonRef = useRef<HTMLButtonElement>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const messageApiUrl = useMemo(() => configuredMessageApiUrl(), []);
   const aiProviderApiUrl = useMemo(() => configuredAiProviderApiUrl(), []);
@@ -75,8 +77,30 @@ export default function App() {
     clearAuthSession();
     queryClient.clear();
     setAuthSession(null);
+    setAccountMenuOpen(false);
     setState(clearLoopState());
   }, [queryClient]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !accountMenuRef.current?.contains(event.target)) {
+        setAccountMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAccountMenuOpen(false);
+        accountButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [accountMenuOpen]);
 
   useEffect(() => {
     applyTheme(themePreference);
@@ -413,16 +437,42 @@ export default function App() {
 
         <div className="mt-auto grid gap-3.5 max-[860px]:mt-0 max-[860px]:ml-auto max-[860px]:flex max-[860px]:items-center">
           {state.activeUser ? (
-            <div className="flex items-center gap-2.5 px-2.5 max-[860px]:hidden">
-              <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
-                <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
-              </span>
-              <span className="min-w-0">
-                <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
-                  {identityName(state.activeUser, activeAuthSession?.idToken)}
-                </strong>
-                <span className="block text-[0.74rem] font-bold text-faint">human · your gull</span>
-              </span>
+            <div ref={accountMenuRef} className="relative min-w-0">
+              <button
+                ref={accountButtonRef}
+                type="button"
+                aria-label="Account menu"
+                aria-expanded={accountMenuOpen}
+                aria-controls="account-menu"
+                onClick={() => setAccountMenuOpen((open) => !open)}
+                className="relative flex min-h-11 w-full items-center gap-2.5 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left hover:bg-accent-soft max-[860px]:px-1.5"
+              >
+                <span className="grid h-8 w-8 flex-none place-items-center rounded-full bg-ink text-bg">
+                  <Wing path={YOUR_WING} size={16} strokeWidth={3.2} />
+                </span>
+                <span className="min-w-0 flex-1 max-[860px]:hidden">
+                  <strong className="block overflow-hidden pr-4 text-[0.88rem] text-ellipsis whitespace-nowrap">
+                    {identityName(state.activeUser, activeAuthSession?.idToken)}
+                  </strong>
+                  <span className="block text-[0.74rem] font-bold whitespace-nowrap text-faint">human · your gull</span>
+                </span>
+                <ChevronUp size={14} aria-hidden="true" className={`absolute top-3 right-2.5 text-faint max-[860px]:hidden ${accountMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+              {accountMenuOpen ? (
+                <div id="account-menu" className="absolute right-0 bottom-full left-0 z-30 mb-2 rounded-xl border border-line bg-card p-1.5 shadow-panel max-[860px]:top-full max-[860px]:bottom-auto max-[860px]:left-auto max-[860px]:mt-2 max-[860px]:mb-0 max-[860px]:w-48">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      navigate("/settings");
+                      window.scrollTo(0, 0);
+                    }}
+                    className="min-h-9 w-full rounded-lg border-0 bg-transparent px-3 text-left text-[0.82rem] font-extrabold text-muted hover:bg-accent-soft hover:text-accent-strong"
+                  >
+                    Settings
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {authConfig.mode === "local" ? (
@@ -533,7 +583,7 @@ export default function App() {
             }
           />
           <Route
-            path="/ai-usage"
+            path="/settings"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
                 <AiUsagePage api={api} state={state} profiles={dashboardProfiles} />
@@ -561,6 +611,7 @@ export default function App() {
           />
 
           {/* Legacy routes from the previous design */}
+          <Route path="/ai-usage" element={<Navigate to="/settings" replace />} />
           <Route path="/dashboard" element={<Navigate to="/sky" replace />} />
           <Route path="/feed" element={<Navigate to="/sky" replace />} />
           <Route path="/inbox" element={<Navigate to="/sky" replace />} />

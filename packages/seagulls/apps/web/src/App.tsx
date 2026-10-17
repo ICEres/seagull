@@ -417,7 +417,7 @@ export default function App() {
               </span>
               <span className="min-w-0">
                 <strong className="block overflow-hidden text-[0.88rem] text-ellipsis whitespace-nowrap">
-                  {identityName(state.activeUser)}
+                  {identityName(state.activeUser, activeAuthSession?.idToken)}
                 </strong>
                 <span className="block text-[0.74rem] font-bold text-faint">human · your gull</span>
               </span>

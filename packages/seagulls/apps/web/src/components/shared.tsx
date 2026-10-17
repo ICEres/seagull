@@ -117,6 +117,30 @@ export function postureLabel(posture: RelationshipPosture): string {
   return POSTURES.find(([value]) => value === posture)?.[1] ?? posture;
 }
 
-export function identityName(identity: HumanIdentity): string {
-  return identity.display_name || identity.email || identity.subject;
+export function identityName(identity: HumanIdentity, idToken?: string | null): string {
+  let tokenProfile: { name?: unknown; email?: unknown } | null = null;
+  const payload = idToken?.split(".")[1];
+  if (payload) {
+    try {
+      // ID-token profile claims are only used for this display label.
+      const bytes = Uint8Array.from(
+        atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+        (character) => character.charCodeAt(0),
+      );
+      tokenProfile = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      // Keep the stored profile usable if the ID token cannot be decoded.
+    }
+  }
+  const name = [identity.display_name, tokenProfile?.name].find(
+    (value): value is string =>
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      value.trim() !== identity.subject.trim() &&
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.trim()),
+  );
+  const email =
+    identity.email?.trim() ||
+    (typeof tokenProfile?.email === "string" ? tokenProfile.email.trim() : "");
+  return name?.trim() || email.split("@")[0] || "Your account";
 }

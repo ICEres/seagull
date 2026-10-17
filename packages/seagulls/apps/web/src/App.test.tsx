@@ -680,6 +680,50 @@ describe("App", () => {
     expect(JSON.stringify(cognitoBodies)).not.toContain("PASSWORD");
   });
 
+  it.each([
+    { claims: { name: "Zoë Carter", email: "zoe@example.com" }, label: "Zoë Carter" },
+    { claims: { email: "alice@example.com" }, label: "alice" },
+    { claims: { email: "alice@example.com" }, label: "alice", subject: "opaque-cognito-user" },
+  ])("shows $label instead of the Cognito ID in the sidebar", async ({ claims, label, subject = "00000000-0000-4000-8000-000000000001" }) => {
+    window.SEAGULL_CONFIG = {
+      socialApiUrl: "https://api.example.test",
+      auth: {
+        mode: "cognito",
+        issuer: "https://cognito-idp.example.test/pool",
+        clientId: "client_1",
+      },
+    };
+    const payload = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(claims))))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    window.sessionStorage.setItem("seagull.web.auth.session", JSON.stringify({
+      accessToken: "sidebar-access-token",
+      idToken: `header.${payload}.signature`,
+      tokenType: "Bearer",
+      expiresAt: Date.now() + 3_600_000,
+    }));
+    mockApi({
+      "/health": { ok: true, app: "social-api", storage: "memory" },
+      "/dashboard": {
+        identity: { ...identity, provider: "cognito", subject, email: null, display_name: subject },
+        profiles: { items: [] },
+        feed: { items: [] },
+        notifications: { unread_count: 0, items: [] },
+        moderation: { count: 0, items: [] },
+        health: { ok: true, app: "social-api", storage: "memory" },
+      },
+      "/profiles": { items: [] },
+      "/feed?owner_user_id=user_1&limit=50": { items: [] },
+      "/moderation?limit=50": { items: [] },
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, label);
+
+    const sidebar = container.querySelector("aside");
+    expect(sidebar?.textContent).toContain(label);
+    expect(sidebar?.textContent).not.toContain(subject);
+  });
+
   it("redirects legacy Hosted UI callbacks to the email-code login", async () => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",

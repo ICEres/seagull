@@ -12,6 +12,8 @@ mcp_domain_name    = "mcp.gulls.ai"
 
 # Secret values are intentionally omitted from this example. Prefer GitHub
 # Actions secrets or local environment-provided TF_VAR_* values.
+# Set TF_VAR_message_hub_legacy_route_secret to a dedicated random credential
+# of at least 32 characters when planning or applying this environment.
 
 api_throttling_burst_limit    = 100
 api_throttling_rate_limit     = 50

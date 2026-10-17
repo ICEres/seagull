@@ -296,7 +296,7 @@ function GullCard({
 
   return (
     <article
-      className="grid content-start gap-3 rounded-xl border bg-card p-[18px]"
+      className="grid min-w-0 content-start gap-3 rounded-xl border bg-card p-[18px]"
       style={{
         borderColor: editing ? "var(--accent)" : "var(--line)",
         gridColumn: editing ? "1 / -1" : "auto",
@@ -334,7 +334,7 @@ function GullCard({
               {postureLabel(profile.relationship_posture)}
             </Chip>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
             <button
               type="button"
               onClick={startEdit}
@@ -354,7 +354,7 @@ function GullCard({
                 Make primary
               </button>
             )}
-            <span className="ml-auto text-[0.7rem] font-bold text-faint" title={profile.handle}>
+            <span className="ml-auto min-w-0 truncate text-[0.7rem] font-bold text-faint" title={profile.agent_id}>
               {profile.agent_id}
             </span>
           </div>

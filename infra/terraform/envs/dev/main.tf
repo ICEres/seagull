@@ -47,6 +47,7 @@ locals {
   message_hub_api_secret_arns = [
     aws_secretsmanager_secret.safety_gateway_admin.arn,
     aws_secretsmanager_secret.guest_status_signing.arn,
+    aws_secretsmanager_secret.message_hub_legacy_route.arn,
   ]
   agent_worker_secret_arns = [
     aws_secretsmanager_secret.agent_webhook_signing.arn,
@@ -88,6 +89,19 @@ resource "aws_secretsmanager_secret" "guest_status_signing" {
 resource "aws_secretsmanager_secret_version" "guest_status_signing" {
   secret_id     = aws_secretsmanager_secret.guest_status_signing.id
   secret_string = var.guest_status_signing_secret
+}
+
+resource "aws_secretsmanager_secret" "message_hub_legacy_route" {
+  name = "${local.message_hub_prefix}/runtime/legacy-route-secret"
+
+  tags = merge(local.message_hub_tags, {
+    App = "message-hub-api"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "message_hub_legacy_route" {
+  secret_id     = aws_secretsmanager_secret.message_hub_legacy_route.id
+  secret_string = var.message_hub_legacy_route_secret
 }
 
 resource "aws_secretsmanager_secret" "safety_gateway_admin" {
@@ -292,31 +306,32 @@ resource "aws_lambda_function" "message_hub_api" {
 
   environment {
     variables = {
-      AGENTS_TABLE                    = module.message_hub_storage.table_names.agents
-      AGENT_TOKENS_TABLE              = module.message_hub_storage.table_names.agent_tokens
-      AGENT_JOBS_QUEUE_URL            = aws_sqs_queue.agent_jobs.url
-      APP_NAME                        = local.message_hub_prefix
-      DELIVERIES_TABLE                = module.message_hub_storage.table_names.deliveries
-      FEED_EVENTS_TABLE               = module.message_hub_storage.table_names.feed_events
-      FOLLOWS_TABLE                   = module.message_hub_storage.table_names.follows
-      GUEST_STATUS_SIGNING_SECRET_ARN = aws_secretsmanager_secret.guest_status_signing.arn
-      IDEMPOTENCY_TABLE               = module.message_hub_storage.table_names.idempotency_keys
-      MESSAGES_TABLE                  = module.message_hub_storage.table_names.messages
-      NOTIFICATIONS_TABLE             = module.message_hub_storage.table_names.notifications
-      PAYLOAD_OBJECTS_BUCKET          = module.message_hub_storage.payload_objects_bucket_name
-      PAYLOADS_TABLE                  = module.message_hub_storage.table_names.payloads
-      POSTS_TABLE                     = module.message_hub_storage.table_names.posts
-      ROOM_MEMBERSHIPS_TABLE          = module.message_hub_storage.table_names.room_memberships
-      ROOMS_TABLE                     = module.message_hub_storage.table_names.rooms
-      ROUTING_RULES_TABLE             = module.message_hub_storage.table_names.routing_rules
-      SAFETY_BLOCKED_TERMS            = "unsafe:"
-      SAFETY_GATEWAY_ADMIN_SECRET_ARN = aws_secretsmanager_secret.safety_gateway_admin.arn
-      SAFETY_GATEWAY_URL              = module.safety_gateway.api_endpoint
-      TASK_RESULTS_TABLE              = module.message_hub_storage.table_names.task_results
-      TASKS_TABLE                     = module.message_hub_storage.table_names.tasks
-      THREAD_SUMMARIES_TABLE          = module.message_hub_storage.table_names.thread_summaries
-      THREADS_TABLE                   = module.message_hub_storage.table_names.threads
-      TOOL_REQUESTS_TABLE             = module.message_hub_storage.table_names.tool_requests
+      AGENTS_TABLE                        = module.message_hub_storage.table_names.agents
+      AGENT_TOKENS_TABLE                  = module.message_hub_storage.table_names.agent_tokens
+      AGENT_JOBS_QUEUE_URL                = aws_sqs_queue.agent_jobs.url
+      APP_NAME                            = local.message_hub_prefix
+      DELIVERIES_TABLE                    = module.message_hub_storage.table_names.deliveries
+      FEED_EVENTS_TABLE                   = module.message_hub_storage.table_names.feed_events
+      FOLLOWS_TABLE                       = module.message_hub_storage.table_names.follows
+      GUEST_STATUS_SIGNING_SECRET_ARN     = aws_secretsmanager_secret.guest_status_signing.arn
+      IDEMPOTENCY_TABLE                   = module.message_hub_storage.table_names.idempotency_keys
+      MESSAGES_TABLE                      = module.message_hub_storage.table_names.messages
+      MESSAGE_HUB_LEGACY_ROUTE_SECRET_ARN = aws_secretsmanager_secret_version.message_hub_legacy_route.secret_id
+      NOTIFICATIONS_TABLE                 = module.message_hub_storage.table_names.notifications
+      PAYLOAD_OBJECTS_BUCKET              = module.message_hub_storage.payload_objects_bucket_name
+      PAYLOADS_TABLE                      = module.message_hub_storage.table_names.payloads
+      POSTS_TABLE                         = module.message_hub_storage.table_names.posts
+      ROOM_MEMBERSHIPS_TABLE              = module.message_hub_storage.table_names.room_memberships
+      ROOMS_TABLE                         = module.message_hub_storage.table_names.rooms
+      ROUTING_RULES_TABLE                 = module.message_hub_storage.table_names.routing_rules
+      SAFETY_BLOCKED_TERMS                = "unsafe:"
+      SAFETY_GATEWAY_ADMIN_SECRET_ARN     = aws_secretsmanager_secret.safety_gateway_admin.arn
+      SAFETY_GATEWAY_URL                  = module.safety_gateway.api_endpoint
+      TASK_RESULTS_TABLE                  = module.message_hub_storage.table_names.task_results
+      TASKS_TABLE                         = module.message_hub_storage.table_names.tasks
+      THREAD_SUMMARIES_TABLE              = module.message_hub_storage.table_names.thread_summaries
+      THREADS_TABLE                       = module.message_hub_storage.table_names.threads
+      TOOL_REQUESTS_TABLE                 = module.message_hub_storage.table_names.tool_requests
     }
   }
 
@@ -1307,12 +1322,13 @@ resource "aws_cognito_user_pool_client" "social_web" {
 module "social_api" {
   source = "../../modules/social-api"
 
-  name_prefix             = local.social_api_prefix
-  lambda_package_path     = data.archive_file.social_api.output_path
-  lambda_source_code_hash = data.archive_file.social_api.output_base64sha256
-  jwt_issuer              = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
-  jwt_audience            = [aws_cognito_user_pool_client.social_web.id]
-  message_api_url         = "https://${var.message_api_domain}"
+  name_prefix                         = local.social_api_prefix
+  lambda_package_path                 = data.archive_file.social_api.output_path
+  lambda_source_code_hash             = data.archive_file.social_api.output_base64sha256
+  jwt_issuer                          = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.social_web.id}"
+  jwt_audience                        = [aws_cognito_user_pool_client.social_web.id]
+  message_api_url                     = "https://${var.message_api_domain}"
+  message_hub_legacy_route_secret_arn = aws_secretsmanager_secret_version.message_hub_legacy_route.secret_id
 
   ai_provider_api_url          = module.ai_provider.api_endpoint
   ai_provider_admin_secret_arn = aws_secretsmanager_secret.ai_provider_admin.arn

@@ -96,6 +96,17 @@ variable "guest_status_signing_secret" {
   sensitive   = true
 }
 
+variable "message_hub_legacy_route_secret" {
+  type        = string
+  description = "Dedicated shared credential for Social API chat delivery through Message Hub legacy routes."
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.message_hub_legacy_route_secret)) >= 32
+    error_message = "Set MESSAGE_HUB_LEGACY_ROUTE_SECRET in GitHub Actions or TF_VAR_message_hub_legacy_route_secret locally to a dedicated random value of at least 32 characters."
+  }
+}
+
 variable "public_agent_send_throttling_burst_limit" {
   type        = number
   description = "API Gateway burst throttle for POST /agents/{name}/messages (guest-reachable)."

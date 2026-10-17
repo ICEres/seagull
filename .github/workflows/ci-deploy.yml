@@ -35,6 +35,7 @@ env:
   TF_VAR_mcp_dev_token: ${{ secrets.MCP_DEV_TOKEN }}
   TF_VAR_safety_gateway_admin_secret: ${{ secrets.SAFETY_GATEWAY_ADMIN_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   TF_VAR_guest_status_signing_secret: ${{ secrets.GUEST_STATUS_SIGNING_SECRET || secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
+  TF_VAR_message_hub_legacy_route_secret: ${{ secrets.MESSAGE_HUB_LEGACY_ROUTE_SECRET }}
   AGENT_WEBHOOK_SIGNING_SECRET: ${{ secrets.AGENT_WEBHOOK_SIGNING_SECRET }}
   AI_PROVIDER_ADMIN_SECRET: ${{ secrets.AI_PROVIDER_ADMIN_SECRET }}
   MCP_CONNECTOR_ADMIN_SECRET: ${{ secrets.MCP_CONNECTOR_ADMIN_SECRET }}
@@ -358,6 +359,7 @@ jobs:
           require TF_BACKEND_DYNAMODB_TABLE
           require AGENT_WEBHOOK_SIGNING_SECRET
           require SAFETY_GATEWAY_ADMIN_SECRET
+          require TF_VAR_message_hub_legacy_route_secret
 
           if [ "$missing" -ne 0 ]; then
             exit 1

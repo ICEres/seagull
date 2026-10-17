@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-08-04.
+Last updated: 2026-10-17.
 
 Terraform root module for the development AWS environment.
 
@@ -96,11 +96,29 @@ the values to Secrets Manager and passes only secret ARNs to deployed Lambdas:
 
 ```text
 AGENT_WEBHOOK_SIGNING_SECRET
+MESSAGE_HUB_LEGACY_ROUTE_SECRET # required; dedicated random value of at least 32 characters
 SAFETY_GATEWAY_ADMIN_SECRET  # optional; CI falls back to AGENT_WEBHOOK_SIGNING_SECRET
 AI_PROVIDER_ADMIN_SECRET     # optional and independent; no fallback to MCP_CONNECTOR_ADMIN_SECRET
 MCP_CONNECTOR_ADMIN_SECRET   # optional
 MCP_DEV_TOKEN                # optional; omitted when empty
 ```
+
+`MESSAGE_HUB_LEGACY_ROUTE_SECRET` authenticates Social API chat delivery to the
+Message Hub. Terraform stores it at
+`${project}-${environment}-message-hub/runtime/legacy-route-secret` and gives
+both Lambdas access to the same secret ARN. The environment references the
+secret version so its value exists before either Lambda starts using it.
+Handle-based routes still require the shared credential; the public legacy
+route enable flag stays unset. Keep this value independent of webhook and admin
+credentials.
+After rotating this credential, refresh both Lambda execution environments so
+the Message Hub reloads its cached secret.
+
+For local plans and applies, provide the same value through
+`TF_VAR_message_hub_legacy_route_secret`. Keep it out of `.tfvars` files and shell
+history. The sensitive variable rejects missing or short credentials before
+apply. Terraform state contains runtime secret values, so continue using the
+encrypted remote backend with restricted access.
 
 From the repository root:
 

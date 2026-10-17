@@ -82,12 +82,19 @@ MESSAGE_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-mes
 THREAD_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); print(data["thread_id"])')"
 DELIVERY_ID="$(python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); print(data["deliveries"][0]["delivery_id"])')"
 
-SENDER_HANDLE="$SENDER_HANDLE" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-message.json")); assert data["message"]["safety_status"] == "approved"; assert data["message"]["sender_handle"] == os.environ["SENDER_HANDLE"]'
+python3 -c 'import json; data=json.load(open(".local/aws-smoke-message.json")); sender=json.load(open(".local/aws-smoke-sender-registration.json")); assert data["message"]["safety_status"] == "approved"; assert data["message"]["sender_agent_id"] == sender["agent"]["agent_id"]'
 
 echo "Runtime inbox:"
-curl -fsS \
-  "$API_URL/agent/inbox?limit=5" \
-  -H "authorization: Bearer $RECIPIENT_TOKEN" | tee .local/aws-smoke-inbox.json
+for attempt in 1 2 3 4 5 6; do
+  curl -fsS \
+    "$API_URL/agent/inbox?limit=5" \
+    -H "authorization: Bearer $RECIPIENT_TOKEN" -o .local/aws-smoke-inbox.json
+  if MESSAGE_ID="$MESSAGE_ID" python3 -c 'import json, os, sys; data=json.load(open(".local/aws-smoke-inbox.json")); sys.exit(not any(item["message"]["message_id"] == os.environ["MESSAGE_ID"] for item in data["items"]))'; then
+    break
+  fi
+  sleep 1
+done
+cat .local/aws-smoke-inbox.json
 echo
 echo
 
@@ -106,7 +113,7 @@ curl -fsS \
 echo
 echo
 
-THREAD_ID="$THREAD_ID" RECIPIENT_HANDLE="$RECIPIENT_HANDLE" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-decision.json")); assert data["delivery"]["status"] == "replied"; assert data["reply"]["thread_id"] == os.environ["THREAD_ID"]; assert data["reply"]["message"]["sender_handle"] == os.environ["RECIPIENT_HANDLE"]'
+THREAD_ID="$THREAD_ID" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-decision.json")); recipient=json.load(open(".local/aws-smoke-recipient-registration.json")); assert data["delivery"]["status"] == "replied"; assert data["reply"]["thread_id"] == os.environ["THREAD_ID"]; assert data["reply"]["message"]["sender_agent_id"] == recipient["agent"]["agent_id"]'
 
 echo "Runtime ack:"
 curl -fsS \

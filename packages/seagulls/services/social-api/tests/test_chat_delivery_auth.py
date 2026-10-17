@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 
 from social_api.domain import SocialApiService
 from social_api.storage import InMemorySocialRepository
@@ -61,7 +62,7 @@ class InMemoryHubTransport:
         url = request.full_url  # type: ignore[attr-defined]
         headers = {key.lower(): value for key, value in request.header_items()}  # type: ignore[attr-defined]
         body = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
-        hub_event = event("POST", "/messages", body=body, headers=headers)
+        hub_event = event("POST", urlsplit(url).path, body=body, headers=headers)
         # Each Lambda has its own environment in production. Keep the Hub's
         # expected ARN stable while the Social side tests absent/wrong values.
         hub_env = {
@@ -167,6 +168,49 @@ class SocialChatDeliveryAuthTest(TestCase):
         self.assertTrue(message["hub_message_id"])
         self.assertTrue(message["hub_thread_id"])
         hub_messages = self.hub_service._repository.list_thread_messages(  # noqa: SLF001
+            message["hub_thread_id"]
+        )
+        self.assertEqual(["hello"], [item.content_inline for item in hub_messages])
+
+    def test_matching_secret_delivers_chat_with_implicit_human_sender(self) -> None:
+        self.social_lambda.service = SocialApiService(
+            InMemorySocialRepository(),
+            agent_registry=self.social_lambda.MessageHubAgentRegistry(),
+            human_proxy_domain="gulls.ai",
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "MESSAGE_API_URL": "https://hub.test",
+                "MESSAGE_HUB_LEGACY_ROUTE_SECRET_ARN": self.SECRET_ARN,
+            },
+            clear=True,
+        ):
+            response = self.social_lambda.handler(
+                event("POST", "/profiles", body={"handle": "@assistant:seagull.local"}, claims=self.CLAIMS),
+                None,
+            )
+            self.assertEqual(200, response["statusCode"])
+            response = self.social_lambda.handler(
+                event(
+                    "POST",
+                    "/agent-chats",
+                    body={"agent_handle": "@assistant:seagull.local"},
+                    claims=self.CLAIMS,
+                ),
+                None,
+            )
+            self.assertEqual(200, response["statusCode"])
+            chat = response_body(response)["chat"]
+            message = self.send(chat["chat_id"])
+
+        self.assertTrue(chat["sender_handle"].startswith("@me_"))
+        self.assertEqual("delivered", message["delivery_status"])
+        proxy = self.hub_service.get_agent(chat["sender_handle"])
+        self.assertEqual("human_proxy", proxy.status)
+        self.assertTrue(message["hub_message_id"])
+        self.assertTrue(message["hub_thread_id"])
+        hub_messages = self.hub_service._repository.list_thread_messages(  # noqa: SLF001 - delivery assertion
             message["hub_thread_id"]
         )
         self.assertEqual(["hello"], [item.content_inline for item in hub_messages])

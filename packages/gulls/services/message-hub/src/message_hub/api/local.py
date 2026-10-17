@@ -252,6 +252,22 @@ class LocalMessageHubApi:
 
         return {"created": True, "agent": agent_to_dict(agent)}
 
+    def register_human_proxy(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Register the server-owned human proxy namespace.
+
+        The HTTP adapter authenticates this operation separately from public
+        agent registration. Keeping the reserved-namespace escape hatch here
+        preserves the domain service's default rejection for untrusted callers.
+        """
+        try:
+            agent = self._service.ensure_human_proxy(
+                required_string(body, "handle"),
+                display_name=optional_string(body, "display_name"),
+            )
+        except (InvalidMessageError, DuplicateAgentHandleError) as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        return {"created": True, "agent": agent_to_dict(agent)}
+
     def agent_registration(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
             handle = required_string(body, "handle")

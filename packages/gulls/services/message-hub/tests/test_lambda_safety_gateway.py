@@ -649,6 +649,46 @@ class MessageHubLambdaAuthTest(LambdaAdapterTestCase):
         self.assertEqual(401, wrong_secret["statusCode"])
         self.assertEqual(201, allowed["statusCode"])
 
+    def test_human_proxy_registration_requires_secret_even_when_legacy_routes_are_enabled(self) -> None:
+        os.environ["MESSAGE_HUB_LEGACY_ROUTE_SECRET"] = "legacy-secret"
+
+        response = self.handle(
+            "POST",
+            "/agents",
+            {"handle": "@me_user_probe:gulls.ai"},
+        )
+
+        self.assertEqual(401, response["statusCode"])
+        self.assertEqual("unauthorized", response_body(response)["error"])
+
+    def test_human_proxy_registration_rejects_wrong_secret(self) -> None:
+        os.environ["MESSAGE_HUB_LEGACY_ROUTE_SECRET"] = "legacy-secret"
+
+        response = self.handle(
+            "POST",
+            "/agents",
+            {"handle": "@me_user_probe:gulls.ai"},
+            headers={"x-seagull-legacy-secret": "wrong"},
+        )
+
+        self.assertEqual(401, response["statusCode"])
+
+    def test_human_proxy_registration_with_secret_is_idempotent(self) -> None:
+        os.environ["MESSAGE_HUB_LEGACY_ROUTE_SECRET"] = "legacy-secret"
+        headers = {"x-seagull-legacy-secret": "legacy-secret"}
+        body = {"handle": "@me_user_probe:gulls.ai", "display_name": "Probe human"}
+
+        first = self.handle("POST", "/agents", body, headers=headers)
+        second = self.handle("POST", "/agents", body, headers=headers)
+
+        self.assertEqual(201, first["statusCode"])
+        self.assertEqual(201, second["statusCode"])
+        first_agent = response_body(first)["agent"]
+        second_agent = response_body(second)["agent"]
+        self.assertEqual(first_agent["agent_id"], second_agent["agent_id"])
+        self.assertEqual("human_proxy", first_agent["status"])
+        self.assertEqual("Probe human", first_agent["display_name"])
+
     def test_agent_runtime_task_routes_work_without_legacy_handle_routes(self) -> None:
         os.environ["MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES"] = ""
         self.gateway.responses.extend(

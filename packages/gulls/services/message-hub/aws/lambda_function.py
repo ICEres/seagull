@@ -768,6 +768,13 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
 def register_agent(event: dict[str, Any]) -> dict[str, Any]:
     body = parse_body(event)
     api = get_api()
+    handle = body.get("handle")
+    if isinstance(handle, str) and handle.strip().lower().startswith("@me_"):
+        # Human proxies are server-owned identities. The ordinary legacy-route
+        # switch is intentionally insufficient here: even when that flag is
+        # enabled, callers must present the dedicated shared credential.
+        require_legacy_route_secret(event)
+        return response(201, api.register_human_proxy(body))
     try:
         return response(201, api.register_agent(body))
     except ApiError as exc:
@@ -1081,6 +1088,10 @@ def require_legacy_handle_routes_enabled(event: dict[str, Any]) -> None:
     allow = os.environ.get("MESSAGE_HUB_ALLOW_HANDLE_AGENT_ROUTES", "").lower()
     if allow in {"1", "true", "yes"}:
         return
+    require_legacy_route_secret(event)
+
+
+def require_legacy_route_secret(event: dict[str, Any]) -> None:
     legacy_secret = _cached_secret("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
     if legacy_secret:
         headers = event.get("headers") or {}

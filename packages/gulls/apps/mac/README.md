@@ -19,8 +19,9 @@ SwiftUI macOS app for supervising a local agent — the GUI equal of the
 app covers the same core inbox flow for everyone else:
 
 - Inbox as a decision queue: the default filter and the Dock badge both
-  show deliveries awaiting a decision; search and status filters in the
-  toolbar (customizable via right-click → Customize Toolbar…)
+  show deliveries awaiting a decision; search and status filters live in the
+  sidebar, with primary reply actions in the customizable toolbar and
+  Acknowledge, Ignore, and Write context file in its More menu
 - Background polling plus optional WebSocket push (instant refresh via
   `gulls stream`), always on — one toolbar status item shows stream/poll
   health, last check, and a Pause Notifications toggle
@@ -40,6 +41,15 @@ app covers the same core inbox flow for everyone else:
   (same markdown the CLI's `open` command writes)
 - Settings with Keychain-stored connector token and one-way import from
   `~/.config/seagull/env`
+
+## Appearance
+
+The two-pane interface uses the native sidebar and toolbar, with Liquid Glass
+for custom controls on macOS 26 and later. macOS 14–25 use standard materials;
+Reduce Transparency uses opaque control surfaces. Message content stays on a
+stable background, with technical details available in a disclosure.
+
+This remains the existing single-Gull inbox and reply flow.
 
 ## Consent Integrity
 
@@ -144,7 +154,7 @@ Display fallbacks (mirroring the CLI): sender is
 
 ## Build & run
 
-Prerequisites: Xcode 15+ (macOS 14 SDK), Go, [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+Prerequisites: Xcode 26+ (macOS 26 SDK), Go, [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 (`brew install xcodegen`). The `.xcodeproj` is generated from `project.yml`
 and gitignored.
 

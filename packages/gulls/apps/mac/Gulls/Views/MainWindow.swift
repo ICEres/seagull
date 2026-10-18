@@ -21,22 +21,26 @@ struct MainWindow: View {
     var body: some View {
         NavigationSplitView {
             InboxListView(store: store)
-                .navigationSplitViewColumnWidth(min: 260, ideal: 320)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 340)
         } detail: {
             if let item = store.selectedItem {
                 DeliveryDetailView(item: item)
             } else {
                 ContentUnavailableView(
-                    "No delivery selected",
+                    "Your inbox, at a glance",
                     systemImage: "tray",
-                    description: Text("Pick a delivery from the inbox to review it.")
+                    description: Text("Choose a message to read and reply.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(GullsStyle.canvas)
             }
         }
+        .navigationSplitViewStyle(.balanced)
         .navigationTitle("Gulls")
-        .navigationSubtitle(subtitle)
-        .searchable(text: $store.searchText, prompt: "Search sender or content")
+        .tint(GullsStyle.accent)
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar(id: "gulls-main") { mainToolbar }
+        .frame(minWidth: 760, minHeight: 560)
         .safeAreaInset(edge: .bottom) {
             if let error = store.lastError {
                 errorBar(error)
@@ -93,54 +97,36 @@ struct MainWindow: View {
             .help("Generate a rule-based draft for the selected delivery")
         }
 
-        ToolbarItem(id: "ack", placement: .primaryAction) {
-            Button {
-                runOnSelection { await store.ack($0) }
-            } label: {
-                Label("Ack", systemImage: "checkmark")
-            }
-            .disabled(store.selectedItem == nil || isBusy)
-            .help("Acknowledge the selected delivery")
-        }
-
-        ToolbarItem(id: "ignore", placement: .primaryAction) {
-            Button {
-                runOnSelection { _ = await store.ignore($0) }
-            } label: {
-                Label("Ignore", systemImage: "nosign")
-            }
-            .disabled(store.selectedItem == nil || isBusy)
-            .help("Ignore the selected delivery")
-        }
-
-        ToolbarItem(id: "context-file", placement: .secondaryAction) {
-            Button {
-                runOnSelection {
-                    if let result = await store.writeContextFile(for: $0) {
-                        NSWorkspace.shared.activateFileViewerSelecting(
-                            [URL(fileURLWithPath: result.contextPath)]
-                        )
-                    }
-                }
-            } label: {
-                Label("Write context file", systemImage: "doc.text")
-            }
-            .disabled(store.selectedItem == nil || isBusy)
-            .help("Write this delivery as markdown for your coding assistant")
-        }
-
-        ToolbarItem(id: "filter", placement: .secondaryAction) {
+        ToolbarItem(id: "more", placement: .secondaryAction) {
             Menu {
-                Picker("Filter", selection: $store.filter) {
-                    ForEach(InboxStore.InboxFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
+                Button {
+                    runOnSelection { await store.ack($0) }
+                } label: {
+                    Label("Acknowledge", systemImage: "checkmark")
                 }
-                .pickerStyle(.inline)
+                Button {
+                    runOnSelection { _ = await store.ignore($0) }
+                } label: {
+                    Label("Ignore", systemImage: "nosign")
+                }
+                Divider()
+                Button {
+                    runOnSelection {
+                        if let result = await store.writeContextFile(for: $0) {
+                            NSWorkspace.shared.activateFileViewerSelecting(
+                                [URL(fileURLWithPath: result.contextPath)]
+                            )
+                        }
+                    }
+                } label: {
+                    Label("Write context file", systemImage: "doc.text")
+                }
             } label: {
-                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                Label("More", systemImage: "ellipsis")
             }
-            .help("Filter the inbox by delivery status")
+            .menuIndicator(.hidden)
+            .disabled(store.selectedItem == nil || isBusy)
+            .help("More message actions")
         }
 
         ToolbarItem(id: "status", placement: .secondaryAction) {
@@ -202,13 +188,6 @@ struct MainWindow: View {
 
     // MARK: - Helpers
 
-    private var subtitle: String {
-        if let handle = store.agent?.handle {
-            return handle
-        }
-        return store.config.isConfigured ? store.config.agentHandle : "Not configured — open Settings (⌘,)"
-    }
-
     private func runOnSelection(_ action: @escaping (String) async -> Void) {
         guard let id = store.selectedItem?.id else { return }
         runOnDelivery(id, action)
@@ -223,27 +202,43 @@ struct MainWindow: View {
     }
 
     private func replyComposer(_ target: SheetTarget) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Reply to \(target.senderDisplay)")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 12) {
+                WingAvatar(identity: target.senderDisplay, size: 38)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Reply to \(target.senderDisplay)")
+                        .font(.title3.weight(.semibold))
+                    Text("Send as \(firstNonEmpty(store.agent?.displayName, store.agent?.handle, store.config.agentHandle) ?? "your Gull")")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
             TextEditor(text: $replyText)
                 .font(.body)
-                .frame(minWidth: 420, minHeight: 160)
-                .border(.separator)
-            HStack {
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 160, maxHeight: 280)
+                .padding(14)
+                .gullsGlass(cornerRadius: 18)
+                .accessibilityLabel("Reply message")
+            HStack(spacing: 10) {
                 Spacer()
                 Button("Cancel") { replyTarget = nil }
+                    .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
                 Button("Send reply") {
                     let content = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
                     replyTarget = nil
                     runOnDelivery(target.id) { _ = await store.reply(to: $0, content: content) }
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding()
+        .padding(26)
+        .frame(minWidth: 480, idealWidth: 560, maxWidth: 660)
+        .background(GullsStyle.canvas)
+        .tint(GullsStyle.accent)
     }
 
     private func errorBar(_ message: String) -> some View {
@@ -260,11 +255,14 @@ struct MainWindow: View {
             Button {
                 store.lastError = nil
             } label: {
-                Image(systemName: "xmark")
+                Label("Dismiss error", systemImage: "xmark")
+                    .labelStyle(.iconOnly)
             }
             .buttonStyle(.plain)
         }
-        .padding(10)
-        .background(.bar)
+        .padding(14)
+        .gullsGlass(cornerRadius: 16)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
     }
 }

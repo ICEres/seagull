@@ -24,19 +24,42 @@ struct DraftReplyView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Draft reply")
-                .font(.headline)
+            header
             content
-            HStack {
-                Spacer()
-                Button("Close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                approveButton
+            actionBar
+        }
+        .padding(24)
+        .frame(minWidth: 500, idealWidth: 560, maxWidth: 620)
+        .task { await generate() }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "wand.and.stars")
+                .font(.title3)
+                .foregroundStyle(GullsStyle.accent)
+                .frame(width: 34, height: 34)
+                .gullsGlass(cornerRadius: 10)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Review draft reply")
+                    .font(.title3.weight(.semibold))
+                Text("Check the exact message before it is sent.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding()
-        .frame(minWidth: 460)
-        .task { await generate() }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 10) {
+            Spacer()
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .buttonStyle(.bordered)
+            approveButton
+        }
+        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -44,7 +67,7 @@ struct DraftReplyView: View {
         switch phase {
         case .loading:
             ProgressView("Generating draft from response rules…")
-                .frame(maxWidth: .infinity, minHeight: 120)
+                .frame(maxWidth: .infinity, minHeight: 150)
         case .generated(let result), .approving(let result):
             resultDetails(result, sent: false)
         case .sent(let result):
@@ -59,44 +82,59 @@ struct DraftReplyView: View {
 
     private func resultDetails(_ result: DraftReplyResult, sent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 2) {
-                GridRow {
-                    Text("Outcome").gridColumnAlignment(.trailing)
-                    Text(result.outcome).fontWeight(.medium)
-                }
-                if let reason = result.reason {
+            DisclosureGroup("Delivery details") {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
                     GridRow {
-                        Text("Reason")
-                        Text(reason)
+                        Text("Outcome")
+                        Text(result.outcome).fontWeight(.medium)
+                    }
+                    if let reason = result.reason {
+                        GridRow {
+                            Text("Reason")
+                            Text(reason)
+                        }
+                    }
+                    if let rules = result.appliedRules {
+                        GridRow {
+                            Text("Rules")
+                            Text(rulesSummary(rules))
+                        }
+                    }
+                    if let labels = result.triggerLabels, !labels.isEmpty {
+                        GridRow {
+                            Text("Triggers")
+                            Text(labels.joined(separator: ", "))
+                        }
                     }
                 }
-                if let rules = result.appliedRules {
-                    GridRow {
-                        Text("Rules")
-                        Text(rulesSummary(rules))
-                    }
-                }
-                if let labels = result.triggerLabels, !labels.isEmpty {
-                    GridRow {
-                        Text("Triggers")
-                        Text(labels.joined(separator: ", "))
-                    }
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
             }
-            .font(.caption)
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
 
             if let draft = result.draft {
-                Text(sent ? "Draft (approved and sent):" : "Draft (not sent):")
-                    .font(.subheadline.weight(.medium))
-                ScrollView {
-                    Text(draft)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(sent ? "Message sent" : "Exact message to send")
+                            .font(.headline)
+                        Spacer()
+                        Text(sent ? "Approved" : "Not sent")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(sent ? GullsStyle.accent : .secondary)
+                    }
+
+                    ScrollView {
+                        Text(draft)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minHeight: 96, maxHeight: 220)
+                    .padding(14)
+                    .background(GullsStyle.canvas, in: RoundedRectangle(cornerRadius: 12))
                 }
-                .frame(minHeight: 80, maxHeight: 200)
-                .padding(8)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.top, 4)
             } else {
                 Text("No draft generated — nothing will be sent.")
                     .foregroundStyle(.secondary)
@@ -123,6 +161,7 @@ struct DraftReplyView: View {
                 Task { await approve() }
             }
             .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
         case .approving:
             ProgressView().controlSize(.small)
         default:

@@ -18,70 +18,144 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Message Hub") {
-                TextField("API URL", text: $config.apiURL, prompt: Text("http://localhost:8200"))
-                    .textContentType(nil)
-                    .autocorrectionDisabled()
-                TextField("Agent handle", text: $config.agentHandle, prompt: Text("@worker:gulls.ai"))
-                    .autocorrectionDisabled()
-                SecureField("Connector token", text: $tokenDraft)
-                    .onSubmit { commitToken() }
-                Text("The token is stored in your Keychain, not in a file. Saved when you press Return or close Settings.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Stream URL", text: $config.streamURL, prompt: Text("ws://localhost:8200/stream"))
-                    .autocorrectionDisabled()
-                Text("Optional WebSocket URL for instant delivery push (ws:// or wss://). Leave empty for polling only. Takes effect on relaunch.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                settingsHeader
 
-            Section("Polling") {
-                HStack {
-                    TextField(
-                        "Poll interval (seconds)",
-                        value: $config.pollInterval,
-                        format: .number.precision(.fractionLength(0...1))
-                    )
-                    Stepper("", value: $config.pollInterval, in: 5...600, step: 5)
-                        .labelsHidden()
+                settingsSection("Connection", subtitle: "Connect this Mac to your Message Hub.") {
+                    settingsField("API URL") {
+                        TextField("http://localhost:8200", text: $config.apiURL)
+                            .textContentType(nil)
+                            .autocorrectionDisabled()
+                    }
+                    settingsField("Agent handle") {
+                        TextField("@worker:gulls.ai", text: $config.agentHandle)
+                            .autocorrectionDisabled()
+                    }
+                    settingsField("Connector token") {
+                        SecureField("Stored in Keychain", text: $tokenDraft)
+                            .onSubmit { commitToken() }
+                    }
+                    Text("The token is stored in your Keychain and saved when you press Return or close Settings.")
+                        .settingsNote()
+                }
+
+                settingsSection("Advanced", subtitle: "Optional transport and handoff settings.") {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 18) {
+                            settingsField("Stream URL") {
+                                TextField("ws://localhost:8200/stream", text: $config.streamURL)
+                                    .autocorrectionDisabled()
+                            }
+                            Text("Optional WebSocket URL for instant delivery push. Leave empty for polling only. Takes effect on relaunch.")
+                                .settingsNote()
+
+                            settingsField("Poll interval") {
+                                HStack(spacing: 10) {
+                                    TextField(
+                                        "Seconds",
+                                        value: $config.pollInterval,
+                                        format: .number.precision(.fractionLength(0...1))
+                                    )
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 90)
+                                    Text("seconds")
+                                        .foregroundStyle(.secondary)
+                                    Stepper("", value: $config.pollInterval, in: 5...600, step: 5)
+                                        .labelsHidden()
+                                }
+                            }
+
+                            settingsField("Context directory") {
+                                TextField("~/Library/Application Support/Gulls/agent-context", text: $config.contextDir)
+                                    .autocorrectionDisabled()
+                            }
+                            Text("Where context files are saved for your coding assistant.")
+                                .settingsNote()
+                        }
+                        .padding(.top, 14)
+                    } label: {
+                        Label("Transport and handoff", systemImage: "slider.horizontal.3")
+                            .font(.headline)
+                    }
+                    .tint(GullsStyle.accent)
+                }
+
+                settingsSection("Actions", subtitle: "Import existing CLI settings or verify the connection.") {
+                    HStack(spacing: 12) {
+                        Button("Import from ~/.config/seagull/env") {
+                            importFromEnvFile()
+                        }
+                        .disabled(!config.sharedEnvFileExists)
+                        if let importStatus {
+                            Text(importStatus)
+                                .settingsNote()
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("Test connection") {
+                            testConnection()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(GullsStyle.accent)
+                        .disabled(!config.isConfigured || cli == nil || connectionStatus == .testing)
+                        connectionStatusLabel
+                    }
                 }
             }
-
-            Section("Context handoff") {
-                TextField("Context directory", text: $config.contextDir)
-                    .autocorrectionDisabled()
-                Text("Where “Write context file” saves delivery markdown for your coding assistant.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                HStack {
-                    Button("Import from ~/.config/seagull/env") {
-                        importFromEnvFile()
-                    }
-                    .disabled(!config.sharedEnvFileExists)
-                    if let importStatus {
-                        Text(importStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                HStack {
-                    Button("Test connection") {
-                        testConnection()
-                    }
-                    .disabled(!config.isConfigured || cli == nil || connectionStatus == .testing)
-                    connectionStatusLabel
-                }
-            }
+            .frame(maxWidth: 620, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 26)
         }
-        .formStyle(.grouped)
-        .frame(minWidth: 480, minHeight: 380)
+        .background(GullsStyle.canvas)
+        .frame(minWidth: 520, minHeight: 500)
         .onAppear { tokenDraft = config.token }
         .onDisappear { commitToken() }
+    }
+
+    private var settingsHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Settings")
+                .font(.system(size: 26, weight: .semibold))
+            Text("Manage how Gulls connects and saves local context.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func settingsSection<Content: View>(
+        _ title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                content()
+            }
+        }
+    }
+
+    private func settingsField<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            content()
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 9)
+                .background(GullsStyle.field, in: RoundedRectangle(cornerRadius: 10))
+        }
     }
 
     private func commitToken() {
@@ -134,5 +208,14 @@ struct SettingsView: View {
                 connectionStatus = .failure(error.localizedDescription)
             }
         }
+    }
+}
+
+private extension View {
+    func settingsNote() -> some View {
+        self
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

@@ -31,7 +31,7 @@ struct GullsApp: App {
         WindowGroup {
             MainWindow(store: store)
         }
-        .defaultSize(width: 900, height: 600)
+        .defaultSize(width: 980, height: 720)
         .windowToolbarStyle(.unified)
 
         Settings {

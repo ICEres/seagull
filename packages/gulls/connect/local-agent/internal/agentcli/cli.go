@@ -60,6 +60,10 @@ var errUsage = errors.New("usage error")
 var errConfig = errors.New("config error")
 
 func run(programName string, args []string, stdout io.Writer, stderr io.Writer, env []string, client Client) (int, error) {
+	return runWithRouting(programName, args, stdout, stderr, env, client, true)
+}
+
+func runWithRouting(programName string, args []string, stdout io.Writer, stderr io.Writer, env []string, client Client, allowRuntimeRoute bool) (int, error) {
 	global, remaining, err := parseGlobal(programName, args, stderr)
 	if err != nil {
 		return 0, err
@@ -71,7 +75,14 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 
 	command := remaining[0]
 	commandArgs := remaining[1:]
+	if allowRuntimeRoute && client == nil {
+		if code, handled, err := tryRuntimeRoute(global, remaining, stdout, stderr, env); handled {
+			return code, err
+		}
+	}
 	switch command {
+	case "runtime":
+		return runRuntimeCommand(commandArgs, global, stdout, stderr, env)
 	case "version":
 		payload := map[string]any{"program": global.ProgramName, "version": Version}
 		printJSONOrText(stdout, global.JSON, payload, global.ProgramName+" version "+Version)
@@ -427,6 +438,14 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		if err != nil {
 			return 0, err
 		}
+		if runtimePath := RuntimeSocketPath(env); allowRuntimeRoute && RuntimeSocketAvailable(runtimePath) {
+			managed, ok := runtimeManagedInboxClient(global, env)
+			if !ok {
+				return 0, errors.New("runtime IPC could not identify the configured profile")
+			}
+			client = managed
+			config.StreamURL = ""
+		}
 		if *once {
 			result, err := PollOnce(client, config, *limit, *notify, nil)
 			if err != nil {
@@ -777,6 +796,7 @@ func printUsage(out io.Writer, programName string) {
 		programName = "gulls"
 	}
 	fmt.Fprintf(out, "usage: %s [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--json] <command> [args]\n", programName)
+	fmt.Fprintln(out, "commands: runtime serve|status, inbox, watch, open, reply, ack, ignore, draft-reply, post, whoami, thread, context, route, local-action")
 }
 
 type stringList []string

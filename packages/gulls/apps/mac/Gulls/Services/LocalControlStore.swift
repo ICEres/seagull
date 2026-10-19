@@ -219,8 +219,8 @@ final class LocalControlStore {
         Task { await finish(request: request, status: .rejected, error: "Rejected by owner.") }
     }
 
-    func stop() {
-        runningExecution?.terminate(reason: .cancelled)
+    func stop(forTermination: Bool = false) {
+        runningExecution?.terminate(reason: .cancelled, immediately: forTermination)
     }
 
     private func finish(
@@ -710,6 +710,7 @@ private final class LocalProcessExecution: @unchecked Sendable {
     private var continuation: CheckedContinuation<LocalProcessOutput, Never>?
     private var endReason: LocalProcessEndReason?
     private var didFinish = false
+    private var processGroupID: pid_t?
 
     init(executable: String, arguments: [String], workingDirectory: URL, outputLimit: Int) {
         process = Process()
@@ -750,6 +751,8 @@ private final class LocalProcessExecution: @unchecked Sendable {
                 }
                 do {
                     try process.run()
+                    let pid = process.processIdentifier
+                    if pid > 0, Darwin.getpgid(pid) == pid { processGroupID = pid }
                     lock.unlock()
                 } catch {
                     lock.unlock()
@@ -761,17 +764,32 @@ private final class LocalProcessExecution: @unchecked Sendable {
         })
     }
 
-    func terminate(reason: LocalProcessEndReason) {
+    func terminate(reason: LocalProcessEndReason, immediately: Bool = false) {
         lock.lock()
         if endReason == nil { endReason = reason }
         let running = process.isRunning
         let pid = process.processIdentifier
+        let groupID = processGroupID
         lock.unlock()
+        // App termination cannot depend on a delayed escalation task: it may
+        // exit before that task runs. Kill only the group this command owns.
+        if immediately {
+            if let groupID { _ = Darwin.kill(-groupID, SIGKILL) }
+            else if running, pid > 0 { _ = Darwin.kill(pid, SIGKILL) }
+            return
+        }
         guard running else { return }
-        process.terminate()
-        Task {
+        if let groupID {
+            _ = Darwin.kill(-groupID, SIGTERM)
+        } else {
+            process.terminate()
+        }
+        Task.detached {
             try? await Task.sleep(for: .milliseconds(250))
-            let stillRunning = lock.withLock { !didFinish && process.isRunning }
+            // The direct child may already have exited while descendants
+            // still hold its output pipes. Cancel the owned group as well.
+            if let groupID { _ = Darwin.kill(-groupID, SIGKILL); return }
+            let stillRunning = self.lock.withLock { !self.didFinish && self.process.isRunning }
             if stillRunning, pid > 0 { _ = Darwin.kill(pid, SIGKILL) }
         }
     }

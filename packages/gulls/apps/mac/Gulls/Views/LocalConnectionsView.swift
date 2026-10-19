@@ -131,7 +131,7 @@ struct LocalConnectionsView: View {
                 }
             }
 
-            Text("Inbox monitoring runs while Gulls is open. Pausing stops this Mac from checking for messages; cloud replies keep their current mode.")
+            Text("Monitoring continues with windows closed. Quit Gulls stops this Mac. Monitoring and AI replies are configured separately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -257,6 +257,7 @@ struct LocalConnectionsView: View {
     }
 
     private func monitoringStatus(_ store: InboxStore) -> String {
+        if store.runtimeManaged { return store.monitoringStatusText }
         if !store.config.monitoringEnabled { return "Paused" }
         if store.lastError != nil { return "Needs attention" }
         if store.isMonitoring { return "Monitoring" }
@@ -335,6 +336,10 @@ struct LocalConnectionsView: View {
         guard !isBusy, let gull = ownedGull(for: config) else { return }
         isBusy = true
         defer { isBusy = false }
+        workspace.setMonitoring(false, profileID: config.profileID)
+        workspace.localControls[config.profileID]?.enabled = false
+        workspace.localControls[config.profileID]?.stop()
+        await workspace.reconcile()
         do {
             _ = try await account.disconnectLocalRuntime(for: gull)
             workspace.inboxes[config.profileID]?.stopMonitoring()
@@ -359,6 +364,8 @@ struct LocalConnectionsView: View {
             return
         }
         workspace.inboxes[config.profileID]?.stopMonitoring()
+        workspace.localControls[config.profileID]?.enabled = false
+        workspace.localControls[config.profileID]?.stop()
         workspace.connections.remove(profileID: config.profileID)
         workspace.synchronizeProfiles()
         editingProfileID = nil

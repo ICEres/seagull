@@ -2,15 +2,9 @@ import AppKit
 import Foundation
 import Observation
 
-// Observable inbox state, delivery actions, and the polling loop. Polls
-// `inbox --json` and diffs by delivery_id against the app-private
-// NotifiedSetStore. Deliberately does NOT use `watch --once`: that returns no
-// item data and mutates the CLI's seen-deliveries.json/context files, which
-// would silently suppress a concurrently running `gulls watch`.
-//
-// Stream lifecycle lives in StreamController; notified-set persistence lives
-// in NotifiedSetStore. This class owns state, the poll loop, and the
-// notification diffing between them.
+// Projects inbox snapshots and delivery actions into the native UI. Production
+// workspaces receive snapshots from the shared resident runtime. Standalone
+// previews and CLI fixtures retain the one-shot polling path.
 @MainActor
 @Observable
 final class InboxStore {
@@ -36,11 +30,33 @@ final class InboxStore {
     var filter: InboxFilter = .awaiting
     var searchText = ""
     var monitoringEnabled: Bool {
-        didSet { config.monitoringEnabled = monitoringEnabled }
+        didSet {
+            if config.monitoringEnabled != monitoringEnabled { config.monitoringEnabled = monitoringEnabled }
+        }
     }
 
     var isMonitoring: Bool {
-        monitoringEnabled && (pollTask != nil || streamState != .off)
+        monitoringEnabled && (runtimeManaged
+            ? ["connecting", "connected", "reconnecting"].contains(runtimeStatus)
+            : pollTask != nil || streamState != .off)
+    }
+
+    private(set) var runtimeManaged = false
+    private(set) var runtimeStatus = "stopped"
+
+    var monitoringStatusText: String {
+        guard config.isConfigured else { return "Needs setup" }
+        guard isCurrent else { return "Connection changed" }
+        guard monitoringEnabled else { return "Monitoring paused" }
+        guard runtimeManaged else { return isMonitoring ? "Monitoring" : "Ready" }
+        switch runtimeStatus {
+        case "connecting": return "Connecting"
+        case "connected": return "Monitoring"
+        case "reconnecting": return "Reconnecting"
+        case "authorization_required": return "Reconnect required"
+        case "paused": return "Monitoring paused"
+        default: return "Service unavailable"
+        }
     }
 
     var isCurrent: Bool { connectionRevision == config.connectionRevision }
@@ -72,6 +88,8 @@ final class InboxStore {
     private let streamController = StreamController()
     private var pollTask: Task<Void, Never>?
     private var pendingRefresh = false
+    private var isLoadingAgentProfile = false
+    private var requestedRuntimeNotifications = false
     private let notifiedStore: NotifiedSetStore
     private var hasSeededFirstRun: Bool
     // Sequential banner/draft pipeline; exposed so tests can await it.
@@ -153,25 +171,14 @@ final class InboxStore {
             let generation = notificationGeneration
             let revision = config.connectionRevision
             do {
+                if runtimeManaged {
+                    try await cli.refreshRuntime(profileID: config.profileID)
+                    continue
+                }
                 let fetched = try await cli.inbox(limit: 100, environment: config.cliEnvironment())
                 guard !Task.isCancelled, generation == notificationGeneration,
                       revision == config.connectionRevision, revision == connectionRevision else { return }
-                items = fetched
-                lastRefresh = Date()
-                lastError = nil
-                updateBadge()
-                withdrawDecidedNotifications(fetched)
-                if hasSeededFirstRun {
-                    notifyAboutNewItems(fetched)
-                } else {
-                    // First run: mark the pre-existing queue as known instead
-                    // of bannering every old delivery at once. Banners are for
-                    // deliveries that arrive from here on.
-                    notifiedStore.seed(
-                        fetched.filter { $0.delivery.statusValue == .delivered }.map(\.id)
-                    )
-                    hasSeededFirstRun = true
-                }
+                acceptSnapshot(fetched, checkedAt: Date())
             } catch {
                 guard !Task.isCancelled, generation == notificationGeneration,
                       revision == config.connectionRevision, revision == connectionRevision else { return }
@@ -181,12 +188,16 @@ final class InboxStore {
     }
 
     func loadAgentProfile() async {
-        guard let cli, config.isConfigured, isCurrent else { return }
-        agent = try? await cli.whoami(environment: config.cliEnvironment())
+        guard let cli, config.isConfigured, isCurrent, !isLoadingAgentProfile else { return }
+        isLoadingAgentProfile = true
+        defer { isLoadingAgentProfile = false }
+        let fetched = try? await cli.whoami(environment: config.cliEnvironment())
+        guard isCurrent, !Task.isCancelled else { return }
+        agent = fetched
     }
 
     func startPolling() {
-        guard isCurrent, pollTask == nil, cli != nil else { return }
+        guard !runtimeManaged, isCurrent, pollTask == nil, cli != nil else { return }
         // Authorization must not gate the poll loop: the system prompt stays
         // open until the user answers, and polling should run regardless.
         Task { [notifier] in
@@ -210,15 +221,24 @@ final class InboxStore {
     // inbox and may notify the owner; it does not enable AI replies.
     func startMonitoring() {
         guard isCurrent else { return }
-        monitoringEnabled = true
+        if !monitoringEnabled { monitoringEnabled = true }
+        if runtimeManaged {
+            if runtimeStatus == "paused" || runtimeStatus == "stopped" { runtimeStatus = "connecting" }
+            if !requestedRuntimeNotifications {
+                requestedRuntimeNotifications = true
+                Task { [notifier] in _ = await notifier.requestAuthorization() }
+            }
+            return
+        }
         startPolling()
         startStreaming()
     }
 
     func stopMonitoring() {
-        monitoringEnabled = false
+        if monitoringEnabled { monitoringEnabled = false }
         stopPolling()
         stopStreaming()
+        if runtimeManaged { runtimeStatus = "paused" }
         cancelNotificationPipeline()
     }
 
@@ -227,7 +247,52 @@ final class InboxStore {
     func suspendMonitoring() {
         stopPolling()
         stopStreaming()
+        if runtimeManaged { runtimeStatus = "stopped" }
         cancelNotificationPipeline()
+    }
+
+    func useResidentRuntime() {
+        if !runtimeManaged {
+            stopPolling()
+            stopStreaming()
+            runtimeManaged = true
+        }
+        if runtimeStatus == "stopped" {
+            runtimeStatus = monitoringEnabled ? "connecting" : "paused"
+        }
+    }
+
+    func receiveRuntimeSnapshot(
+        _ fetched: [InboxItem]?, status: String, error: String?, checkedAt: Date?
+    ) {
+        guard runtimeManaged, isCurrent, runtimeStatus != "stopped",
+              monitoringEnabled || status == "paused" else { return }
+        runtimeStatus = status
+        lastError = error
+        guard let fetched else { return }
+        if status == "connected" {
+            acceptSnapshot(fetched, checkedAt: checkedAt)
+        } else {
+            // A durable snapshot is useful offline, but only fresh successful
+            // checks may seed or generate new-message notifications.
+            items = fetched
+            lastRefresh = checkedAt
+            updateBadge()
+        }
+    }
+
+    private func acceptSnapshot(_ fetched: [InboxItem], checkedAt: Date?) {
+        items = fetched
+        lastRefresh = checkedAt
+        lastError = nil
+        updateBadge()
+        withdrawDecidedNotifications(fetched)
+        if hasSeededFirstRun {
+            notifyAboutNewItems(fetched)
+        } else {
+            notifiedStore.seed(fetched.filter { $0.delivery.statusValue == .delivered }.map(\.id))
+            hasSeededFirstRun = true
+        }
     }
 
     private func cancelNotificationPipeline() {
@@ -245,7 +310,7 @@ final class InboxStore {
     // MARK: - Streaming (push = wake-up, poll = truth)
 
     func startStreaming() {
-        guard isCurrent, let cli else { return }
+        guard !runtimeManaged, isCurrent, let cli else { return }
         let streamURL = config.streamURL.trimmingCharacters(in: .whitespaces)
         guard !streamURL.isEmpty, config.isConfigured else { return }
         streamController.start(cli: cli) { [config] in

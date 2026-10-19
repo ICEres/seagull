@@ -4,6 +4,7 @@ import SwiftUI
 struct GullsApp: App {
     @State private var workspace: GullsWorkspace
     @State private var account: CloudAccountStore
+    @State private var lifecycle: AppLifecycleCoordinator
     private let isTestHost: Bool
 
     init() {
@@ -27,26 +28,37 @@ struct GullsApp: App {
         let account = CloudAccountStore(defaults: defaults, cli: cli,
                                         sharedSessionURL: isTestHost ? nil : SharedCloudSessionFile.defaultURL)
         _account = State(initialValue: account)
-        // Terminate the stream subprocess on quit — otherwise it lingers
-        // until its next stdout write hits the closed pipe.
+        let lifecycle = AppLifecycleCoordinator(
+            workspace: workspace,
+            account: account,
+            isTestHost: isTestHost
+        )
+        _lifecycle = State(initialValue: lifecycle)
+        // Terminate app-owned monitoring and approved local commands on quit.
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                workspace.stopAll()
                 account.cancelBrowserSignIn()
+                lifecycle.stopForTermination()
             }
         }
     }
 
     var body: some Scene {
-        WindowGroup {
-            WorkspaceWindow(workspace: workspace, account: account, isTestHost: isTestHost)
+        Window("Gulls", id: "workspace") {
+            WorkspaceWindow(workspace: workspace, account: account, lifecycle: lifecycle)
         }
         .defaultSize(width: 980, height: 720)
         .windowToolbarStyle(.unified)
+
+        MenuBarExtra {
+            GullsMenuBarView(workspace: workspace, lifecycle: lifecycle)
+        } label: {
+            GullsMenuBarLabel(workspace: workspace, lifecycle: lifecycle)
+        }
 
         Settings {
             SettingsView(workspace: workspace, account: account)
@@ -58,33 +70,24 @@ struct GullsApp: App {
 private struct WorkspaceWindow: View {
     @Bindable var workspace: GullsWorkspace
     let account: CloudAccountStore
-    let isTestHost: Bool
+    let lifecycle: AppLifecycleCoordinator
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         MainWindow(store: workspace.selectedStore, workspace: workspace, account: account)
-            .task(id: workspace.configurationKey) {
-                guard !isTestHost else { return }
-                try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                await workspace.reconcile()
-                if workspace.connections.profiles.allSatisfy({ !$0.isConfigured }) { openSettings() }
+            .task { lifecycle.start() }
+            .onAppear {
+                workspace.onOpenWorkspace = {
+                    openWindow(id: "workspace")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                if !ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath"),
+                   workspace.connections.profiles.allSatisfy({ !$0.isConfigured }) {
+                    openSettings()
+                }
             }
             .onChange(of: workspace.attentionCount) { _, _ in workspace.updateBadge() }
-            .task {
-                guard !isTestHost else { return }
-                while !Task.isCancelled {
-                    workspace.refreshLocalActions()
-                    try? await Task.sleep(for: .seconds(2))
-                }
-            }
-            .task {
-                guard !isTestHost else { return }
-                while !Task.isCancelled {
-                    await account.synchronizeSharedSession()
-                    try? await Task.sleep(for: .seconds(5))
-                }
-            }
     }
 }
 

@@ -193,4 +193,92 @@ final class InboxStoreNotificationTests: XCTestCase {
         await refreshAndSettle(store)
         XCTAssertEqual(notifier.notified, [])
     }
+
+    func testResidentSnapshotsSeedSilentlyAndNotifyOnlyNewDeliveries() async throws {
+        let notifier = RecordingNotifier()
+        let store = try makeStore(notifier: notifier, notifiedFile: tmp.appendingPathComponent("resident-notified.json"))
+        store.useResidentRuntime()
+        let existing = try runtimeItems([("existing", "delivered")])
+        store.receiveRuntimeSnapshot(existing, status: "connected", error: nil, checkedAt: Date())
+        await store.pendingNotificationTask?.value
+        XCTAssertTrue(notifier.notified.isEmpty)
+
+        let updated = try runtimeItems([("existing", "delivered"), ("new", "delivered")])
+        store.receiveRuntimeSnapshot(updated, status: "connected", error: nil, checkedAt: Date())
+        await store.pendingNotificationTask?.value
+        store.receiveRuntimeSnapshot(updated, status: "connected", error: nil, checkedAt: Date())
+        await store.pendingNotificationTask?.value
+
+        XCTAssertEqual(store.items.map(\.id), ["existing", "new"])
+        XCTAssertEqual(notifier.notified, ["new"])
+        XCTAssertTrue(store.isMonitoring)
+    }
+
+    func testResidentSnapshotsAfterPauseOrShutdownDoNotNotify() async throws {
+        let notifier = RecordingNotifier()
+        let store = try makeStore(notifier: notifier, notifiedFile: tmp.appendingPathComponent("resident-paused.json"))
+        store.useResidentRuntime()
+        store.stopMonitoring()
+        let late = try runtimeItems([("late", "delivered")])
+        store.receiveRuntimeSnapshot(late, status: "connected", error: nil, checkedAt: Date())
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertFalse(store.isMonitoring)
+
+        store.monitoringEnabled = true
+        store.suspendMonitoring()
+        store.receiveRuntimeSnapshot(late, status: "connected", error: nil, checkedAt: Date())
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertTrue(notifier.notified.isEmpty)
+    }
+
+    func testResidentOfflineCacheDoesNotAnnounceOldMessages() async throws {
+        let notifier = RecordingNotifier()
+        let store = try makeStore(notifier: notifier, notifiedFile: tmp.appendingPathComponent("resident-cache.json"))
+        store.useResidentRuntime()
+        let cached = try runtimeItems([("cached", "delivered")])
+        store.receiveRuntimeSnapshot(cached, status: "reconnecting", error: "Offline", checkedAt: nil)
+
+        XCTAssertEqual(store.items.map(\.id), ["cached"])
+        XCTAssertEqual(store.lastError, "Offline")
+        XCTAssertTrue(notifier.notified.isEmpty)
+
+        store.config.apiURL = "http://localhost:2"
+        store.receiveRuntimeSnapshot([], status: "connected", error: nil, checkedAt: Date())
+        XCTAssertEqual(store.items.map(\.id), ["cached"], "a replaced connection must ignore late snapshots")
+    }
+
+    func testResidentManualSnapshotWhilePausedDoesNotResumeOrNotify() async throws {
+        let notifier = RecordingNotifier()
+        let store = try makeStore(notifier: notifier, notifiedFile: tmp.appendingPathComponent("resident-manual.json"))
+        store.useResidentRuntime()
+        store.stopMonitoring()
+        store.suspendMonitoring()
+        store.useResidentRuntime()
+        let fetched = try runtimeItems([("manual", "delivered")])
+
+        store.receiveRuntimeSnapshot(fetched, status: "paused", error: nil, checkedAt: Date())
+
+        XCTAssertEqual(store.items.map(\.id), ["manual"])
+        XCTAssertFalse(store.isMonitoring)
+        XCTAssertFalse(store.config.monitoringEnabled)
+        XCTAssertTrue(notifier.notified.isEmpty)
+    }
+
+    func testUnavailableResidentServiceIsNotShownAsMonitoring() throws {
+        let store = try makeStore(notifier: RecordingNotifier(), notifiedFile: tmp.appendingPathComponent("resident-unavailable.json"))
+        store.useResidentRuntime()
+        store.receiveRuntimeSnapshot(nil, status: "unavailable", error: "Service stopped", checkedAt: nil)
+
+        XCTAssertFalse(store.isMonitoring)
+        XCTAssertTrue(store.config.monitoringEnabled, "the desired monitoring preference must survive a service failure")
+        XCTAssertEqual(store.monitoringStatusText, "Service unavailable")
+    }
+
+    private func runtimeItems(_ items: [(String, String)]) throws -> [InboxItem] {
+        try items.map { id, status in
+            try JSONDecoder().decode(InboxItem.self, from: Data("""
+            {"delivery":{"delivery_id":"\(id)","status":"\(status)"}}
+            """.utf8))
+        }
+    }
 }

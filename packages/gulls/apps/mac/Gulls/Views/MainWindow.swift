@@ -408,6 +408,7 @@ struct MainWindow: View {
         Menu {
             Text(localGullName)
             Text(streamStatusText)
+            if store.runtimeManaged { Text("Local AI worker: Not configured") }
             if let lastRefresh = store.lastRefresh {
                 Text("Last checked \(lastRefresh.formatted(date: .omitted, time: .standard))")
             }
@@ -436,6 +437,14 @@ struct MainWindow: View {
 
     private var statusSymbol: String {
         if store.isRefreshing { return "arrow.triangle.2.circlepath" }
+        if store.runtimeManaged {
+            switch store.runtimeStatus {
+            case "connected": return "circle.fill"
+            case "authorization_required", "unavailable": return "exclamationmark.circle"
+            case "paused", "stopped": return "pause.circle"
+            default: return "arrow.triangle.2.circlepath"
+            }
+        }
         switch store.streamState {
         case .off: return "circle.fill"
         case .failed: return "bolt.slash.fill"
@@ -444,6 +453,15 @@ struct MainWindow: View {
     }
 
     private var statusColor: Color {
+        if store.runtimeManaged {
+            guard store.monitoringEnabled else { return .secondary }
+            switch store.runtimeStatus {
+            case "connected": return .green
+            case "connecting", "reconnecting": return .orange
+            case "authorization_required", "unavailable": return .red
+            default: return .secondary
+            }
+        }
         switch store.streamState {
         case .connected: return .green
         case .connecting, .down: return .orange
@@ -456,6 +474,11 @@ struct MainWindow: View {
         if !store.config.isConfigured { return "Connect your Gull in Settings" }
         if !store.config.monitoringEnabled { return "Inbox monitoring paused" }
         if store.cli == nil { return "Bundled CLI unavailable; check Settings" }
+        if store.runtimeManaged {
+            return store.runtimeStatus == "connected"
+                ? "Monitoring on this Mac · checking every \(Int(max(store.config.pollInterval, 5)))s"
+                : store.monitoringStatusText
+        }
         switch store.streamState {
         case .connected: return "Connected via stream — new deliveries arrive instantly"
         case .connecting: return "Stream connecting — polling in the meantime"
@@ -966,6 +989,14 @@ struct MainWindow: View {
                 .textSelection(.enabled)
                 .lineLimit(2)
             Spacer()
+            if store.runtimeManaged, ["unavailable", "reconnecting"].contains(store.runtimeStatus) {
+                Button("Retry connection") {
+                    let source = store
+                    Task { await source.refresh() }
+                }
+                .controlSize(.small)
+                .disabled(store.isRefreshing)
+            }
             Button("Settings…") { openSettings() }
                 .controlSize(.small)
             Button {

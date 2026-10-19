@@ -50,6 +50,13 @@ type HTTPClient struct {
 	Token        string
 	Timeout      time.Duration
 	Client       *http.Client
+	Context      context.Context
+}
+
+func (c *HTTPClient) withContext(ctx context.Context) *HTTPClient {
+	clone := *c
+	clone.Context = ctx
+	return &clone
 }
 
 func NewHTTPClient(apiURL string, token string) *HTTPClient {
@@ -207,7 +214,11 @@ func (c *HTTPClient) requestBase(baseURL string, method string, path string, bod
 		reader = bytes.NewReader(payload)
 	}
 
-	req, err := http.NewRequest(method, strings.TrimRight(baseURL, "/")+path, reader)
+	requestContext := c.Context
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	req, err := http.NewRequestWithContext(requestContext, method, strings.TrimRight(baseURL, "/")+path, reader)
 	if err != nil {
 		return nil, err
 	}

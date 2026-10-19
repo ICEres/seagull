@@ -22,13 +22,23 @@ type WatchResult struct {
 
 type Notifier func(title string, body string) bool
 
+type watchInboxClient interface {
+	GetWatchInbox(handle string, limit int, seen map[string]bool) (map[string]any, error)
+}
+
 func PollOnce(client Client, config Config, limit int, notify bool, notifier Notifier) (WatchResult, error) {
 	if notifier == nil {
 		notifier = DesktopNotify
 	}
 	state := SeenDeliveryStore{Path: filepath.Join(config.ContextDir, "seen-deliveries.json")}
 	seen := state.Load()
-	inbox, err := getInboxForContext(client, config.AgentHandle, limit)
+	var inbox map[string]any
+	var err error
+	if resident, ok := client.(watchInboxClient); ok {
+		inbox, err = resident.GetWatchInbox(config.AgentHandle, limit, seen)
+	} else {
+		inbox, err = getInboxForContext(client, config.AgentHandle, limit)
+	}
 	if err != nil {
 		return WatchResult{}, err
 	}

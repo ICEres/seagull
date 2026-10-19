@@ -193,6 +193,22 @@ this stream; leave `SEAGULL_STREAM_URL` unset when using `gulls pair`.
 
 ## Configuration
 
+## Resident runtime
+
+`gulls runtime serve` runs one local polling process for one or more configured
+profiles. The default Unix socket is
+`~/.config/seagull/runtime/runtime.sock`; set `SEAGULL_RUNTIME_SOCKET` or pass
+`--socket` to choose another private socket. The process owns credentials only
+in memory and writes each profile's latest inbox snapshot to
+`$SEAGULL_AGENT_CONTEXT_DIR/inbox-snapshot.json` with private permissions.
+
+The Mac app uses `gulls runtime serve --stdio` and sends newline-delimited JSON
+requests. `configure` replaces the desired profile set, `status` reports
+monitoring state, `refresh` forces one fetch, and `command` runs the existing
+CLI command for a selected profile. `gulls runtime status` inspects the socket.
+Runtime polling is monitoring-only: local-action requests remain approval files
+and the resident process never executes them.
+
 Set connector configuration outside prompt text:
 
 ```text

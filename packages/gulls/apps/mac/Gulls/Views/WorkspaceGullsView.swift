@@ -165,6 +165,7 @@ struct WorkspaceGullsView: View {
     private func transportState(for store: InboxStore) -> String {
         if !store.config.isConfigured { return "Needs setup" }
         if !store.isCurrent { return "Connection changed" }
+        if store.runtimeManaged { return store.monitoringStatusText }
         if store.lastError != nil { return "Connection issue" }
         if !store.monitoringEnabled { return "Monitoring paused" }
         if store.isRefreshing { return "Refreshing" }

@@ -1,9 +1,8 @@
 import Foundation
 
-// Bridge to the bundled gulls CLI. Every call shells out to
-// `gulls --json <command> ...` (global flags must precede the command — the
-// Go flag package stops parsing at the first non-flag argument) and decodes
-// stdout with the Codable models pinned by the shared contract fixtures.
+// Bridge to the bundled gulls CLI. Ordinary calls use one-shot
+// `gulls --json <command> ...` subprocesses; registered profiles use the
+// app-supervised resident runtime and its NDJSON transport.
 //
 // One-shot commands are strictly serialized (FIFO). Actor isolation alone is
 // not enough: actors are reentrant, so a second call would enter while the
@@ -18,6 +17,8 @@ actor GullsCLI {
     // never exists, so app config is the only config the subprocess sees
     // (same pattern as the CLI's own e2e tests).
     struct Environment {
+        var profileID: String = ""
+        var connectionRevision: String = ""
         var apiURL: String
         var agentHandle: String
         var token: String?
@@ -73,12 +74,19 @@ actor GullsCLI {
 
     private let executableURL: URL
     private let decoder = JSONDecoder()
+    private let runtimeBridge: GullsRuntimeBridge
+    private var runtimeProfiles: [String: RuntimeProfile] = [:]
+    // IDs that have ever been managed by the resident runtime for this CLI
+    // lifetime. Keeping membership after removal prevents stale stores from
+    // silently falling back to one-shot subprocesses.
+    private var runtimeManagedProfileIDs: Set<String> = []
 
     // Tail of the FIFO command chain; each `run` awaits the previous one.
     private var commandTail: Task<Void, Never>?
 
-    init(executableURL: URL) {
+    init(executableURL: URL, runtimeSocketURL: URL? = nil) {
         self.executableURL = executableURL
+        self.runtimeBridge = GullsRuntimeBridge(executableURL: executableURL, socketURL: runtimeSocketURL)
     }
 
     static func bundled() -> GullsCLI? {
@@ -86,6 +94,28 @@ actor GullsCLI {
             return nil
         }
         return GullsCLI(executableURL: url)
+    }
+
+    // MARK: - Resident runtime
+
+    func startRuntime(onEvent: @escaping @Sendable (RuntimeEvent) -> Void) async throws {
+        try await runtimeBridge.start(onEvent: onEvent)
+    }
+
+    func configureRuntime(_ profiles: [RuntimeProfile]) async throws {
+        runtimeProfiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+        runtimeManagedProfileIDs.formUnion(profiles.map(\.id))
+        try await runtimeBridge.configure(profiles)
+    }
+
+    func stopRuntime() async {
+        // Retain desired membership while stopped so a routed command cannot
+        // silently fall back to a one-shot subprocess during shutdown.
+        await runtimeBridge.stop()
+    }
+
+    func refreshRuntime(profileID: String) async throws {
+        try await runtimeBridge.refresh(profileID: profileID)
     }
 
     // MARK: - Typed commands
@@ -241,6 +271,18 @@ actor GullsCLI {
     }
 
     func run(_ command: [String], environment: Environment) async throws -> Data {
+        if runtimeManagedProfileIDs.contains(environment.profileID) {
+            guard let profile = runtimeProfiles[environment.profileID] else {
+                throw Failure.runtime("The resident runtime is unavailable for profile \(environment.profileID).")
+            }
+            guard environment.connectionRevision.isEmpty || profile.revision.isEmpty ||
+                    profile.revision == environment.connectionRevision else {
+                throw Failure.configuration("The selected profile changed; reload it before running this command.")
+            }
+            // Runtime calls intentionally bypass the one-shot FIFO. The Go
+            // resident runtime serializes commands independently per profile.
+            return try await runtimeBridge.command(["--json"] + command, profile: profile)
+        }
         let previous = commandTail
         let executableURL = self.executableURL
         let task = Task<Data, Error> {
@@ -327,7 +369,7 @@ actor GullsCLI {
 
 // Splits a file handle's output into newline-delimited chunks and emits each
 // complete line as it arrives — the streaming variant of PipeCollector.
-private final class LineCollector: @unchecked Sendable {
+final class LineCollector: @unchecked Sendable {
     private let handle: FileHandle
     private let lock = NSLock()
     private var buffer = Data()
@@ -372,6 +414,13 @@ private final class LineCollector: @unchecked Sendable {
             onLine(tail)
         }
     }
+
+    func cancel() {
+        handle.readabilityHandler = nil
+        lock.lock()
+        buffer.removeAll()
+        lock.unlock()
+    }
 }
 
 // Simple thread-safe latch marking an intentional terminate() so a SIGTERM
@@ -395,7 +444,7 @@ private final class TerminationFlag: @unchecked Sendable {
 
 // Accumulates a file handle's output off the actor without racing the
 // readability callback queue.
-private final class PipeCollector: @unchecked Sendable {
+final class PipeCollector: @unchecked Sendable {
     private let handle: FileHandle
     private let lock = NSLock()
     private var data = Data()
@@ -422,5 +471,12 @@ private final class PipeCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return data
+    }
+
+    func cancel() {
+        handle.readabilityHandler = nil
+        lock.lock()
+        data.removeAll()
+        lock.unlock()
     }
 }

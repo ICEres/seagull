@@ -129,6 +129,8 @@ final class GullsConfig {
 
     func cliEnvironment() -> GullsCLI.Environment {
         GullsCLI.Environment(
+            profileID: profileID,
+            connectionRevision: connectionRevision,
             apiURL: apiURL.trimmingCharacters(in: .whitespaces),
             agentHandle: agentHandle.trimmingCharacters(in: .whitespaces),
             token: token.isEmpty ? nil : token,

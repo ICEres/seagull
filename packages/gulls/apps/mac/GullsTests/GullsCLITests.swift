@@ -1,9 +1,21 @@
 import XCTest
+import Darwin
 @testable import Gulls
 
 // Exercises the Process bridge against fake `gulls` shell scripts: argument
 // ordering, environment passing, exit-code mapping, and large-output draining.
 final class GullsCLITests: XCTestCase {
+
+    private final class RuntimeEventRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var events: [RuntimeEvent] = []
+
+        func append(_ event: RuntimeEvent) {
+            lock.lock()
+            events.append(event)
+            lock.unlock()
+        }
+    }
 
     private var tmp: URL!
 
@@ -17,11 +29,11 @@ final class GullsCLITests: XCTestCase {
         try? FileManager.default.removeItem(at: tmp)
     }
 
-    private func makeFakeBinary(script: String) throws -> GullsCLI {
+    private func makeFakeBinary(script: String, runtimeSocketURL: URL? = nil) throws -> GullsCLI {
         let url = tmp.appendingPathComponent("gulls")
         try ("#!/bin/bash\n" + script).write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        return GullsCLI(executableURL: url)
+        return GullsCLI(executableURL: url, runtimeSocketURL: runtimeSocketURL)
     }
 
     private func makeEnvironment(token: String? = "secret-token") -> GullsCLI.Environment {
@@ -31,6 +43,282 @@ final class GullsCLITests: XCTestCase {
             token: token,
             contextDir: tmp.appendingPathComponent("context")
         )
+    }
+
+    private func makeRuntimeProfile(environment: GullsCLI.Environment,
+                                    revision: String = "rev-1") -> RuntimeProfile {
+        RuntimeProfile(id: "profile-a", revision: revision, environment: environment,
+                       pollInterval: 1, monitoring: true)
+    }
+
+    private func makeRuntimeFixture(_ behavior: String = "normal", pidFile: URL? = nil) throws -> GullsCLI {
+        let pidScript = pidFile.map { "echo $$ > \"\($0.path)\"" } ?? ""
+        let restoreMarker = tmp.appendingPathComponent("restore-marker").path
+        return try makeFakeBinary(script: """
+        \(pidScript)
+        while IFS= read -r line; do
+            id=$(printf '%s' "$line" | /usr/bin/plutil -extract id raw -o - - 2>/dev/null)
+            operation=$(printf '%s' "$line" | /usr/bin/plutil -extract operation raw -o - - 2>/dev/null)
+            if [ "$operation" = "configure" ]; then
+                if [ "\(behavior)" = "restore-config-error" ] && [ -f "\(restoreMarker)" ]; then
+                    printf '{"version":1,"id":"%s","exit_code":1,"stdout":"","stderr":"restore failed"}\\n' "$id"
+                    continue
+                fi
+            fi
+            if [ "$operation" = "command" ] && { [ "\(behavior)" = "crash" ] || [ "\(behavior)" = "restore-config-error" ]; }; then
+                if [ "\(behavior)" = "restore-config-error" ]; then
+                    touch "\(restoreMarker)"
+                fi
+                kill $$
+            fi
+            printf '{"version":1,"id":"%s","exit_code":0,"stdout":"{}","stderr":""}\\n' "$id"
+        done
+        """, runtimeSocketURL: tmp.appendingPathComponent("runtime.sock"))
+    }
+
+    func testRuntimeRoutesRegisteredProfileCommandsThroughPersistentChild() async throws {
+        let cli = try makeRuntimeFixture()
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment)
+        try await cli.configureRuntime([profile])
+        defer { Task { await cli.stopRuntime() } }
+
+        var routedEnvironment = environment
+        routedEnvironment.profileID = profile.id
+        routedEnvironment.connectionRevision = profile.revision
+        let data = try await cli.run(["inbox"], environment: routedEnvironment)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "{}")
+    }
+
+    func testRuntimeCrashFailsPendingCommandWithoutOneShotFallback() async throws {
+        let cli = try makeRuntimeFixture("crash")
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment)
+        try await cli.configureRuntime([profile])
+        defer { Task { await cli.stopRuntime() } }
+
+        var routedEnvironment = environment
+        routedEnvironment.profileID = profile.id
+        routedEnvironment.connectionRevision = profile.revision
+        do {
+            _ = try await cli.run(["reply", "delivery_1", "hello"], environment: routedEnvironment)
+            XCTFail("expected runtime failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("unavailable"),
+                          "unexpected failure: \(error)")
+        }
+    }
+
+    func testRuntimeRestoreConfigurationFailureIsSurfaced() async throws {
+        let cli = try makeRuntimeFixture("restore-config-error")
+        let unavailable = expectation(description: "runtime restore failure is reported")
+        let recorder = RuntimeEventRecorder()
+        try await cli.startRuntime { event in
+            recorder.append(event)
+            if event.status == .unavailable,
+               event.error?.contains("restore") == true {
+                unavailable.fulfill()
+            }
+        }
+        addTeardownBlock {
+            await cli.stopRuntime()
+        }
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment)
+        try await cli.configureRuntime([profile])
+        var routed = environment
+        routed.profileID = profile.id
+        routed.connectionRevision = profile.revision
+        do {
+            _ = try await cli.run(["reply", "delivery_1", "hello"], environment: routed)
+            XCTFail("expected fixture child crash")
+        } catch {
+            // The in-flight request must fail; the recovery configuration is
+            // deliberately attempted asynchronously and must not be replayed.
+        }
+        await fulfillment(of: [unavailable], timeout: 5)
+        XCTAssertTrue(recorder.events.contains { $0.status == .unavailable })
+    }
+
+    func testRefreshRecoversAfterRuntimeCrash() async throws {
+        let pidFile = tmp.appendingPathComponent("restore-runtime.pid")
+        let cli = try makeRuntimeFixture("restore-config-error", pidFile: pidFile)
+        let unavailable = expectation(description: "bounded restore attempts exhausted")
+        try await cli.startRuntime { event in
+            if event.status == .unavailable,
+               event.error?.contains("stopped unexpectedly") == true {
+                unavailable.fulfill()
+            }
+        }
+        addTeardownBlock {
+            await cli.stopRuntime()
+        }
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment)
+        try await cli.configureRuntime([profile])
+        var routed = environment
+        routed.profileID = profile.id
+        routed.connectionRevision = profile.revision
+        do { _ = try await cli.run(["reply", "delivery_1", "hello"], environment: routed) } catch { }
+        await fulfillment(of: [unavailable], timeout: 5)
+        let pidString = try await waitForTextFile(pidFile)
+        let pid = pid_t(try XCTUnwrap(Int32(pidString.trimmingCharacters(in: .whitespacesAndNewlines))))
+        XCTAssertNotEqual(kill(pid, 0), 0, "exhausted runtime child should be absent")
+        try FileManager.default.removeItem(at: tmp.appendingPathComponent("restore-marker"))
+        try await cli.refreshRuntime(profileID: profile.id)
+
+        await cli.stopRuntime()
+        do {
+            try await cli.refreshRuntime(profileID: profile.id)
+            XCTFail("explicit stop must prevent refresh relaunch")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("unavailable"))
+        }
+    }
+
+    func testRuntimeRejectsStaleConnectionRevision() async throws {
+        let cli = try makeRuntimeFixture()
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment, revision: "current")
+        try await cli.configureRuntime([profile])
+        defer { Task { await cli.stopRuntime() } }
+
+        var stale = environment
+        stale.profileID = profile.id
+        stale.connectionRevision = "stale"
+        do {
+            _ = try await cli.run(["reply", "delivery_1", "hello"], environment: stale)
+            XCTFail("expected stale revision rejection")
+        } catch let failure as GullsCLI.Failure {
+            guard case .configuration = failure else {
+                XCTFail("unexpected failure: \(failure)")
+                return
+            }
+        }
+    }
+
+    func testRemovedRuntimeProfileCannotFallBackToOneShotCLI() async throws {
+        let cli = try makeRuntimeFixture()
+        let environment = makeEnvironment()
+        let profile = makeRuntimeProfile(environment: environment)
+        try await cli.configureRuntime([profile])
+        // An empty configuration removes the active profile while the CLI
+        // remains alive. Its ID must still be treated as runtime-managed.
+        try await cli.configureRuntime([])
+        defer { Task { await cli.stopRuntime() } }
+
+        var removed = environment
+        removed.profileID = profile.id
+        removed.connectionRevision = profile.revision
+        do {
+            _ = try await cli.run(["reply", "delivery_1", "hello"], environment: removed)
+            XCTFail("expected removed profile to remain unavailable")
+        } catch let failure as GullsCLI.Failure {
+            guard case .runtime = failure else {
+                XCTFail("unexpected failure: \(failure)")
+                return
+            }
+        }
+    }
+
+    func testStoppingRuntimeExitsOwnedChild() async throws {
+        let pidFile = tmp.appendingPathComponent("runtime.pid")
+        let cli = try makeRuntimeFixture(pidFile: pidFile)
+        let environment = makeEnvironment()
+        try await cli.configureRuntime([makeRuntimeProfile(environment: environment)])
+        let pidText = try await waitForTextFile(pidFile)
+        let pid = pid_t(try XCTUnwrap(Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines))))
+
+        await cli.stopRuntime()
+        for _ in 0..<30 {
+            if kill(pid, 0) != 0 { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("runtime child remained alive after stopRuntime")
+    }
+
+    func testBundledRuntimeV1InteropAndSocketStatus() async throws {
+        guard let executable = Bundle.main.url(forResource: "gulls", withExtension: nil) else {
+            throw XCTSkip("The bundled gulls binary is unavailable in this test bundle")
+        }
+        let shortDirectory = URL(fileURLWithPath: "/tmp/grt-\(UUID().uuidString.prefix(8))",
+                                 isDirectory: true)
+        try FileManager.default.createDirectory(at: shortDirectory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shortDirectory.path)
+        let socket = shortDirectory.appendingPathComponent("runtime.sock")
+        let cli = GullsCLI(executableURL: executable, runtimeSocketURL: socket)
+        addTeardownBlock {
+            await cli.stopRuntime()
+            try? FileManager.default.removeItem(at: shortDirectory)
+        }
+        var first = makeEnvironment(token: "sga_test_token_one")
+        first.contextDir = tmp.appendingPathComponent("bundled-context-a")
+        var second = makeEnvironment(token: "sga_test_token_two")
+        second.contextDir = tmp.appendingPathComponent("bundled-context-b")
+        let profiles = [
+            RuntimeProfile(id: "bundled-a", revision: "revision-a", environment: first,
+                           pollInterval: 30, monitoring: false),
+            RuntimeProfile(id: "bundled-b", revision: "revision-b", environment: second,
+                           pollInterval: 30, monitoring: false),
+        ]
+        try await cli.configureRuntime(profiles)
+
+        var routed = first
+        routed.profileID = profiles[0].id
+        routed.connectionRevision = profiles[0].revision
+        let versionData = try await cli.run(["version"], environment: routed)
+        XCTAssertEqual(try JSONDecoder().decode(VersionInfo.self, from: versionData).program, "gulls")
+
+        do {
+            _ = try await cli.run(["inbox", "--limit", "1"], environment: routed)
+            XCTFail("expected missing-cache inbox error")
+        } catch let failure as GullsCLI.Failure {
+            guard case .runtime = failure else {
+                XCTFail("unexpected inbox failure: \(failure)")
+                return
+            }
+        }
+
+        do {
+            _ = try await cli.run(["not-a-real-command"], environment: routed)
+            XCTFail("expected bundled runtime command failure")
+        } catch let failure as GullsCLI.Failure {
+            guard case .runtime = failure else {
+                XCTFail("unexpected failure: \(failure)")
+                return
+            }
+        }
+
+        do {
+            _ = try await cli.run(["inbox", "--limit", "0"], environment: routed)
+            XCTFail("expected bundled runtime usage failure")
+        } catch let failure as GullsCLI.Failure {
+            guard case .configuration = failure else {
+                XCTFail("unexpected usage failure: \(failure)")
+                return
+            }
+        }
+
+        var statusEnvironment = ProcessInfo.processInfo.environment
+        statusEnvironment["SEAGULL_RUNTIME_SOCKET"] = socket.path
+        let status = Process()
+        status.executableURL = executable
+        status.arguments = ["--json", "runtime", "status"]
+        status.environment = statusEnvironment
+        let output = Pipe()
+        status.standardOutput = output
+        status.standardError = Pipe()
+        let (statusCode, statusData, _) = try await runAndCollect(status, output: output)
+        XCTAssertEqual(statusCode, 0)
+        XCTAssertTrue(String(decoding: statusData, as: UTF8.self).contains("bundled-a"))
+        XCTAssertTrue(String(decoding: statusData, as: UTF8.self).contains("bundled-b"))
+        XCTAssertFalse(String(decoding: statusData, as: UTF8.self).contains("sga_test_token"))
+
+        await cli.stopRuntime()
+        for _ in 0..<30 where FileManager.default.fileExists(atPath: socket.path) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socket.path))
     }
 
     func testArgumentsPutGlobalJSONFlagFirstAndEnvIsPassed() async throws {
@@ -302,5 +590,26 @@ final class GullsCLITests: XCTestCase {
         }
         XCTFail("Timed out waiting for \(url.lastPathComponent)")
         return ""
+    }
+
+    private func runAndCollect(_ process: Process, output: Pipe) async throws -> (Int32, Data, Data) {
+        let stdout = PipeCollector(handle: output.fileHandleForReading)
+        let stderr = (process.standardError as? Pipe).map { PipeCollector(handle: $0.fileHandleForReading) }
+        do {
+            try process.run()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while process.isRunning, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            guard !process.isRunning else {
+                throw GullsCLI.Failure.runtime("The test CLI did not exit before its deadline.")
+            }
+            return (process.terminationStatus, stdout.finish(), stderr?.finish() ?? Data())
+        } catch {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            stdout.cancel()
+            stderr?.cancel()
+            throw error
+        }
     }
 }

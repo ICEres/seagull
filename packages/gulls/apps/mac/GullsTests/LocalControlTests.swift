@@ -251,11 +251,12 @@ final class LocalControlTests: XCTestCase {
         XCTAssertEqual(store.recentResults.first?.status, .cancelled)
     }
 
-    func testStopForceKillsCommandThatIgnoresSIGTERM() async throws {
+    func testTerminationKillsCommandThatIgnoresSIGTERM() async throws {
+        let ready = root.appendingPathComponent("termination-ready")
         let request = request(
             kind: .command,
             executable: "/bin/sh",
-            arguments: ["-c", "trap '' TERM; sleep 5"],
+            arguments: ["-c", "trap '' TERM; /usr/bin/touch '\(ready.path)'; sleep 5"],
             workingDirectory: root.path
         )
         try writeRequest(request)
@@ -263,13 +264,42 @@ final class LocalControlTests: XCTestCase {
         let reviewed = try XCTUnwrap(store.pendingRequests.first)
         let approval = Task { await store.approve(reviewed) }
 
-        for _ in 0..<50 where !store.isRunning {
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: ready.path) { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        store.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path))
+        store.stop(forTermination: true)
         await approval.value
 
         XCTAssertEqual(store.recentResults.first?.status, .cancelled)
+    }
+
+    func testStoppingCommandAlsoStopsItsChildProcesses() async throws {
+        let ready = root.appendingPathComponent("child-ready")
+        let escaped = root.appendingPathComponent("child-effect")
+        let request = request(
+            kind: .command,
+            executable: "/bin/sh",
+            arguments: ["-c", "(sleep 1; /usr/bin/touch '\(escaped.path)') & /usr/bin/touch '\(ready.path)'; wait"],
+            workingDirectory: root.path
+        )
+        try writeRequest(request)
+        store.refresh()
+        let reviewed = try XCTUnwrap(store.pendingRequests.first)
+        let approval = Task { await store.approve(reviewed) }
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: ready.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path))
+
+        store.stop()
+        await approval.value
+        try await Task.sleep(for: .milliseconds(1100))
+
+        XCTAssertEqual(store.recentResults.first?.status, .cancelled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: escaped.path))
     }
 
     func testInterruptedClaimIsRecoveredWithoutReplayingRequest() throws {

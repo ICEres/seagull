@@ -74,12 +74,6 @@ struct SettingsView: View {
                 .keyboardShortcut(.cancelAction)
                 .hidden()
         }
-        .task {
-            while !Task.isCancelled {
-                await account.synchronizeSharedSession()
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
     }
 
     private func navigationGroup(_ title: String, sections: [Section], proxy: ScrollViewProxy) -> some View {

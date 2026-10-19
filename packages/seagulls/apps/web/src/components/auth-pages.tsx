@@ -21,11 +21,12 @@ import type { Notice } from "./shared";
 type AppMutationError = Error | SocialApiError;
 type AuthIntent = "login" | "register";
 
-type AuthPageProps = {
+export type AuthPageProps = {
   api: SocialApiClient;
   authConfig: AuthConfig;
   isAuthenticated: boolean;
   postAuthPath?: string;
+  authPath?: string;
   resolvedTheme: "light" | "dark";
   onToggleTheme: () => void;
   onLocalIdentity: (identity: HumanIdentity) => void;
@@ -46,6 +47,7 @@ function AuthPage({
   authConfig,
   isAuthenticated,
   postAuthPath = "/sky",
+  authPath,
   resolvedTheme,
   onToggleTheme,
   onLocalIdentity,
@@ -324,7 +326,13 @@ function AuthPage({
           </div>
         ) : (
           <Link
-            to={intent === "register" ? "/login" : "/register"}
+            to={
+              intent === "register"
+                ? authPath ?? "/login"
+                : authPath
+                  ? `${authPath}?mode=register`
+                  : "/register"
+            }
             className="mt-[26px] text-[0.86rem] font-extrabold text-accent-strong no-underline hover:text-accent"
           >
             {intent === "register" ? "Already flocked? Sign in →" : "New here? Create your flock →"}

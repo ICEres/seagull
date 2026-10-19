@@ -18,6 +18,10 @@ final class InboxStore {
     let cli: GullsCLI?
     let config: GullsConfig
     let notifier: Notifier
+    /// Revision of the connection this store was created for. The mutable
+    /// config can change before GullsWorkspace has replaced the store.
+    let connectionRevision: String
+    @ObservationIgnored var onUpdateBadge: (() -> Void)?
 
     var items: [InboxItem] = []
     var selectedDeliveryID: String?
@@ -31,6 +35,15 @@ final class InboxStore {
     var showContentInNotifications = false
     var filter: InboxFilter = .awaiting
     var searchText = ""
+    var monitoringEnabled: Bool {
+        didSet { config.monitoringEnabled = monitoringEnabled }
+    }
+
+    var isMonitoring: Bool {
+        monitoringEnabled && (pollTask != nil || streamState != .off)
+    }
+
+    var isCurrent: Bool { connectionRevision == config.connectionRevision }
 
     // The list is a decision queue first: default to what's waiting on you.
     enum InboxFilter: String, CaseIterable, Identifiable {
@@ -63,8 +76,10 @@ final class InboxStore {
     private var hasSeededFirstRun: Bool
     // Sequential banner/draft pipeline; exposed so tests can await it.
     private(set) var pendingNotificationTask: Task<Void, Never>?
+    private var notificationGeneration = 0
 
     var filteredItems: [InboxItem] {
+        guard isCurrent else { return [] }
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         return items.filter { item in
             guard filter.matches(item.delivery.statusValue) else { return false }
@@ -76,10 +91,12 @@ final class InboxStore {
 
     // The number that matters: deliveries still waiting on a human decision.
     var awaitingCount: Int {
-        items.filter { $0.delivery.statusValue == .delivered }.count
+        guard isCurrent else { return 0 }
+        return items.filter { $0.delivery.statusValue == .delivered }.count
     }
 
     var selectedItem: InboxItem? {
+        guard isCurrent else { return nil }
         guard let selectedDeliveryID else { return nil }
         return items.first { $0.id == selectedDeliveryID }
     }
@@ -93,8 +110,10 @@ final class InboxStore {
         self.cli = cli
         self.config = config
         self.notifier = notifier
+        self.connectionRevision = config.connectionRevision
         self.notifiedStore = notifiedStore
         hasSeededFirstRun = notifiedStore.existedOnDisk
+        monitoringEnabled = config.monitoringEnabled
 
         notifier.onSelectDelivery = { [weak self] deliveryID in
             self?.selectedDeliveryID = deliveryID
@@ -120,7 +139,7 @@ final class InboxStore {
     // MARK: - Refresh & polling
 
     func refresh() async {
-        guard let cli, config.isConfigured else { return }
+        guard let cli, config.isConfigured, isCurrent else { return }
         // Coalesce instead of dropping: a wake-up arriving mid-refresh marks a
         // pending re-run, so no event is silently lost.
         if isRefreshing {
@@ -131,8 +150,12 @@ final class InboxStore {
         defer { isRefreshing = false }
         repeat {
             pendingRefresh = false
+            let generation = notificationGeneration
+            let revision = config.connectionRevision
             do {
                 let fetched = try await cli.inbox(limit: 100, environment: config.cliEnvironment())
+                guard !Task.isCancelled, generation == notificationGeneration,
+                      revision == config.connectionRevision, revision == connectionRevision else { return }
                 items = fetched
                 lastRefresh = Date()
                 lastError = nil
@@ -150,18 +173,20 @@ final class InboxStore {
                     hasSeededFirstRun = true
                 }
             } catch {
+                guard !Task.isCancelled, generation == notificationGeneration,
+                      revision == config.connectionRevision, revision == connectionRevision else { return }
                 lastError = error.localizedDescription
             }
         } while pendingRefresh
     }
 
     func loadAgentProfile() async {
-        guard let cli, config.isConfigured else { return }
+        guard let cli, config.isConfigured, isCurrent else { return }
         agent = try? await cli.whoami(environment: config.cliEnvironment())
     }
 
     func startPolling() {
-        guard pollTask == nil, cli != nil else { return }
+        guard isCurrent, pollTask == nil, cli != nil else { return }
         // Authorization must not gate the poll loop: the system prompt stays
         // open until the user answers, and polling should run regardless.
         Task { [notifier] in
@@ -181,6 +206,36 @@ final class InboxStore {
         pollTask = nil
     }
 
+    // Starts both local inbox monitoring paths. Monitoring only reads the
+    // inbox and may notify the owner; it does not enable AI replies.
+    func startMonitoring() {
+        guard isCurrent else { return }
+        monitoringEnabled = true
+        startPolling()
+        startStreaming()
+    }
+
+    func stopMonitoring() {
+        monitoringEnabled = false
+        stopPolling()
+        stopStreaming()
+        cancelNotificationPipeline()
+    }
+
+    // Stops transports for quit/reconfiguration while preserving the user's
+    // desired monitoring setting for the next matching configuration.
+    func suspendMonitoring() {
+        stopPolling()
+        stopStreaming()
+        cancelNotificationPipeline()
+    }
+
+    private func cancelNotificationPipeline() {
+        notificationGeneration &+= 1
+        pendingNotificationTask?.cancel()
+        pendingNotificationTask = nil
+    }
+
     // While the stream is healthy, polling is only the safety net — stretch it.
     private var currentPollInterval: Double {
         let base = max(config.pollInterval, 5)
@@ -190,7 +245,7 @@ final class InboxStore {
     // MARK: - Streaming (push = wake-up, poll = truth)
 
     func startStreaming() {
-        guard let cli else { return }
+        guard isCurrent, let cli else { return }
         let streamURL = config.streamURL.trimmingCharacters(in: .whitespaces)
         guard !streamURL.isEmpty, config.isConfigured else { return }
         streamController.start(cli: cli) { [config] in
@@ -205,7 +260,15 @@ final class InboxStore {
     // MARK: - Badge & notifications
 
     private func updateBadge() {
-        let count = awaitingCount
+        guard isCurrent else { return }
+        if let onUpdateBadge {
+            onUpdateBadge()
+            return
+        }
+        let count = DashboardProjector.makeSnapshot(from: [DashboardProfileInput(
+            profileID: config.profileID, handle: config.agentHandle,
+            displayName: config.displayName, items: items
+        )]).needsAttention.count
         NSApplication.shared.dockTile.badgeLabel = count > 0 ? String(count) : nil
     }
 
@@ -232,10 +295,12 @@ final class InboxStore {
         // must not fan out into a burst of subprocesses. Chained on any
         // still-running pipeline so banners keep arrival order.
         let previous = pendingNotificationTask
+        let generation = notificationGeneration
         pendingNotificationTask = Task { [weak self] in
             await previous?.value
+            guard !Task.isCancelled, let self, self.notificationGeneration == generation else { return }
             for item in newItems {
-                guard let self else { return }
+                guard !Task.isCancelled, self.notificationGeneration == generation else { return }
                 await self.postNotification(for: item)
             }
         }
@@ -246,11 +311,13 @@ final class InboxStore {
     // to the notification. Any failure degrades to a plain notification —
     // generation has no server-side side effects.
     private func postNotification(for item: InboxItem) async {
+        guard !Task.isCancelled else { return }
         var draft: String?
         if let result = try? await draftReply(for: item.id, approve: false),
            result.outcome == "draft_reply" {
             draft = result.draft
         }
+        guard !Task.isCancelled else { return }
         notifier.showsContentPreview = showContentInNotifications
         notifier.notifyNewDelivery(
             id: item.id,
@@ -287,6 +354,9 @@ final class InboxStore {
         approve: Bool,
         expectDraft: String? = nil
     ) async throws -> DraftReplyResult {
+        guard isCurrent else {
+            throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting")
+        }
         guard let cli else { throw GullsCLI.Failure.launch("bundled gulls binary is missing") }
         let result = try await cli.draftReply(
             id: deliveryID,
@@ -311,7 +381,7 @@ final class InboxStore {
         refreshAfter: Bool = true,
         _ action: (GullsCLI, GullsCLI.Environment) async throws -> T
     ) async -> T? {
-        guard let cli else { return nil }
+        guard isCurrent, let cli else { return nil }
         do {
             let result = try await action(cli, config.cliEnvironment())
             lastError = nil

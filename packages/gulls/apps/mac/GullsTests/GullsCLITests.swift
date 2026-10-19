@@ -208,4 +208,99 @@ final class GullsCLITests: XCTestCase {
             }
         }
     }
+
+    func testOpenBrowserLoginPutsJSONAndLoginArgumentsFirst() async throws {
+        let argumentsFile = tmp.appendingPathComponent("login-arguments")
+        let sessionFile = tmp.appendingPathComponent("account.json")
+        let cli = try makeFakeBinary(script: """
+        printf '%s\\n' "$@" > "\(argumentsFile.path)"
+        sleep 30
+        """)
+
+        let handle = try await cli.openBrowserLogin(
+            websiteURL: "https://sea.gulls.ai",
+            sessionFile: sessionFile
+        )
+        defer { handle.terminate() }
+
+        let arguments = try await waitForTextFile(argumentsFile)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(arguments, [
+            "--json",
+            "login",
+            "--server",
+            "https://sea.gulls.ai",
+            "--session-file",
+            sessionFile.path,
+        ])
+    }
+
+    func testOpenBrowserLoginDoesNotExportGullCredentialEnvironment() async throws {
+        let environmentFile = tmp.appendingPathComponent("login-environment")
+        let cli = try makeFakeBinary(script: """
+        printf '%s|%s|%s|%s' \\
+            "${SEAGULL_CONNECTOR_TOKEN+set}" \\
+            "${SEAGULL_SOCIAL_API_URL+set}" \\
+            "${SEAGULL_NODE_ID+set}" \\
+            "${SEAGULL_AGENT_HANDLE+set}" > "\(environmentFile.path)"
+        sleep 30
+        """)
+
+        let handle = try await cli.openBrowserLogin(
+            websiteURL: "https://sea.gulls.ai",
+            sessionFile: tmp.appendingPathComponent("account.json")
+        )
+        defer { handle.terminate() }
+
+        let environment = try await waitForTextFile(environmentFile)
+        XCTAssertEqual(environment, "|||set")
+    }
+
+    func testWaitingBrowserLoginDoesNotBlockNormalCLICommand() async throws {
+        let cli = try makeFakeBinary(script: """
+        if [ "$2" = "login" ]; then
+            sleep 30
+        else
+            printf '{"program":"gulls","version":"fixture"}'
+        fi
+        """)
+
+        let login = try await cli.openBrowserLogin(
+            websiteURL: "https://sea.gulls.ai",
+            sessionFile: tmp.appendingPathComponent("account.json")
+        )
+        defer { login.terminate() }
+
+        let version = try await cli.version()
+        XCTAssertEqual(version.version, "fixture")
+    }
+
+    func testTerminatingBrowserLoginCompletesItsStream() async throws {
+        let cli = try makeFakeBinary(script: """
+        sleep 30
+        """)
+        let handle = try await cli.openBrowserLogin(
+            websiteURL: "https://sea.gulls.ai",
+            sessionFile: tmp.appendingPathComponent("account.json")
+        )
+
+        let finished = Task {
+            for try await _ in handle.lines {}
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        handle.terminate()
+        try await finished.value
+    }
+
+    private func waitForTextFile(_ url: URL) async throws -> String {
+        for _ in 0..<100 {
+            if let data = try? Data(contentsOf: url), !data.isEmpty {
+                return String(decoding: data, as: UTF8.self)
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTFail("Timed out waiting for \(url.lastPathComponent)")
+        return ""
+    }
 }

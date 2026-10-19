@@ -9,7 +9,8 @@ import SwiftUI
 struct DraftReplyView: View {
     @Bindable var store: InboxStore
     let deliveryID: String
-    @Environment(\.dismiss) private var dismiss
+    let recipient: String
+    let onClose: () -> Void
 
     @State private var phase: Phase = .loading
     @State private var draftMismatchWarning: String?
@@ -25,38 +26,50 @@ struct DraftReplyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            content
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.never)
             actionBar
         }
-        .padding(24)
-        .frame(minWidth: 500, idealWidth: 560, maxWidth: 620)
-        .task { await generate() }
+        .padding(16)
+        .task(id: deliveryID) { await generate() }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: "wand.and.stars")
-                .font(.title3)
+                .font(.callout)
                 .foregroundStyle(GullsStyle.accent)
-                .frame(width: 34, height: 34)
-                .gullsGlass(cornerRadius: 10)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Review draft reply")
-                    .font(.title3.weight(.semibold))
-                Text("Check the exact message before it is sent.")
-                    .font(.subheadline)
+                Text("Review reply")
+                    .font(.callout.weight(.semibold))
+                Text("Reply to \(recipient)")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(recipient)
             }
+            Spacer(minLength: 0)
+            Button(action: onClose) {
+                Label("Close reply review", systemImage: "xmark")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+            .disabled(isApproving)
+            .help("Close reply review")
         }
     }
 
     private var actionBar: some View {
         HStack(spacing: 10) {
-            Spacer()
-            Button("Close") { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .buttonStyle(.bordered)
+            Text("Only this reply will be shared.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
             approveButton
         }
         .padding(.top, 4)
@@ -67,7 +80,7 @@ struct DraftReplyView: View {
         switch phase {
         case .loading:
             ProgressView("Generating draft from response rules…")
-                .frame(maxWidth: .infinity, minHeight: 150)
+                .frame(maxWidth: .infinity, minHeight: 80)
         case .generated(let result), .approving(let result):
             resultDetails(result, sent: false)
         case .sent(let result):
@@ -76,7 +89,7 @@ struct DraftReplyView: View {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
                 .textSelection(.enabled)
-                .frame(maxWidth: .infinity, minHeight: 120)
+                .frame(maxWidth: .infinity, minHeight: 80)
         }
     }
 
@@ -125,14 +138,11 @@ struct DraftReplyView: View {
                             .foregroundStyle(sent ? GullsStyle.accent : .secondary)
                     }
 
-                    ScrollView {
-                        Text(draft)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(minHeight: 96, maxHeight: 220)
-                    .padding(14)
-                    .background(GullsStyle.canvas, in: RoundedRectangle(cornerRadius: 12))
+                    Text(verbatim: draft)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(GullsStyle.messageOutgoing, in: RoundedRectangle(cornerRadius: 12))
                 }
                 .padding(.top, 4)
             } else {
@@ -151,6 +161,11 @@ struct DraftReplyView: View {
                     .foregroundStyle(.green)
             }
         }
+    }
+
+    private var isApproving: Bool {
+        if case .approving = phase { return true }
+        return false
     }
 
     @ViewBuilder
@@ -178,8 +193,10 @@ struct DraftReplyView: View {
     private func generate() async {
         do {
             let result = try await store.draftReply(for: deliveryID, approve: false)
+            guard !Task.isCancelled else { return }
             phase = .generated(result)
         } catch {
+            guard !Task.isCancelled else { return }
             phase = .failed(error.localizedDescription)
         }
     }

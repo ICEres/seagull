@@ -39,6 +39,13 @@ final class InboxStoreNotificationTests: XCTestCase {
         }
     }
 
+    private final class MemoryTokenStore: GullsTokenStore {
+        func token(for profileID: String) -> String? { nil }
+        func legacyToken() -> String? { nil }
+        @discardableResult
+        func setToken(_ token: String, for profileID: String) -> Bool { true }
+    }
+
     private func writeInbox(_ items: [(id: String, status: String)]) throws {
         let itemsJSON = items.map { item in
             """
@@ -50,12 +57,18 @@ final class InboxStoreNotificationTests: XCTestCase {
             .write(to: tmp.appendingPathComponent("inbox.json"))
     }
 
-    private func makeStore(notifier: Notifier, notifiedFile: URL) throws -> InboxStore {
+    private func makeStore(
+        notifier: Notifier,
+        notifiedFile: URL,
+        inboxDelay: TimeInterval = 0,
+        inboxStarted: URL? = nil
+    ) throws -> InboxStore {
         let binary = tmp.appendingPathComponent("gulls")
+        let startMarker = inboxStarted.map { "touch \"\($0.path)\"" } ?? ":"
         let script = """
         #!/bin/bash
         case "$2" in
-        inbox) cat "\(tmp.appendingPathComponent("inbox.json").path)" ;;
+        inbox) \(startMarker); sleep \(inboxDelay); cat "\(tmp.appendingPathComponent("inbox.json").path)" ;;
         draft-reply) printf '{"outcome":"no_response_rules","draft_sent":false,"delivery_decision_submitted":false}' ;;
         *) printf '{}' ;;
         esac
@@ -63,7 +76,7 @@ final class InboxStoreNotificationTests: XCTestCase {
         try script.write(to: binary, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
 
-        let config = GullsConfig(defaults: defaults)
+        let config = GullsConfig(defaults: defaults, tokenStore: MemoryTokenStore())
         config.apiURL = "http://localhost:1"
         config.agentHandle = "@test:gulls.ai"
         config.contextDir = tmp.appendingPathComponent("context").path
@@ -74,6 +87,31 @@ final class InboxStoreNotificationTests: XCTestCase {
             notifier: notifier,
             notifiedStore: NotifiedSetStore(url: notifiedFile)
         )
+    }
+
+    func testSuspendingDuringRefreshDiscardsStaleItemsAndNotifications() async throws {
+        let notifier = RecordingNotifier()
+        let notifiedFile = tmp.appendingPathComponent("notified.json")
+        try Data("[]".utf8).write(to: notifiedFile)
+        try writeInbox([("stale_delivery", "delivered")])
+        let inboxStarted = tmp.appendingPathComponent("inbox-started")
+        let store = try makeStore(
+            notifier: notifier,
+            notifiedFile: notifiedFile,
+            inboxDelay: 0.25,
+            inboxStarted: inboxStarted
+        )
+
+        let refreshTask = Task { await store.refresh() }
+        while !FileManager.default.fileExists(atPath: inboxStarted.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        store.suspendMonitoring()
+        await refreshTask.value
+        await store.pendingNotificationTask?.value
+
+        XCTAssertTrue(store.items.isEmpty, "a refresh completed after suspension must not publish stale items")
+        XCTAssertTrue(notifier.notified.isEmpty, "a suspended refresh must not enqueue notifications")
     }
 
     private func refreshAndSettle(_ store: InboxStore) async {

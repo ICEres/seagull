@@ -2,77 +2,141 @@ import SwiftUI
 
 struct InboxListView: View {
     @Bindable var store: InboxStore
+    var connections: LocalConnectionsStore? = nil
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    @ViewBuilder
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 18) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search inbox", text: $store.searchText)
-                        .textFieldStyle(.plain)
-                        .accessibilityLabel("Search sender or content")
+        if #available(macOS 26.0, *), !reduceTransparency {
+            inboxList
+                .safeAreaBar(edge: .top, spacing: 16) {
+                    sidebarHeader
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(GullsStyle.field, in: Capsule())
+                .safeAreaBar(edge: .bottom, spacing: 16) {
+                    accountFooter
+                }
+                .gullsScrollEdges()
+        } else {
+            inboxList
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    sidebarHeader
+                        .background(GullsStyle.canvas)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    accountFooter
+                        .background(GullsStyle.canvas)
+                }
+                .gullsScrollEdges()
+        }
+    }
 
-                HStack {
-                    Text("Inbox")
-                        .font(.headline)
-                    Spacer()
-                    Picker("Filter", selection: $store.filter) {
-                        ForEach(InboxStore.InboxFilter.allCases) { filter in
-                            Text(filter.rawValue).tag(filter)
+    private var inboxList: some View {
+        let items = store.filteredItems
+        return List(selection: $store.selectedDeliveryID) {
+            ForEach(items) { item in
+                InboxRow(item: item)
+                    .tag(item.id)
+                    .listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .gullsHiddenScrollbars()
+        .overlay {
+            if items.isEmpty {
+                ContentUnavailableView(emptyTitle, systemImage: "tray", description: Text(emptyDescription))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var sidebarHeader: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search inbox", text: $store.searchText)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search sender or content")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(GullsStyle.field, in: Capsule())
+
+            Menu {
+                Picker("Filter", selection: $store.filter) {
+                    ForEach(InboxStore.InboxFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+            } label: {
+                Label("Filter inbox", systemImage: "line.3.horizontal.decrease")
+                    .labelStyle(.iconOnly)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Filter: \(store.filter.rawValue)")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var accountFooter: some View {
+        HStack(spacing: 10) {
+            WingAvatar(identity: store.config.agentHandle, size: 26)
+            if let connections, connections.profiles.count > 1 {
+                Menu {
+                    ForEach(connections.profiles, id: \.profileID) { config in
+                        Button {
+                            connections.select(profileID: config.profileID)
+                        } label: {
+                            if config.profileID == connections.selectedProfileID {
+                                Label(firstNonEmpty(config.displayName, config.agentHandle) ?? "New Gull", systemImage: "checkmark")
+                            } else {
+                                Text(firstNonEmpty(config.displayName, config.agentHandle) ?? "New Gull")
+                            }
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .controlSize(.small)
-                    .fixedSize()
-                    .help("Filter the inbox by delivery status")
-                }
-            }
-            .padding(18)
-
-            List(selection: $store.selectedDeliveryID) {
-                ForEach(store.filteredItems) { item in
-                    InboxRow(item: item)
-                        .tag(item.id)
-                        .listRowSeparator(.hidden)
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if store.filteredItems.isEmpty {
-                    ContentUnavailableView(emptyTitle, systemImage: "tray", description: Text(emptyDescription))
-                }
-            }
-
-            HStack(spacing: 10) {
-                WingAvatar(identity: store.config.agentHandle)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(firstNonEmpty(store.agent?.displayName, store.agent?.handle, store.config.agentHandle) ?? "Your Gull")
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    Text(store.config.isConfigured ? "On this Mac" : "Open Settings to connect")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 4)
-                Button {
-                    openSettings()
                 } label: {
-                    Label("Settings", systemImage: "gearshape")
-                        .labelStyle(.iconOnly)
+                    accountIdentity
                 }
-                .buttonStyle(.borderless)
-                .help("Settings (⌘,)")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Switch Gull")
+            } else {
+                accountIdentity
             }
-            .padding(18)
+            Spacer(minLength: 4)
+            Button {
+                openSettings()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Settings (⌘,)")
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var accountIdentity: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(firstNonEmpty(store.config.displayName, store.agent?.displayName, store.agent?.handle,
+                               store.config.agentHandle) ?? "Your Gull")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+            Text(store.config.isConfigured
+                 ? (store.config.monitoringEnabled ? "On this Mac" : "Monitoring paused")
+                 : "Open Settings to connect")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyTitle: String {
@@ -92,7 +156,10 @@ struct InboxListView: View {
         if let lastRefresh = store.lastRefresh {
             return "Last checked \(lastRefresh.formatted(date: .omitted, time: .shortened))."
         }
-        return store.config.isConfigured ? "Refreshing…" : "Open Settings to connect your Gull."
+        if !store.config.isConfigured { return "Open Settings to connect your Gull." }
+        if !store.config.monitoringEnabled { return "Inbox monitoring is paused." }
+        if store.cli == nil { return "The bundled CLI is unavailable. Check Settings." }
+        return "Checking for deliveries…"
     }
 }
 

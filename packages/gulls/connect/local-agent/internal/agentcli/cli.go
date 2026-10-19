@@ -76,6 +76,15 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 		payload := map[string]any{"program": global.ProgramName, "version": Version}
 		printJSONOrText(stdout, global.JSON, payload, global.ProgramName+" version "+Version)
 		return 0, nil
+	case "login":
+		return runAccountLogin(commandArgs, global, stdout, stderr, env)
+	case "auth":
+		if len(commandArgs) == 0 || commandArgs[0] != "status" {
+			return 0, usage("auth requires subcommand: status")
+		}
+		return runAccountStatus(commandArgs[1:], global, stdout, stderr, env)
+	case "logout":
+		return runAccountLogout(commandArgs, global, stdout, stderr, env)
 	case "pair":
 		fs := commandFlagSet("pair", stderr)
 		server := fs.String("server", "", "Social API HTTPS base URL")
@@ -104,6 +113,8 @@ func run(programName string, args []string, stdout io.Writer, stderr io.Writer, 
 			fmt.Fprintf(stdout, "Paired %s to node %s. Configuration saved to %s.\n", result.AgentHandle, result.NodeID, result.ConfigPath)
 		}
 		return 0, nil
+	case "local-action":
+		return runLocalActionCommand(commandArgs, global, stdout, stderr, env, client)
 	case "whoami":
 		config, client, err := loadRuntime(global, env, client, nil)
 		if err != nil {

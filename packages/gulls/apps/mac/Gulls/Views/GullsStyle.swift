@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 enum GullsStyle {
@@ -8,8 +9,26 @@ enum GullsStyle {
         }
         return NSColor(srgbRed: 0.49, green: 0.23, blue: 0.93, alpha: 1)
     })
-    static let canvas = Color(nsColor: .textBackgroundColor)
-    static let field = Color.primary.opacity(0.045)
+    // Keep the window and sidebar surfaces quiet so the composer remains the
+    // only prominent floating surface in the main layout.
+    static let canvas = Color(nsColor: .windowBackgroundColor)
+    static let field = Color.primary.opacity(0.055)
+    static let messageIncoming = Color(nsColor: .controlBackgroundColor).opacity(0.45)
+    static let messageOutgoing = accent.opacity(0.16)
+}
+
+struct GullsPageTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text("\(title)\(Text(".").foregroundStyle(GullsStyle.accent))")
+            .accessibilityLabel(title)
+            .accessibilityAddTraits(.isHeader)
+    }
 }
 
 private struct GullsGlassSurface: ViewModifier {
@@ -24,51 +43,108 @@ private struct GullsGlassSurface: ViewModifier {
                 in: RoundedRectangle(cornerRadius: cornerRadius)
             )
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            // The native scroll edge obscures background text; the glass
+            // surface can stay clear without reducing foreground contrast.
+            content.glassEffect(
+                .clear,
+                in: .rect(cornerRadius: cornerRadius)
+            )
         } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+            content.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 }
-
 extension View {
+    func gullsWindowChrome() -> some View {
+        background(GullsWindowChrome().allowsHitTesting(false))
+    }
+
     func gullsGlass(cornerRadius: CGFloat = 16) -> some View {
         modifier(GullsGlassSurface(cornerRadius: cornerRadius))
     }
+
+    func gullsHiddenScrollbars() -> some View {
+        scrollIndicators(.visible)
+            .background(GullsScrollbars().allowsHitTesting(false))
+    }
+
+    /// Let safe-area bars participate in the native progressive scroll effect.
+    func gullsScrollEdges() -> some View {
+        modifier(GullsScrollEdges())
+    }
 }
+private struct GullsWindowChrome: NSViewRepresentable {
+    func makeNSView(context: Context) -> Marker { Marker() }
+    func updateNSView(_ view: Marker, context: Context) {}
 
-struct WingAvatar: View {
-    let identity: String
-    var size: CGFloat = 30
+    final class Marker: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.titlebarSeparatorStyle = .none
+        }
+    }
+}
+private struct GullsScrollEdges: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    var body: some View {
-        Circle()
-            .fill(tint)
-            .overlay {
-                WingMark()
-                    .stroke(.white, style: StrokeStyle(lineWidth: size * 0.055, lineCap: .round, lineJoin: .round))
-                    .frame(width: size * 0.64, height: size * 0.28)
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if reduceTransparency {
+                content.scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            } else {
+                content.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
             }
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
-    }
-
-    private var tint: Color {
-        let colors: [Color] = [GullsStyle.accent, .teal, .orange, .indigo, .brown, .pink]
-        let hash = identity.utf8.reduce(UInt32(0)) { ($0 &* 31) &+ UInt32($1) }
-        return colors[Int(hash % UInt32(colors.count))]
+        } else {
+            content
+        }
     }
 }
+// Keep native scrollers installed so AppKit can render scroll edge effects.
+// Mask only their drawing, once, without changing their scroll-time state.
+private struct GullsScrollbars: NSViewRepresentable {
+    func makeNSView(context: Context) -> Marker { Marker() }
+    func updateNSView(_ view: Marker, context: Context) {}
 
-private struct WingMark: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: 1, y: 12))
-        path.addQuadCurve(to: CGPoint(x: 16, y: 11), control: CGPoint(x: 8, y: 2))
-        path.addQuadCurve(to: CGPoint(x: 31, y: 12), control: CGPoint(x: 24, y: 2))
-        return path.applying(
-            CGAffineTransform(scaleX: rect.width / 32, y: rect.height / 14)
-                .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.minY))
-        )
+    final class Marker: NSView {
+        private var windowObserver: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObservingWindow()
+            guard let window else { return }
+            windowObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didUpdateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.hideIndicators() }
+            }
+        }
+
+        deinit {
+            if let windowObserver { NotificationCenter.default.removeObserver(windowObserver) }
+        }
+
+        private func hideIndicators() {
+            guard let content = window?.contentView else { return }
+            let scrollers = Self.scrollViews(in: content).flatMap {
+                [$0.verticalScroller, $0.horizontalScroller].compactMap { $0 }
+            }
+            guard !scrollers.isEmpty else { return }
+            for scroller in scrollers {
+                scroller.wantsLayer = true
+                scroller.layer?.mask = CALayer()
+            }
+            stopObservingWindow()
+        }
+
+        private func stopObservingWindow() {
+            if let windowObserver { NotificationCenter.default.removeObserver(windowObserver) }
+            windowObserver = nil
+        }
+
+        private static func scrollViews(in view: NSView) -> [NSScrollView] {
+            let current = (view as? NSScrollView).map { [$0] } ?? []
+            return current + view.subviews.flatMap { scrollViews(in: $0) }
+        }
     }
 }

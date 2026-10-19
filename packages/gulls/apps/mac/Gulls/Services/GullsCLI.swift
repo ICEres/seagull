@@ -23,6 +23,8 @@ actor GullsCLI {
         var token: String?
         var contextDir: URL
         var streamURL: String = ""
+        var socialAPIURL: String = ""
+        var nodeID: String = ""
 
         func processEnvironment() -> [String: String] {
             var env: [String: String] = [
@@ -31,6 +33,12 @@ actor GullsCLI {
             ]
             env["SEAGULL_API_URL"] = apiURL
             env["SEAGULL_AGENT_HANDLE"] = agentHandle
+            if !socialAPIURL.isEmpty {
+                env["SEAGULL_SOCIAL_API_URL"] = socialAPIURL
+            }
+            if !nodeID.isEmpty {
+                env["SEAGULL_NODE_ID"] = nodeID
+            }
             if let token, !token.isEmpty {
                 env["SEAGULL_CONNECTOR_TOKEN"] = token
             }
@@ -155,9 +163,22 @@ actor GullsCLI {
     }
 
     func openStream(environment: Environment) throws -> StreamHandle {
+        try openProcessStream(["stream"], environment: environment)
+    }
+
+    func openBrowserLogin(websiteURL: String, sessionFile: URL) throws -> StreamHandle {
+        let environment = Environment(apiURL: "http://localhost:0", agentHandle: "", token: nil,
+                                      contextDir: FileManager.default.temporaryDirectory)
+        return try openProcessStream(
+            ["login", "--server", websiteURL, "--session-file", sessionFile.path],
+            environment: environment
+        )
+    }
+
+    private func openProcessStream(_ command: [String], environment: Environment) throws -> StreamHandle {
         let (process, stdoutPipe, stderrPipe) = Self.makeProcess(
             executableURL: executableURL,
-            command: ["stream"],
+            command: command,
             environment: environment
         )
 
@@ -176,7 +197,7 @@ actor GullsCLI {
                 } else {
                     let message = String(decoding: stderr, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let text = message.isEmpty ? "stream exited unexpectedly" : message
+                    let text = message.isEmpty ? "The gulls command exited unexpectedly." : message
                     let failure: Failure = finished.terminationStatus == 2
                         ? .configuration(text)
                         : .runtime(text)

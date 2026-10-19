@@ -13,6 +13,7 @@ import {
 } from "@seagulls/ui";
 
 import { LoginPage, RegisterPage } from "./components/auth-pages";
+import { DesktopLoginPage } from "./components/desktop-login-page";
 import { AiUsagePage } from "./components/ai-usage-page";
 import { ChatPage } from "./components/chat-page";
 import { FlockPage } from "./components/flock-page";
@@ -318,6 +319,24 @@ export default function App() {
   const unreadMentions =
     dashboardSummary?.notifications.unread_count ??
     notifications.filter((notification) => !notification.read_at).length;
+
+  if (location.pathname === "/desktop/login") {
+    return (
+      <main className="min-h-screen">
+        <DesktopLoginPage
+          api={api}
+          authConfig={authConfig}
+          authSession={activeAuthSession}
+          isAuthenticated={isAuthenticated}
+          resolvedTheme={resolvedTheme}
+          onToggleTheme={toggleTheme}
+          onLocalIdentity={(identity) => rememberUser(identity)}
+          onAuthSession={setAuthSession}
+          onNotice={setNotice}
+        />
+      </main>
+    );
+  }
 
   if (!isAuthenticated) {
     return (

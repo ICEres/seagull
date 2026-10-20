@@ -494,7 +494,7 @@ jobs:
           CLIENT_FLOWS="$(aws cognito-idp describe-user-pool-client \
             --user-pool-id "$USER_POOL_ID" \
             --client-id "$CLIENT_ID" \
-            --query 'UserPoolClient.ExplicitAuthFlows' \
+            --query "join(',', sort(UserPoolClient.ExplicitAuthFlows))" \
             --output text)"
 
           # Bare `test` under `set -e` exits silently on the first failure, so a
@@ -515,7 +515,7 @@ jobs:
           expect "EMAIL_OTP first-auth factors" \
             "$(tr '\t' '\n' <<<"$AUTH_FACTORS" | grep -cx 'EMAIL_OTP')" "1"
           expect "Cognito email sending account" "$EMAIL_SENDER" "DEVELOPER"
-          expect "App client auth flows" "$CLIENT_FLOWS" "ALLOW_USER_AUTH"
+          expect "App client auth flows" "$CLIENT_FLOWS" "ALLOW_REFRESH_TOKEN_AUTH,ALLOW_USER_AUTH"
 
           # Account-level and not fixable by a deploy: leaving SES in sandbox
           # needs an AWS support request, so name that in the message rather

@@ -66,6 +66,33 @@ grep -q '"mode":"cognito"' .local/web-smoke-config.js
 fetch "$WEB_URL/inbox" .local/web-smoke-inbox.html
 grep -Eq "<title>(S|s)eagulls?</title>" .local/web-smoke-inbox.html
 
+# Keep the desktop browser handoff in the deployed bundle. A stale SPA shell
+# can still make /desktop/login return 200 while silently omitting the route.
+for attempt in $(seq 1 30); do
+  if fetch "$WEB_URL/desktop/login" .local/web-smoke-desktop-login.html &&
+    grep -Eq "<title>(S|s)eagulls?</title>" .local/web-smoke-desktop-login.html; then
+    DESKTOP_BUNDLE_PATH="$(grep -oE 'src="[^"]+\.js"' .local/web-smoke-desktop-login.html | sed -n '1s/^src="//;1s/"$//p' || true)"
+    case "$DESKTOP_BUNDLE_PATH" in
+      /*) ;;
+      "") ;;
+      *) DESKTOP_BUNDLE_PATH="/$DESKTOP_BUNDLE_PATH" ;;
+    esac
+    if [ -n "$DESKTOP_BUNDLE_PATH" ] &&
+      fetch "$WEB_URL$DESKTOP_BUNDLE_PATH" .local/web-smoke-desktop-bundle.js &&
+      grep -q "Continue on this computer" .local/web-smoke-desktop-bundle.js &&
+      grep -q "/desktop/login" .local/web-smoke-desktop-bundle.js; then
+      break
+    fi
+  fi
+
+  if [ "$attempt" -eq 30 ]; then
+    echo "desktop login bundle did not become ready at $WEB_URL/desktop/login" >&2
+    exit 1
+  fi
+
+  sleep 10
+done
+
 if [ -n "$ADMIN_WEB_URL" ]; then
   ADMIN_HOST="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$ADMIN_WEB_URL")"
   fetch_ready "$ADMIN_WEB_URL/" .local/web-smoke-admin-index.html

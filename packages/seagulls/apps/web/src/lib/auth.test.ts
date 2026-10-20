@@ -10,6 +10,7 @@ import {
   isSessionActive,
   loadAuthSession,
   resendEmailOtpRegistration,
+  refreshAuthSession,
   saveAuthSession,
   type AuthConfig,
 } from "./auth";
@@ -48,6 +49,7 @@ describe("auth helpers", () => {
             AuthenticationResult: {
               AccessToken: "access_otp_1",
               IdToken: "id_otp_1",
+              RefreshToken: "refresh_otp_1",
               TokenType: "Bearer",
               ExpiresIn: 3600,
             },
@@ -67,6 +69,7 @@ describe("auth helpers", () => {
 
     const session = await completeEmailOtpSignIn(cognitoConfig, challenge, " 123456 ", fetcher);
     expect(session.accessToken).toBe("access_otp_1");
+    expect(session.refreshToken).toBe("refresh_otp_1");
     expect(loadAuthSession()?.accessToken).toBe("access_otp_1");
     expect(requestedBodies[0]).toMatchObject({
       AuthFlow: "USER_AUTH",
@@ -272,6 +275,155 @@ describe("auth helpers", () => {
     expect(isSessionActive(loadAuthSession(), 100_000)).toBe(false);
     clearAuthSession();
     expect(loadAuthSession()).toBeNull();
+  });
+
+  it("persists sessions in localStorage and migrates the legacy sessionStorage entry", () => {
+    window.sessionStorage.setItem(
+      "seagull.web.auth.session",
+      JSON.stringify({
+        accessToken: "legacy-access",
+        idToken: "legacy-id",
+        refreshToken: "legacy-refresh",
+        tokenType: "Bearer",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+
+    expect(loadAuthSession()).toMatchObject({
+      accessToken: "legacy-access",
+      refreshToken: "legacy-refresh",
+    });
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toContain("legacy-access");
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
+
+    saveAuthSession({
+      accessToken: "persistent-access",
+      idToken: null,
+      refreshToken: "persistent-refresh",
+      tokenType: "Bearer",
+      expiresAt: Date.now() + 3_600_000,
+    });
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toContain("persistent-access");
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
+  });
+
+  it("clears both persistent and legacy session stores on logout", () => {
+    window.localStorage.setItem("seagull.web.auth.session", "local-session");
+    window.localStorage.setItem("seagull.web.auth.pending", "local-pending");
+    window.sessionStorage.setItem("seagull.web.auth.session", "legacy-session");
+    window.sessionStorage.setItem("seagull.web.auth.pending", "legacy-pending");
+
+    clearAuthSession();
+
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
+    expect(window.localStorage.getItem("seagull.web.auth.pending")).toBeNull();
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
+    expect(window.sessionStorage.getItem("seagull.web.auth.pending")).toBeNull();
+  });
+
+  it("prefers the current session and removes a stale legacy copy", () => {
+    window.localStorage.setItem(
+      "seagull.web.auth.session",
+      JSON.stringify({
+        accessToken: "current-access",
+        idToken: null,
+        refreshToken: "current-refresh",
+        tokenType: "Bearer",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+    window.sessionStorage.setItem(
+      "seagull.web.auth.session",
+      JSON.stringify({
+        accessToken: "stale-access",
+        idToken: null,
+        refreshToken: "stale-refresh",
+        tokenType: "Bearer",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+
+    expect(loadAuthSession()?.accessToken).toBe("current-access");
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
+
+    clearAuthSession();
+    expect(loadAuthSession()).toBeNull();
+  });
+
+  it("refreshes Cognito sessions without saving a stale result and preserves its refresh token", async () => {
+    const session = {
+      accessToken: "expired-access",
+      idToken: "old-id",
+      refreshToken: "refresh-current",
+      tokenType: "Bearer",
+      expiresAt: Date.now() - 1_000,
+    };
+    saveAuthSession(session);
+    let requestBody: Record<string, unknown> | null = null;
+
+    const refreshed = await refreshAuthSession(
+      cognitoConfig,
+      session,
+      async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            AuthenticationResult: {
+              AccessToken: "refreshed-access",
+              IdToken: "refreshed-id",
+              TokenType: "Bearer",
+              ExpiresIn: 1800,
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    expect(requestBody).toEqual({
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      AuthParameters: { REFRESH_TOKEN: "refresh-current" },
+      ClientId: cognitoConfig.clientId,
+    });
+    expect(refreshed).toMatchObject({
+      accessToken: "refreshed-access",
+      idToken: "refreshed-id",
+      refreshToken: "refresh-current",
+    });
+    expect(loadAuthSession()?.accessToken).toBe("expired-access");
+  });
+
+  it("surfaces refresh failures and requires a refresh token", async () => {
+    await expect(
+      refreshAuthSession(cognitoConfig, {
+        accessToken: "expired-access",
+        idToken: null,
+        refreshToken: null,
+        tokenType: "Bearer",
+        expiresAt: Date.now() - 1_000,
+      }),
+    ).rejects.toThrow("does not include a refresh token");
+
+    await expect(
+      refreshAuthSession(
+        cognitoConfig,
+        {
+          accessToken: "expired-access",
+          idToken: null,
+          refreshToken: "refresh-invalid",
+          tokenType: "Bearer",
+          expiresAt: Date.now() - 1_000,
+        },
+        async () =>
+          new Response(
+            JSON.stringify({
+              __type: "NotAuthorizedException",
+              message: "Refresh Token has expired",
+            }),
+            { status: 400 },
+          ),
+      ),
+    ).rejects.toMatchObject({ name: "NotAuthorizedException" });
   });
 
 });

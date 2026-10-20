@@ -207,6 +207,7 @@ afterEach(async () => {
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.SEAGULL_CONFIG = undefined;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -731,8 +732,9 @@ describe("App", () => {
     });
     await waitForText(container, "The sky");
 
-    const session = JSON.parse(window.sessionStorage.getItem("seagull.web.auth.session") ?? "{}");
+    const session = JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}");
     expect(session.accessToken).toBe("email-code-access-token");
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
     expect(cognitoBodies[0]).toMatchObject({
       AuthFlow: "USER_AUTH",
       AuthParameters: {
@@ -745,6 +747,223 @@ describe("App", () => {
       ChallengeResponses: { EMAIL_OTP_CODE: "123456" },
     });
     expect(JSON.stringify(cognitoBodies)).not.toContain("PASSWORD");
+  });
+
+  it("restores an expired persisted session without leaving the requested route", async () => {
+    configureCognito();
+    savePersistedSession({
+      accessToken: "expired-access-token",
+      refreshToken: "refresh-token-1",
+      expiresAt: Date.now() - 1_000,
+    });
+    const refreshBodies: Record<string, unknown>[] = [];
+    mockCognitoApi(cognitoDashboardResponses(), (body) => {
+      refreshBodies.push(body);
+      return jsonResponse({
+        AuthenticationResult: {
+          AccessToken: "restored-access-token",
+          IdToken: "restored-id-token",
+          RefreshToken: "refresh-token-1",
+          TokenType: "Bearer",
+          ExpiresIn: 3_600,
+        },
+      });
+    });
+
+    const container = renderApp("/flock");
+    expect(container.textContent).toContain("Restoring your session");
+    await waitForText(container, "Flock");
+
+    expect(container.querySelector('button[aria-current="page"]')?.textContent).toContain("Flock");
+    expect(container.querySelector('input[aria-label="Email"]')).toBeNull();
+    expect(refreshBodies).toHaveLength(1);
+    expect(refreshBodies[0]).toMatchObject({
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      AuthParameters: { REFRESH_TOKEN: "refresh-token-1" },
+    });
+    expect(JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}").accessToken).toBe(
+      "restored-access-token",
+    );
+  });
+
+  it("refreshes a persisted session before it expires", async () => {
+    vi.useFakeTimers();
+    configureCognito();
+    savePersistedSession({
+      accessToken: "active-access-token",
+      refreshToken: "refresh-token-2",
+      expiresAt: Date.now() + 61_000,
+    });
+    const refreshBodies: Record<string, unknown>[] = [];
+    mockCognitoApi(cognitoDashboardResponses(), (body) => {
+      refreshBodies.push(body);
+      return jsonResponse({
+        AuthenticationResult: {
+          AccessToken: "proactively-refreshed-token",
+          IdToken: "refreshed-id-token",
+          RefreshToken: "refresh-token-2",
+          TokenType: "Bearer",
+          ExpiresIn: 3_600,
+        },
+      });
+    });
+
+    const container = renderApp("/sky");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await waitForText(container, "The sky");
+
+    expect(refreshBodies).toHaveLength(1);
+    expect(JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}").accessToken).toBe(
+      "proactively-refreshed-token",
+    );
+  });
+
+  it("keeps a session persisted through a temporary refresh failure and retries online", async () => {
+    configureCognito();
+    savePersistedSession({
+      accessToken: "offline-access-token",
+      refreshToken: "refresh-token-3",
+      expiresAt: Date.now() - 1_000,
+    });
+    let attempts = 0;
+    mockCognitoApi(cognitoDashboardResponses(), () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return jsonResponse({ message: "temporarily unavailable" }, 503);
+      }
+      return jsonResponse({
+        AuthenticationResult: {
+          AccessToken: "reconnected-access-token",
+          IdToken: "reconnected-id-token",
+          RefreshToken: "refresh-token-3",
+          TokenType: "Bearer",
+          ExpiresIn: 3_600,
+        },
+      });
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "We couldn’t reconnect");
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toContain("offline-access-token");
+
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await waitForText(container, "The sky");
+    expect(attempts).toBe(2);
+  });
+
+  it("clears a revoked persisted session and returns to login", async () => {
+    configureCognito();
+    savePersistedSession({
+      accessToken: "revoked-access-token",
+      refreshToken: "revoked-refresh-token",
+      expiresAt: Date.now() - 1_000,
+    });
+    mockCognitoApi(cognitoDashboardResponses(), () =>
+      jsonResponse(
+        { __type: "NotAuthorizedException", message: "Refresh Token has been revoked" },
+        400,
+      ),
+    );
+
+    const container = renderApp("/sky");
+    await waitForText(container, "Your sky is waiting");
+
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
+  });
+
+  it("ignores a late refresh response after signing in with another account", async () => {
+    configureCognito();
+    savePersistedSession({
+      accessToken: "old-access-token",
+      refreshToken: "old-refresh-token",
+      expiresAt: Date.now() - 1_000,
+    });
+    let resolveRefresh!: (response: Response) => void;
+    const refreshResponse = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mockCognitoApi(cognitoDashboardResponses(), () => refreshResponse);
+
+    const container = renderApp("/sky");
+    await waitForText(container, "Restoring your session");
+    const anotherAccountButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Sign in with another account"),
+    );
+    if (!(anotherAccountButton instanceof HTMLButtonElement)) {
+      throw new Error("Another-account button not found.");
+    }
+    await act(async () => {
+      anotherAccountButton.click();
+    });
+    await waitForText(container, "Your sky is waiting");
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
+
+    resolveRefresh(
+      jsonResponse({
+        AuthenticationResult: {
+          AccessToken: "late-access-token",
+          RefreshToken: "late-refresh-token",
+          TokenType: "Bearer",
+          ExpiresIn: 3_600,
+        },
+      }),
+    );
+    await act(async () => {
+      await refreshResponse;
+      await Promise.resolve();
+    });
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
+    expect(container.textContent).toContain("Your sky is waiting");
+  });
+
+  it("signs out when another tab removes the persisted session", async () => {
+    configureCognito();
+    savePersistedSession({
+      accessToken: "cross-tab-access-token",
+      refreshToken: "cross-tab-refresh-token",
+      expiresAt: Date.now() + 3_600_000,
+    });
+    mockCognitoApi(cognitoDashboardResponses(), () => {
+      throw new Error("Cross-tab logout should not refresh.");
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "The sky");
+    window.localStorage.removeItem("seagull.web.auth.session");
+    const event = new StorageEvent("storage", { key: "seagull.web.auth.session", newValue: null });
+    Object.defineProperty(event, "storageArea", { value: window.localStorage });
+    await act(async () => {
+      window.dispatchEvent(event);
+    });
+    await waitForText(container, "Your sky is waiting");
+  });
+
+  it("does not repeatedly renew a session that the API still rejects", async () => {
+    configureCognito();
+    savePersistedSession();
+    let renewals = 0;
+    mockCognitoApi(cognitoDashboardResponses(), () => {
+      renewals += 1;
+      return jsonResponse({ AuthenticationResult: { AccessToken: "still-rejected-token", ExpiresIn: 3_600 } });
+    });
+    const apiFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (new URL(String(input)).pathname === "/dashboard") {
+        return Promise.resolve(jsonResponse({ message: "Not authorized" }, 401));
+      }
+      return apiFetch(input, init);
+    });
+
+    const container = renderApp("/sky");
+    await waitForText(container, "Your sky is waiting");
+
+    expect(renewals).toBe(1);
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
   });
 
   it.each([
@@ -786,6 +1005,8 @@ describe("App", () => {
     const container = renderApp("/sky");
     await waitForText(container, label);
 
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toContain("sidebar-access-token");
+    expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
     const sidebar = container.querySelector("aside");
     expect(sidebar?.textContent).toContain(label);
     expect(sidebar?.textContent).not.toContain(subject);
@@ -995,6 +1216,88 @@ function mockApi(responses: Record<string, unknown>): void {
       });
     }),
   );
+}
+
+function configureCognito(): void {
+  window.SEAGULL_CONFIG = {
+    socialApiUrl: "https://api.example.test",
+    auth: {
+      mode: "cognito",
+      issuer: "https://cognito-idp.example.test/pool",
+      clientId: "client_1",
+    },
+  };
+}
+
+function savePersistedSession(overrides: Partial<{
+  accessToken: string;
+  idToken: string | null;
+  refreshToken: string | null;
+  tokenType: string;
+  expiresAt: number;
+}> = {}): void {
+  window.localStorage.setItem(
+    "seagull.web.auth.session",
+    JSON.stringify({
+      accessToken: "persisted-access-token",
+      idToken: "persisted-id-token",
+      refreshToken: "persisted-refresh-token",
+      tokenType: "Bearer",
+      expiresAt: Date.now() + 3_600_000,
+      ...overrides,
+    }),
+  );
+}
+
+function cognitoDashboardResponses(): Record<string, unknown> {
+  return {
+    "/health": { ok: true, app: "social-api", storage: "memory" },
+    "/dashboard": {
+      identity: { ...identity, provider: "cognito" },
+      profiles: { items: [profile] },
+      feed: { items: [] },
+      notifications: { unread_count: 0, items: [] },
+      moderation: { count: 0, items: [] },
+      health: { ok: true, app: "social-api", storage: "memory" },
+    },
+    "/profiles": { items: [profile] },
+    "/feed?owner_user_id=user_1&limit=50": { items: [] },
+    "/profiles/%40researcher%3Aseagull.local/notifications?limit=50": { items: [] },
+    "/moderation?limit=50": { items: [] },
+  };
+}
+
+function mockCognitoApi(
+  responses: Record<string, unknown>,
+  refreshHandler: (body: Record<string, unknown>) => Response | Promise<Response>,
+): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const target = new Headers(init?.headers).get("x-amz-target") ?? "";
+      if (target.endsWith(".InitiateAuth")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if (body.AuthFlow === "REFRESH_TOKEN_AUTH") {
+          return refreshHandler(body);
+        }
+      }
+      const url = new URL(String(input));
+      const key = `${url.pathname}${url.search}`;
+      const fullKey = `${url.origin}${url.pathname}${url.search}`;
+      const body = responses[fullKey] ?? responses[key] ?? { error: "not_found", message: fullKey };
+      return new Response(JSON.stringify(body), {
+        status: fullKey in responses || key in responses ? 200 : 404,
+        headers: { "content-type": "application/json" },
+      });
+    }),
+  );
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function setNativeValue(element: HTMLTextAreaElement | HTMLInputElement, value: string): void {

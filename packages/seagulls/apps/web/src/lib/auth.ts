@@ -91,45 +91,63 @@ export function authConfigFromRuntime(
   };
 }
 
-export function loadAuthSession(storage: Storage = window.sessionStorage): AuthSession | null {
-  if (storage === window.sessionStorage) {
-    window.localStorage.removeItem(SESSION_KEY);
-  }
-  const stored = storage.getItem(SESSION_KEY);
-  if (!stored) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(stored) as Partial<AuthSession>;
-    if (!parsed.accessToken || !parsed.expiresAt || !parsed.tokenType) {
-      return null;
+export function loadAuthSession(storage: Storage = window.localStorage): AuthSession | null {
+  let stored = storage.getItem(SESSION_KEY);
+  if (!stored && storage === window.localStorage) {
+    // Keep users signed in after the storage change from sessionStorage to localStorage.
+    const legacyStored = window.sessionStorage.getItem(SESSION_KEY);
+    const migrated = parseAuthSession(legacyStored);
+    if (migrated) {
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify(migrated));
+      window.sessionStorage.removeItem(SESSION_KEY);
+      return migrated;
     }
-    return {
-      accessToken: parsed.accessToken,
-      idToken: parsed.idToken ?? null,
-      refreshToken: null,
-      tokenType: parsed.tokenType,
-      expiresAt: parsed.expiresAt,
-    };
-  } catch {
-    return null;
+  } else if (storage === window.localStorage) {
+    // A current session wins over and invalidates any stale legacy copy.
+    window.sessionStorage.removeItem(SESSION_KEY);
+  }
+  return parseAuthSession(stored);
+}
+
+export function saveAuthSession(session: AuthSession, storage: Storage = window.localStorage): void {
+  storage.setItem(SESSION_KEY, JSON.stringify(session));
+  if (storage === window.localStorage) {
+    window.sessionStorage.removeItem(SESSION_KEY);
   }
 }
 
-export function saveAuthSession(session: AuthSession, storage: Storage = window.sessionStorage): void {
-  window.localStorage.removeItem(SESSION_KEY);
-  storage.setItem(SESSION_KEY, JSON.stringify({ ...session, refreshToken: null }));
-}
-
-export function clearAuthSession(storage: Storage = window.sessionStorage): void {
+export function clearAuthSession(storage: Storage = window.localStorage): void {
   storage.removeItem(SESSION_KEY);
   storage.removeItem(PENDING_KEY);
   window.localStorage.removeItem(SESSION_KEY);
   window.localStorage.removeItem(PENDING_KEY);
+  window.sessionStorage.removeItem(SESSION_KEY);
+  window.sessionStorage.removeItem(PENDING_KEY);
 }
 
 export function isSessionActive(session: AuthSession | null, now = Date.now()): boolean {
   return Boolean(session && session.expiresAt - 30_000 > now);
+}
+
+export async function refreshAuthSession(
+  config: Extract<AuthConfig, { mode: "cognito" }>,
+  session: AuthSession,
+  fetcher: typeof fetch = fetch,
+): Promise<AuthSession> {
+  if (!session.refreshToken) {
+    throw new Error("Cognito session does not include a refresh token.");
+  }
+  const response = await cognitoRequest<CognitoAuthResponse>(
+    config,
+    "InitiateAuth",
+    {
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      AuthParameters: { REFRESH_TOKEN: session.refreshToken },
+      ClientId: config.clientId,
+    },
+    fetcher,
+  );
+  return buildCognitoSession(response.AuthenticationResult, session.refreshToken, session);
 }
 
 export async function beginEmailOtpSignIn(
@@ -303,20 +321,49 @@ async function cognitoRequest<T>(
 }
 
 function saveCognitoAuthentication(result: CognitoAuthenticationResult | undefined): AuthSession {
-  if (!result?.AccessToken) {
-    throw new Error("Cognito did not return an authenticated session.");
-  }
-  const session: AuthSession = {
-    accessToken: result.AccessToken,
-    idToken: result.IdToken ?? null,
-    refreshToken: null,
-    tokenType: result.TokenType ?? "Bearer",
-    expiresAt: Date.now() + (result.ExpiresIn ?? 3600) * 1000,
-  };
+  const session = buildCognitoSession(result);
   saveAuthSession(session);
   return session;
 }
 
+function buildCognitoSession(
+  result: CognitoAuthenticationResult | undefined,
+  fallbackRefreshToken: string | null = null,
+  previousSession: AuthSession | null = null,
+): AuthSession {
+  if (!result?.AccessToken) {
+    throw new Error("Cognito did not return an authenticated session.");
+  }
+  return {
+    accessToken: result.AccessToken,
+    idToken: result.IdToken ?? previousSession?.idToken ?? null,
+    refreshToken: result.RefreshToken ?? fallbackRefreshToken,
+    tokenType: result.TokenType ?? "Bearer",
+    expiresAt: Date.now() + (result.ExpiresIn ?? 3600) * 1000,
+  };
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function parseAuthSession(stored: string | null): AuthSession | null {
+  if (!stored) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(stored) as Partial<AuthSession>;
+    if (!parsed.accessToken || !parsed.expiresAt || !parsed.tokenType) {
+      return null;
+    }
+    return {
+      accessToken: parsed.accessToken,
+      idToken: parsed.idToken ?? null,
+      refreshToken: parsed.refreshToken ?? null,
+      tokenType: parsed.tokenType,
+      expiresAt: parsed.expiresAt,
+    };
+  } catch {
+    return null;
+  }
 }

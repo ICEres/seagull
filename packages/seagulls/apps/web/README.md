@@ -97,6 +97,12 @@ Prompt drafts stay in memory and are discarded on cancel.
 Local development uses `auth.mode = "local"` in `public/config.js`. The AWS dev
 deployment writes Cognito settings into Terraform-managed `config.js`; the app
 uses Cognito's passwordless `USER_AUTH` email-OTP flow directly.
+Browser sign-in persists across tabs and browser restarts. Access tokens renew
+automatically through `REFRESH_TOKEN_AUTH` for the refresh token's 30-day lifetime.
+Signing out clears the saved session in every open tab. Temporary connection
+failures retain the session and retry; an expired or revoked refresh token requires
+email sign-in again. Sessions created before persistent sign-in need one new
+email sign-in to receive and retain a refresh token.
 The existing user pool retains Cognito's legacy password factor for an in-place
 migration, but this web app only requests email OTP and creates users without
 passwords.

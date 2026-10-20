@@ -1,5 +1,5 @@
 import { LogOut, Moon, Settings, Sun } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -28,6 +28,8 @@ import {
   configuredAuth,
   isSessionActive,
   loadAuthSession,
+  refreshAuthSession,
+  saveAuthSession,
   type AuthSession,
 } from "./lib/auth";
 import { createFirstLoop } from "./lib/demo";
@@ -58,6 +60,9 @@ export default function App() {
   const location = useLocation();
   const authConfig = useMemo(() => configuredAuth(), []);
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuthSession());
+  const [authRefreshError, setAuthRefreshError] = useState<Error | null>(null);
+  const [authRefreshRetry, setAuthRefreshRetry] = useState(0);
+  const rejectedRefreshToken = useRef<string | null>(null);
   const [state, setState] = useState<LoopState>(() => loadLoopState());
   const [notice, setNotice] = useState<Notice | null>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
@@ -75,6 +80,8 @@ export default function App() {
     clearAuthSession();
     queryClient.clear();
     setAuthSession(null);
+    setAuthRefreshError(null);
+    rejectedRefreshToken.current = null;
     setState(clearLoopState());
   }, [queryClient]);
 
@@ -95,11 +102,98 @@ export default function App() {
   }, [state]);
 
   useEffect(() => {
-    if (authConfig.mode === "cognito" && authSession && !isSessionActive(authSession)) {
-      resetAuthenticatedState();
-      setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
+    if (authConfig.mode !== "cognito" || !authSession) {
+      return;
     }
-  }, [authConfig.mode, authSession, resetAuthenticatedState]);
+    const config = authConfig;
+    const session = authSession;
+    let cancelled = false;
+    let refreshing = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const isCurrentSession = () => {
+      const saved = loadAuthSession();
+      return saved?.accessToken === session.accessToken && saved.refreshToken === session.refreshToken;
+    };
+    const schedule = (delay: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), delay);
+    };
+    async function refresh() {
+      if (cancelled || refreshing || !isCurrentSession()) {
+        return;
+      }
+      const remaining = session.expiresAt - Date.now();
+      const refreshBefore = session.refreshToken ? 60_000 : 30_000;
+      if (remaining > refreshBefore) {
+        schedule(remaining - refreshBefore);
+        return;
+      }
+      if (!session.refreshToken) {
+        resetAuthenticatedState();
+        setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
+        return;
+      }
+      refreshing = true;
+      try {
+        const renewed = await refreshAuthSession(config, session);
+        if (cancelled || !isCurrentSession()) {
+          return;
+        }
+        saveAuthSession(renewed);
+        setAuthSession(renewed);
+        setAuthRefreshError(null);
+      } catch (error) {
+        if (cancelled || !isCurrentSession()) {
+          return;
+        }
+        if (error instanceof Error && ["NotAuthorizedException", "UserNotFoundException"].includes(error.name)) {
+          resetAuthenticatedState();
+          setNotice({ tone: "warn", message: "Session expired. Please sign in again." });
+        } else {
+          setAuthRefreshError(new Error("We couldn’t reconnect. We’ll try again when your connection is back."));
+          schedule(30_000);
+        }
+      } finally {
+        refreshing = false;
+      }
+    }
+    const onResume = () => {
+      if (document.visibilityState !== "hidden") {
+        void refresh();
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", onResume);
+    window.addEventListener("online", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      window.removeEventListener("focus", onResume);
+      window.removeEventListener("online", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [authConfig, authSession, authRefreshRetry, resetAuthenticatedState]);
+
+  useEffect(() => {
+    if (authConfig.mode !== "cognito") {
+      return;
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage || (event.key !== null && event.key !== "seagull.web.auth.session")) {
+        return;
+      }
+      const saved = loadAuthSession();
+      if (!saved || !saved.refreshToken || saved.refreshToken !== authSession?.refreshToken) {
+        queryClient.clear();
+        setState(clearLoopState());
+      }
+      setAuthSession(saved);
+      setAuthRefreshError(null);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [authConfig.mode, authSession?.refreshToken, queryClient]);
 
   const api = useMemo(
     () => new SocialApiClient(state.apiUrl, activeAuthSession?.accessToken ?? null),
@@ -248,6 +342,7 @@ export default function App() {
     if (authConfig.mode !== "cognito" || !activeAuthSession || !dashboardQuery.data) {
       return;
     }
+    rejectedRefreshToken.current = null;
     const identity = dashboardQuery.data.identity;
     const ownedProfiles = dashboardQuery.data.profiles.items;
     const currentProfileIds = state.ownedProfiles.map((profile) => profile.agent_id).join("|");
@@ -264,14 +359,17 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (authConfig.mode !== "cognito" || !dashboardQuery.error) {
+    if (authConfig.mode !== "cognito" || !activeAuthSession || !dashboardQuery.error) {
       return;
     }
     const error = dashboardQuery.error;
-    // Only sign the user out when the session is actually invalid (401/403). A
-    // transient network error or a 5xx must not destroy a valid session.
     const isAuthError = error instanceof SocialApiError && (error.status === 401 || error.status === 403);
     if (isAuthError) {
+      if (activeAuthSession.refreshToken && rejectedRefreshToken.current !== activeAuthSession.refreshToken) {
+        rejectedRefreshToken.current = activeAuthSession.refreshToken;
+        setAuthSession({ ...activeAuthSession, expiresAt: Date.now() });
+        return;
+      }
       resetAuthenticatedState();
       setNotice({ tone: "error", message: "Your session expired. Please sign in again." });
       return;
@@ -280,7 +378,7 @@ export default function App() {
       tone: "error",
       message: error instanceof Error ? error.message : "Could not load your sky.",
     });
-  }, [authConfig.mode, dashboardQuery.error, resetAuthenticatedState]);
+  }, [authConfig.mode, activeAuthSession?.accessToken, dashboardQuery.error, resetAuthenticatedState]);
 
   function signOut() {
     resetAuthenticatedState();
@@ -319,6 +417,33 @@ export default function App() {
   const unreadMentions =
     dashboardSummary?.notifications.unread_count ??
     notifications.filter((notification) => !notification.read_at).length;
+
+  if (authConfig.mode === "cognito" && authSession?.refreshToken && !activeAuthSession) {
+    return (
+      <main className="grid min-h-screen place-content-center justify-items-center gap-4 px-6 text-center">
+        <Wing path={YOUR_WING} size={32} strokeWidth={2.5} className="text-accent" />
+        <h1 className="m-0 text-xl font-extrabold">Restoring your session<span className="text-accent">.</span></h1>
+        <p role="status" className="m-0 max-w-sm text-sm text-muted">
+          {authRefreshError?.message ?? "Signing you in automatically…"}
+        </p>
+        {authRefreshError ? (
+          <button
+            type="button"
+            className="rounded-lg border-0 bg-accent px-4 py-2 font-bold text-white"
+            onClick={() => {
+              setAuthRefreshError(null);
+              setAuthRefreshRetry((attempt) => attempt + 1);
+            }}
+          >
+            Try again
+          </button>
+        ) : null}
+        <button type="button" className="border-0 bg-transparent text-sm text-muted hover:text-accent" onClick={resetAuthenticatedState}>
+          Sign in with another account
+        </button>
+      </main>
+    );
+  }
 
   if (location.pathname === "/desktop/login") {
     return (

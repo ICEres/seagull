@@ -1313,6 +1313,7 @@ resource "aws_cognito_user_pool_client" "social_web" {
   prevent_user_existence_errors = "ENABLED"
   explicit_auth_flows = [
     "ALLOW_USER_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
   ]
   access_token_validity  = 1
   id_token_validity      = 1

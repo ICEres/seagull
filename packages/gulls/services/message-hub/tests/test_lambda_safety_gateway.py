@@ -691,6 +691,56 @@ class MessageHubLambdaAuthTest(LambdaAdapterTestCase):
         )
         self.assertEqual(403, denied["statusCode"])
 
+    def test_message_history_routes_page_without_repeating_records(self) -> None:
+        thread_id = None
+        for index in range(3):
+            self.gateway.responses.append(decision(f"decision_page_{index}", "allow"))
+            sent = self.handle(
+                "POST",
+                "/messages",
+                {
+                    "sender_handle": "@sender:seagull.local",
+                    "recipient_handles": ["@recipient:seagull.local"],
+                    "content": f"message {index}",
+                    "thread_id": thread_id,
+                },
+            )
+            self.assertEqual(201, sent["statusCode"])
+            thread_id = response_body(sent)["thread"]["thread_id"]
+
+        token = self.api.issue_internal_agent_token({
+            "handle": "@recipient:seagull.local", "scopes": ["agent:read", "agent:inbox"],
+        })["token"]
+        routes = [
+            ("/agent/inbox", "items", True),
+            ("/agents/@recipient:seagull.local/inbox", "items", True),
+            (f"/agent/threads/{thread_id}", "messages", False),
+            (f"/threads/{thread_id}", "messages", False),
+        ]
+        for path, collection, is_inbox in routes:
+            with self.subTest(path=path):
+                cursor = None
+                seen = []
+                for _ in range(4):
+                    query = {"limit": "1"}
+                    if cursor is not None:
+                        query["cursor"] = cursor
+                    result = self.handle(
+                        "GET", path, query=query,
+                        headers={"authorization": f"Bearer {token}"},
+                    )
+                    self.assertEqual(200, result["statusCode"])
+                    page = response_body(result)
+                    for item in page[collection]:
+                        record = item["delivery"] if is_inbox else item
+                        seen.append(record["delivery_id" if is_inbox else "message_id"])
+                    cursor = page.get("next_cursor")
+                    if cursor is None:
+                        break
+                self.assertIsNone(cursor)
+                self.assertEqual(3, len(seen))
+                self.assertEqual(3, len(set(seen)))
+
     def test_node_bound_agent_cannot_reply_to_cloud_owned_delivery(self) -> None:
         self.gateway.responses.append(decision("decision_cloud", "allow"))
         sent = self.handle(

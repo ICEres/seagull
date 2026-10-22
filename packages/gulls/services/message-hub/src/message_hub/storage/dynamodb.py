@@ -1264,12 +1264,12 @@ class DynamoDbMessageHubRepository:
         messages.sort(key=lambda message: (to_iso(message.created_at), message.message_id))
         next_cursor = None
         if has_more and messages:
-            oldest = messages[0]
+            last = page_items[-1]
             next_cursor = cursor_after(
                 kind="thread",
                 scope=thread_id,
-                created_at=to_iso(oldest.created_at),
-                record_id=oldest.message_id,
+                created_at=str(last["created_at"]),
+                record_id=str(last["message_id"]),
             )
         return CursorPage(tuple(messages), next_cursor)
 
@@ -1504,16 +1504,18 @@ class DynamoDbMessageHubRepository:
         result = self._deliveries.query(**kwargs)
         raw_items = result.get("Items", [])
         has_more = len(raw_items) > limit or result.get("LastEvaluatedKey") is not None
-        deliveries = [delivery_from_item(item) for item in raw_items[:limit]]
-        deliveries.sort(key=lambda delivery: (to_iso(delivery.created_at), delivery.delivery_id), reverse=True)
+        page_items = raw_items[:limit]
+        # Preserve DynamoDB's query order, including ties, so moderation
+        # filtering can resume after the last returned delivery safely.
+        deliveries = [delivery_from_item(item) for item in page_items]
         next_cursor = None
         if has_more and deliveries:
-            oldest = deliveries[-1]
+            last = page_items[-1]
             next_cursor = cursor_after(
                 kind="inbox",
                 scope=recipient_agent_id,
-                created_at=to_iso(oldest.created_at),
-                record_id=oldest.delivery_id,
+                created_at=str(last["created_at"]),
+                record_id=str(last["delivery_id"]),
             )
         return CursorPage(tuple(deliveries), next_cursor)
 

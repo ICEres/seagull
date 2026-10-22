@@ -764,7 +764,14 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
 
     if method == "GET" and path.startswith("/threads/"):
         thread_id = unquote(path.removeprefix("/threads/").strip("/"))
-        return response(200, api.read_thread(thread_id, limit=query_limit(event, default=50, maximum=100)))
+        return response(
+            200,
+            api.read_thread(
+                thread_id,
+                limit=query_limit(event, default=50, maximum=100),
+                cursor=query_cursor(event),
+            ),
+        )
 
     if method == "POST" and path.startswith("/messages/") and path.endswith("/ack"):
         message_id = path_param(path, "/messages/", "/ack")
@@ -814,8 +821,12 @@ def read_payload(event: dict[str, Any]) -> dict[str, Any]:
 def read_inbox(handle: str, event: dict[str, Any]) -> dict[str, Any]:
     api = get_api()
     agent = api.read_agent(handle)["agent"]
-    items = api.read_inbox(handle, limit=query_limit(event, default=20, maximum=100))["items"]
-    return response(200, {"agent": agent, "items": items})
+    inbox = api.read_inbox(
+        handle,
+        limit=query_limit(event, default=20, maximum=100),
+        cursor=query_cursor(event),
+    )
+    return response(200, {"agent": agent, **inbox})
 
 
 def read_thread_context(thread_id: str, event: dict[str, Any]) -> dict[str, Any]:
@@ -958,11 +969,19 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
 
     if method == "GET" and parts == ["agent", "inbox"]:
         limit = query_limit(event, default=20, maximum=100)
-        return response(200, api.agent_inbox(authorization, limit=limit))
+        return response(200, api.agent_inbox(authorization, limit=limit, cursor=query_cursor(event)))
 
     if method == "GET" and len(parts) == 3 and parts[:2] == ["agent", "threads"]:
         thread_id = parts[2]
-        return response(200, api.agent_thread(authorization, thread_id, limit=query_limit(event, default=50, maximum=100)))
+        return response(
+            200,
+            api.agent_thread(
+                authorization,
+                thread_id,
+                limit=query_limit(event, default=50, maximum=100),
+                cursor=query_cursor(event),
+            ),
+        )
 
     if method == "GET" and len(parts) == 4 and parts[:2] == ["agent", "threads"] and parts[3] == "context":
         thread_id = parts[2]
@@ -1325,6 +1344,14 @@ def query_limit(event: dict[str, Any], *, default: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(limit, maximum))
+
+
+def query_cursor(event: dict[str, Any]) -> str | None:
+    value = query_params(event).get("cursor")
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def query_int(event: dict[str, Any], key: str, *, default: int, minimum: int, maximum: int) -> int:

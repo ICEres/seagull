@@ -323,6 +323,180 @@ class SocialApiLambdaChatDeliveryTest(TestCase):
 
 
 class SocialApiLambdaAuthTest(TestCase):
+    def test_agent_network_inbox_is_scoped_to_owned_gull(self) -> None:
+        lambda_module = load_lambda_module()
+        claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        lambda_module.handler(
+            event("POST", "/profiles", body={"handle": "@alice:seagull.local"}, claims=claims),
+            None,
+        )
+        lambda_module.owner_hub_read = lambda handle, owner, path: {
+            "agent": {"handle": handle},
+            "items": [],
+            "next_cursor": None,
+        }
+
+        allowed = lambda_module.handler(
+            event(
+                "GET",
+                "/agent-network/inbox",
+                claims=claims,
+                query={"agent_handle": "@alice:seagull.local"},
+            ),
+            None,
+        )
+        self.assertEqual(200, allowed["statusCode"])
+
+        denied = lambda_module.handler(
+            event(
+                "GET",
+                "/agent-network/inbox",
+                claims={"sub": "bob-sub", "email": "bob@example.com"},
+                query={"agent_handle": "@alice:seagull.local"},
+            ),
+            None,
+        )
+        self.assertEqual(403, denied["statusCode"])
+
+    def test_agent_network_send_validates_owned_sender_and_keeps_cloud_mode(self) -> None:
+        lambda_module = load_lambda_module()
+        claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        lambda_module.handler(
+            event("POST", "/profiles", body={"handle": "@alice:seagull.local"}, claims=claims),
+            None,
+        )
+        calls: list[dict[str, object]] = []
+
+        def fake_hub(*args: object, **kwargs: object) -> dict[str, object]:
+            calls.append(kwargs.get("body", {}))
+            return {"message_id": "message_1", "thread_id": "thread_1", "deliveries": []}
+
+        lambda_module.message_hub_json = fake_hub
+        sent = lambda_module.handler(
+            event(
+                "POST",
+                "/agent-network/messages",
+                claims=claims,
+                body={
+                    "sender_handle": "@alice:seagull.local",
+                    "recipient_handles": ["@other:seagull.local"],
+                    "content": "Hello",
+                    "idempotency_key": "mobile-1",
+                },
+            ),
+            None,
+        )
+        self.assertEqual(201, sent["statusCode"])
+        self.assertEqual("@alice:seagull.local", calls[0]["sender_handle"])
+        self.assertEqual("cloud", calls[0]["runtime_mode"])
+        self.assertEqual("mobile-1", calls[0]["idempotency_key"])
+
+        denied = lambda_module.handler(
+            event(
+                "POST",
+                "/agent-network/messages",
+                claims=claims,
+                body={
+                    "sender_handle": "@other:seagull.local",
+                    "recipient_handles": ["@alice:seagull.local"],
+                    "content": "Impersonate",
+                },
+            ),
+            None,
+        )
+        self.assertEqual(404, denied["statusCode"])
+
+    def test_message_hub_bridge_preserves_safe_http_status(self) -> None:
+        lambda_module = load_lambda_module()
+
+        def failing_urlopen(request: object, timeout: float) -> object:
+            raise HTTPError("https://hub.test/agent/threads/missing", 404, "not found", None, None)
+
+        lambda_module.urlopen = failing_urlopen
+        with self.assertRaises(lambda_module.MessageHubRequestError) as raised:
+            lambda_module.message_hub_json("https://hub.test", "/agent/threads/missing")
+        self.assertEqual(404, raised.exception.status_code)
+        self.assertNotIn("not found", str(raised.exception))
+
+    def test_agent_network_sent_is_owner_scoped_and_enriches_public_handles(self) -> None:
+        lambda_module = load_lambda_module()
+        claims = {"sub": "alice-sub", "email": "alice@example.com"}
+        lambda_module.handler(
+            event("POST", "/profiles", body={"handle": "@alice:seagull.local"}, claims=claims),
+            None,
+        )
+
+        class AgentTable:
+            def get_item(self, *, Key: dict[str, str]) -> dict[str, object]:
+                if Key["agent_id"] == "hub_alice":
+                    return {"Item": {"agent_id": "hub_alice", "handle": "@alice:seagull.local", "display_name": "Alice"}}
+                return {"Item": {"agent_id": "hub_other", "handle": "@other:seagull.local", "display_name": "Other"}}
+
+        lambda_module.dynamodb.Table = lambda name: AgentTable()
+        lambda_module.owner_hub_read = lambda handle, owner, path: {
+            "messages": [{
+                "message_id": "m1",
+                "sender_agent_id": "hub_alice",
+                "recipient_agent_ids": ["hub_other"],
+            }],
+        }
+        with patch.dict(os.environ, {"GULLS_AGENTS_TABLE": "hub-agents"}):
+            sent = lambda_module.handler(
+                event("GET", "/agent-network/sent", claims=claims, query={"agent_handle": "@alice:seagull.local"}),
+                None,
+            )
+        self.assertEqual(200, sent["statusCode"])
+        body = response_body(sent)
+        self.assertEqual("@alice:seagull.local", body["messages"][0]["sender_handle"])
+        self.assertEqual(["@other:seagull.local"], body["messages"][0]["recipient_handles"])
+        self.assertFalse(body["truncated"])
+
+        denied = lambda_module.handler(
+            event(
+                "GET",
+                "/agent-network/sent",
+                claims={"sub": "bob-sub", "email": "bob@example.com"},
+                query={"agent_handle": "@alice:seagull.local"},
+            ),
+            None,
+        )
+        self.assertEqual(403, denied["statusCode"])
+
+    def test_agent_projection_failure_preserves_other_public_metadata(self) -> None:
+        lambda_module = load_lambda_module()
+
+        class AgentTable:
+            def get_item(self, *, Key: dict[str, str]) -> dict[str, object]:
+                if Key["agent_id"] == "hub_failed":
+                    raise RuntimeError("temporary projection failure")
+                return {
+                    "Item": {
+                        "agent_id": "hub_good",
+                        "handle": "@good:seagull.local",
+                        "display_name": "Good",
+                        "owner_user_id": "private-owner",
+                        "secret": "private-secret",
+                    }
+                }
+
+        lambda_module.dynamodb.Table = lambda name: AgentTable()
+        payload = {
+            "messages": [{
+                "message_id": "m1",
+                "sender_agent_id": "hub_good",
+                "recipient_agent_ids": ["hub_failed"],
+            }],
+        }
+        with patch.dict(os.environ, {"GULLS_AGENTS_TABLE": "hub-agents"}):
+            enriched = lambda_module.enrich_owner_hub_payload(payload)
+
+        message = enriched["messages"][0]
+        self.assertEqual("@good:seagull.local", message["sender_handle"])
+        self.assertEqual("Good", message["sender_display_name"])
+        self.assertEqual(["hub_good"], [agent["agent_id"] for agent in enriched["agents"]])
+        self.assertNotIn("owner_user_id", enriched["agents"][0])
+        self.assertNotIn("secret", enriched["agents"][0])
+
     def test_missing_auth_env_defaults_to_required(self) -> None:
         lambda_module = load_lambda_module()
 

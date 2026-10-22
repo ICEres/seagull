@@ -255,6 +255,14 @@ class UpstreamServiceError(RuntimeError):
     """Raised when the configured AI Provider cannot serve a read request."""
 
 
+class MessageHubRequestError(UpstreamServiceError):
+    """A sanitized, status-preserving failure from the trusted Hub bridge."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__("Message Hub rejected the request")
+        self.status_code = status_code
+
+
 def redacted_event(event: dict[str, Any]) -> dict[str, Any]:
     # Headers carry the caller's Authorization token plus x-seagull-admin-secret /
     # x-seagull-legacy-secret / x-seagull-auth-bypass-secret; the body carries
@@ -350,6 +358,117 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     health={"ok": True, "app": APP_NAME, "storage": "dynamodb"},
                 ),
             )
+
+        # Owner-scoped mobile façade. The caller authenticates with Cognito;
+        # this Lambda validates Gull ownership and keeps all Hub credentials
+        # server-side.
+        if method == "GET" and path == "/agent-network/inbox":
+            query = event.get("queryStringParameters") or {}
+            owner = owner_user_id_from_query(event, query)
+            handle = required_query_string(query, "agent_handle")
+            profile = service.get_owned_profile(owner_user_id=owner, agent_handle=handle)
+            params = []
+            limit = optional_query_int(query, "limit", default=20)
+            cursor = optional_query_string(query, "cursor")
+            params.append(f"limit={limit}")
+            if cursor:
+                params.append(f"cursor={quote(cursor, safe='')}")
+            result = owner_hub_read(profile.handle, owner, "/agent/inbox?" + "&".join(params))
+            return response(200, enrich_owner_hub_payload(result))
+
+        if method == "GET" and path == "/agent-network/sent":
+            query = event.get("queryStringParameters") or {}
+            owner = owner_user_id_from_query(event, query)
+            handle = required_query_string(query, "agent_handle")
+            profile = service.get_owned_profile(owner_user_id=owner, agent_handle=handle)
+            limit = optional_query_int(query, "limit", default=100)
+            result = owner_hub_read(
+                profile.handle,
+                owner,
+                f"/agents/{quote(profile.handle, safe='')}/sent?limit={limit}",
+            )
+            messages = result.get("messages") if isinstance(result.get("messages"), list) else []
+            return response(
+                200,
+                {
+                    **enrich_owner_hub_payload(result),
+                    "truncated": len(messages) >= limit,
+                },
+            )
+
+        if method == "GET" and path.startswith("/agent-network/threads/"):
+            query = event.get("queryStringParameters") or {}
+            owner = owner_user_id_from_query(event, query)
+            handle = required_query_string(query, "agent_handle")
+            profile = service.get_owned_profile(owner_user_id=owner, agent_handle=handle)
+            thread_id = unquote(path.removeprefix("/agent-network/threads/").strip("/"))
+            if not thread_id:
+                raise BadRequest("thread_id is required")
+            params = [f"limit={optional_query_int(query, 'limit', default=50)}"]
+            cursor = optional_query_string(query, "cursor")
+            if cursor:
+                params.append(f"cursor={quote(cursor, safe='')}")
+            result = owner_hub_read(profile.handle, owner, f"/agent/threads/{quote(thread_id, safe='')}?" + "&".join(params))
+            return response(200, enrich_owner_hub_payload(result))
+
+        if method == "POST" and path == "/agent-network/messages":
+            body = parse_body(event)
+            owner = owner_user_id_from_body(event, body)
+            sender = service.get_owned_profile(owner_user_id=owner, agent_handle=required_string(body, "sender_handle"))
+            recipients = body.get("recipient_handles")
+            if not isinstance(recipients, list) or not recipients or not all(isinstance(item, str) and item.strip() for item in recipients):
+                raise BadRequest("recipient_handles must be a non-empty list of strings")
+            payload = {
+                "sender_handle": sender.handle,
+                "recipient_handles": [item.strip() for item in recipients],
+                "content": optional_string(body, "content"),
+                "content_ref": optional_string(body, "content_ref"),
+                "refs": reference_list(body.get("refs", ())),
+                "intent": optional_string(body, "intent") or "direct",
+                "visibility": optional_string(body, "visibility") or "direct",
+                "thread_id": optional_string(body, "thread_id"),
+                "runtime_mode": "cloud",
+            }
+            idempotency = optional_string(body, "idempotency_key")
+            if idempotency:
+                payload["idempotency_key"] = idempotency
+            base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+            result = message_hub_json(base_url, "/messages", method="POST", body=payload, idempotency_key=idempotency)
+            return response(201, result)
+
+        if method == "POST" and path.startswith("/agent-network/deliveries/") and path.endswith("/ack"):
+            body = parse_body(event)
+            owner = owner_user_id_from_body(event, body)
+            recipient = service.get_owned_profile(owner_user_id=owner, agent_handle=required_string(body, "agent_handle"))
+            delivery_id = path_param(path, "/agent-network/deliveries/", "/ack")
+            result = owner_hub_action(recipient.handle, owner, f"/agent/deliveries/{quote(delivery_id, safe='')}/ack", {})
+            return response(200, result)
+
+        if method == "POST" and path.startswith("/agent-network/deliveries/") and path.endswith("/decision"):
+            body = parse_body(event)
+            owner = owner_user_id_from_body(event, body)
+            recipient = service.get_owned_profile(owner_user_id=owner, agent_handle=required_string(body, "agent_handle"))
+            delivery_id = path_param(path, "/agent-network/deliveries/", "/decision")
+            decision_body = {
+                key: value for key, value in body.items()
+                if key in {
+                    "decision", "content", "content_inline", "content_ref", "refs",
+                    "action_type", "action_target", "action_runtime", "requires_approval", "note",
+                }
+            }
+            decision_body["agent_handle"] = recipient.handle
+            if optional_string(decision_body, "decision") == "reply":
+                decision_body["runtime_mode"] = "cloud"
+            # Legacy decision route is server-secret protected and preserves
+            # cloud runtime semantics for an owner reply.
+            base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+            result = message_hub_json(
+                base_url,
+                f"/deliveries/{quote(delivery_id, safe='')}/decision",
+                method="POST",
+                body=decision_body,
+            )
+            return response(200, result)
 
         if method == "POST" and path == "/identities":
             identity = identify_human_from_event(event)
@@ -680,6 +799,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return response(401, {"error": "unauthorized", "message": str(exc)})
     except BadRequest as exc:
         return response(400, {"error": "bad_request", "message": str(exc)})
+    except MessageHubRequestError as exc:
+        return response(exc.status_code, {"error": "message_hub_rejected", "message": str(exc)})
     except UpstreamServiceError as exc:
         return response(503, {"error": "service_unavailable", "message": str(exc)})
     except InvalidSocialRequestError as exc:
@@ -986,6 +1107,175 @@ def post_message_hub_json(base_url: str, path: str, body: dict[str, Any]) -> dic
     if not isinstance(parsed, dict):
         raise BadRequest("message hub response must be a JSON object")
     return parsed
+
+
+def message_hub_json(
+    base_url: str,
+    path: str,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    authorization: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Call a Hub route from the trusted Social API boundary.
+
+    Hub credentials stay inside Lambda. This helper is intentionally private;
+    Cognito clients only see the owner-scoped façade below.
+    """
+    headers = {"accept": "application/json"}
+    legacy_secret = secret_env("MESSAGE_HUB_LEGACY_ROUTE_SECRET")
+    if legacy_secret:
+        headers["x-seagull-legacy-secret"] = legacy_secret
+    if authorization:
+        headers["authorization"] = authorization
+    payload = None
+    if body is not None:
+        payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers["content-type"] = "application/json"
+    if idempotency_key:
+        headers["idempotency-key"] = idempotency_key
+    request = Request(f"{base_url}{path}", data=payload, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=5) as result:
+            raw = result.read().decode("utf-8")
+    except HTTPError as exc:
+        if exc.code in {400, 401, 403, 404, 409, 429}:
+            raise MessageHubRequestError(exc.code) from exc
+        raise UpstreamServiceError("Message Hub is unavailable") from exc
+    except Exception as exc:
+        raise UpstreamServiceError("Message Hub is unavailable") from exc
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise UpstreamServiceError("Message Hub returned invalid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise UpstreamServiceError("Message Hub returned an invalid response")
+    return parsed
+
+
+def owner_hub_token(handle: str, owner_user_id: str) -> tuple[str, str]:
+    """Mint a short-lived, server-only read/action token for one owned Gull."""
+    base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+    if not base_url:
+        raise UpstreamServiceError("Message Hub is not configured")
+    result = post_message_hub_json(
+        base_url,
+        "/internal/agent-tokens",
+        {
+            "handle": handle,
+            "owner_user_id": owner_user_id,
+            "scopes": ["agent:read", "agent:inbox", "agent:post", "agent:ack"],
+            "name": "Seagull mobile owner façade",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        },
+    )
+    token = result.get("token")
+    record = result.get("record")
+    token_id = record.get("token_id") if isinstance(record, dict) else None
+    if not isinstance(token, str) or not token or not isinstance(token_id, str) or not token_id:
+        raise UpstreamServiceError("Message Hub did not return an owner token")
+    return token, token_id
+
+
+def owner_hub_read(handle: str, owner_user_id: str, path: str) -> dict[str, Any]:
+    base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+    token, token_id = owner_hub_token(handle, owner_user_id)
+    try:
+        return message_hub_json(base_url, path, authorization=f"Bearer {token}")
+    finally:
+        try:
+            post_message_hub_json(base_url, f"/internal/agent-tokens/{quote(token_id, safe='')}/revoke", {})
+        except Exception:
+            pass
+
+
+def enrich_owner_hub_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach only public Hub handle metadata to owner-scoped records."""
+    agent_ids: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for key in ("sender_agent_id", "recipient_agent_id"):
+            item = value.get(key)
+            if isinstance(item, str) and item:
+                agent_ids.add(item)
+        for key in ("recipient_agent_ids",):
+            items = value.get(key)
+            if isinstance(items, list):
+                agent_ids.update(item for item in items if isinstance(item, str) and item)
+        for key in ("message", "delivery", "current_message"):
+            collect(value.get(key))
+
+    for key in ("message", "delivery"):
+        collect(payload.get(key))
+    for key in ("items", "messages"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for item in items:
+                collect(item)
+
+    public_agents: dict[str, dict[str, Any]] = {}
+    table_name = os.environ.get("GULLS_AGENTS_TABLE", "").strip()
+    if table_name and agent_ids:
+        table = dynamodb.Table(table_name)
+        for agent_id in agent_ids:
+            try:
+                item = table.get_item(Key={"agent_id": agent_id}).get("Item") or {}
+                handle = item.get("handle")
+                if isinstance(handle, str) and handle:
+                    public_agents[agent_id] = {
+                        "agent_id": agent_id,
+                        "handle": handle,
+                        "display_name": item.get("display_name") if isinstance(item.get("display_name"), str) else None,
+                    }
+            except Exception:
+                # A single projection miss must not discard unrelated public metadata.
+                continue
+
+    def enrich(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        sender_id = value.get("sender_agent_id")
+        sender = public_agents.get(sender_id) if isinstance(sender_id, str) else None
+        if sender is not None:
+            value["sender_handle"] = sender["handle"]
+            value["sender_display_name"] = sender["display_name"]
+        recipient_ids = value.get("recipient_agent_ids")
+        if isinstance(recipient_ids, list):
+            recipients = [public_agents[item] for item in recipient_ids if item in public_agents]
+            value["recipient_handles"] = [item["handle"] for item in recipients]
+            value["recipient_display_names"] = [item["display_name"] for item in recipients]
+        recipient_id = value.get("recipient_agent_id")
+        recipient = public_agents.get(recipient_id) if isinstance(recipient_id, str) else None
+        if recipient is not None:
+            value["recipient_handle"] = recipient["handle"]
+            value["recipient_display_name"] = recipient["display_name"]
+        for key in ("message", "delivery", "current_message"):
+            enrich(value.get(key))
+
+    for key in ("message", "delivery"):
+        enrich(payload.get(key))
+    for key in ("items", "messages"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for item in items:
+                enrich(item)
+    payload["agents"] = list(public_agents.values())
+    return payload
+
+
+def owner_hub_action(handle: str, owner_user_id: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    base_url = os.environ.get("MESSAGE_API_URL", "").strip().rstrip("/")
+    token, token_id = owner_hub_token(handle, owner_user_id)
+    try:
+        return message_hub_json(base_url, path, method="POST", body=body, authorization=f"Bearer {token}")
+    finally:
+        try:
+            post_message_hub_json(base_url, f"/internal/agent-tokens/{quote(token_id, safe='')}/revoke", {})
+        except Exception:
+            pass
 
 
 def social_public_url(event: dict[str, Any]) -> str:

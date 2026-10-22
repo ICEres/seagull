@@ -28,6 +28,7 @@ from message_hub.domain.models import (
     ThreadRecord,
     ThreadSummary,
 )
+from message_hub.storage.pagination import CursorPage
 
 
 class MessageHubRepository(Protocol):
@@ -77,6 +78,11 @@ class MessageHubRepository(Protocol):
     def list_thread_messages(self, thread_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         """Return thread messages in chronological order."""
 
+    def list_thread_messages_page(
+        self, thread_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        """Return one chronological thread page after an opaque cursor."""
+
     def list_messages_by_sender(self, sender_agent_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         """Return messages created by an agent in newest-first order."""
 
@@ -114,6 +120,11 @@ class MessageHubRepository(Protocol):
         limit: int | None = None,
     ) -> tuple[Delivery, ...]:
         """Return inbox deliveries in newest-first order."""
+
+    def list_deliveries_by_recipient_page(
+        self, recipient_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Delivery]:
+        """Return one newest-first inbox page after an opaque cursor."""
 
     def list_deliveries_by_sender(
         self,

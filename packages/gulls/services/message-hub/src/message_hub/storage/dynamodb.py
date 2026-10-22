@@ -68,6 +68,7 @@ from message_hub.domain.models import (
     ThreadSummary,
     ToolGrant,
 )
+from message_hub.storage.pagination import CursorPage, cursor_after, decode_cursor
 
 MESSAGE_IDEMPOTENCY_TTL_SECONDS = 604800
 TASK_IDEMPOTENCY_KEY_PREFIX = "task:"
@@ -1056,6 +1057,23 @@ class DynamoDbMessageHubRepository:
         return table
 
     @staticmethod
+    def _partition_condition(key_name: str, key_value: str) -> Any:
+        """Build a DynamoDB Key equality expression.
+
+        Keeping the tiny fallback makes repository pagination unit-testable
+        with a query double in environments that do not install boto3. Real
+        DynamoDB tables always use boto3's condition object.
+        """
+        try:
+            from boto3.dynamodb.conditions import Key
+        except ImportError:  # pragma: no cover - only dependency-light tests
+            class FallbackCondition:
+                _values = (key_value,)
+
+            return FallbackCondition()
+        return Key(key_name).eq(key_value)
+
+    @staticmethod
     def _query_all(
         table: Any,
         *,
@@ -1219,6 +1237,41 @@ class DynamoDbMessageHubRepository:
             limit=limit,
         )
         return tuple(message_from_item(item) for item in items)
+
+    def list_thread_messages_page(
+        self, thread_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="thread", scope=thread_id)
+        kwargs: dict[str, Any] = {
+            "KeyConditionExpression": self._partition_condition("thread_id", thread_id),
+            "IndexName": "thread-created-at-index",
+            "ScanIndexForward": False,
+            "Limit": limit + 1,
+        }
+        if position is not None:
+            kwargs["ExclusiveStartKey"] = {
+                "message_id": position.record_id,
+                "thread_id": thread_id,
+                "created_at": position.created_at,
+            }
+        result = self._messages.query(**kwargs)
+        raw_items = result.get("Items", [])
+        has_more = len(raw_items) > limit or result.get("LastEvaluatedKey") is not None
+        page_items = raw_items[:limit]
+        messages = [message_from_item(item) for item in page_items]
+        messages.sort(key=lambda message: (to_iso(message.created_at), message.message_id))
+        next_cursor = None
+        if has_more and messages:
+            oldest = messages[0]
+            next_cursor = cursor_after(
+                kind="thread",
+                scope=thread_id,
+                created_at=to_iso(oldest.created_at),
+                record_id=oldest.message_id,
+            )
+        return CursorPage(tuple(messages), next_cursor)
 
     def list_messages_by_sender(
         self, sender_agent_id: str, *, limit: int | None = None
@@ -1427,6 +1480,42 @@ class DynamoDbMessageHubRepository:
             limit=limit,
         )
         return tuple(delivery_from_item(item) for item in items)
+
+    def list_deliveries_by_recipient_page(
+        self, recipient_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Delivery]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="inbox", scope=recipient_agent_id)
+        kwargs: dict[str, Any] = {
+            "KeyConditionExpression": self._partition_condition(
+                "recipient_agent_id", recipient_agent_id
+            ),
+            "IndexName": "recipient-created-at-index",
+            "ScanIndexForward": False,
+            "Limit": limit + 1,
+        }
+        if position is not None:
+            kwargs["ExclusiveStartKey"] = {
+                "delivery_id": position.record_id,
+                "recipient_agent_id": recipient_agent_id,
+                "created_at": position.created_at,
+            }
+        result = self._deliveries.query(**kwargs)
+        raw_items = result.get("Items", [])
+        has_more = len(raw_items) > limit or result.get("LastEvaluatedKey") is not None
+        deliveries = [delivery_from_item(item) for item in raw_items[:limit]]
+        deliveries.sort(key=lambda delivery: (to_iso(delivery.created_at), delivery.delivery_id), reverse=True)
+        next_cursor = None
+        if has_more and deliveries:
+            oldest = deliveries[-1]
+            next_cursor = cursor_after(
+                kind="inbox",
+                scope=recipient_agent_id,
+                created_at=to_iso(oldest.created_at),
+                record_id=oldest.delivery_id,
+            )
+        return CursorPage(tuple(deliveries), next_cursor)
 
     def list_deliveries_by_sender(
         self, sender_agent_id: str, *, limit: int | None = None

@@ -70,6 +70,7 @@ from message_hub.domain.safety import (
     safety_status_for,
 )
 from message_hub.storage.repository import MessageHubRepository
+from message_hub.storage.pagination import cursor_after
 
 
 class MessageHubError(Exception):
@@ -905,6 +906,14 @@ class MessageHubService:
         return SendMessageResult(message=message, thread=thread, deliveries=deliveries)
 
     def get_inbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
+        items, _ = self.get_inbox_page(handle, limit=limit)
+        return items
+
+    def get_inbox_page(
+        self, handle: str, *, limit: int = 20, cursor: str | None = None
+    ) -> tuple[tuple[InboxItem, ...], str | None]:
+        if limit < 1:
+            raise InvalidMessageError("limit must be positive")
         agent = self._require_agent_by_handle(handle)
         # Deliveries held for human review must not surface their content to the
         # recipient agent until a human releases them; otherwise the review gate
@@ -914,23 +923,40 @@ class MessageHubService:
         # (which nothing ages out) permanently push real ones off the inbox.
         max_scan_limit = limit * INBOX_HOLD_SCAN_MULTIPLIER
         scan_limit = limit
+        page_cursor = cursor
+        all_visible: list[Delivery] = []
         while True:
-            deliveries = self._repository.list_deliveries_by_recipient(
-                agent.agent_id, limit=scan_limit
+            page = self._repository.list_deliveries_by_recipient_page(
+                agent.agent_id, limit=scan_limit, cursor=page_cursor
             )
             visible = tuple(
-                delivery
-                for delivery in deliveries
+                delivery for delivery in page.items
                 if delivery.status != DeliveryStatus.NEEDS_REVIEW
             )
+            all_visible.extend(visible)
             if (
-                len(visible) >= limit
-                or len(deliveries) < scan_limit
+                len(all_visible) >= limit
+                or page.next_cursor is None
                 or scan_limit >= max_scan_limit
             ):
                 break
             scan_limit = min(scan_limit * 2, max_scan_limit)
-        return tuple(self._inbox_item_for_delivery(delivery) for delivery in visible[:limit])
+            page_cursor = page.next_cursor
+
+        selected = tuple(all_visible[:limit])
+        next_cursor = page.next_cursor
+        if len(all_visible) > limit and selected:
+            # The cursor must follow the last returned visible item, not the
+            # last scanned held item, so a subsequent page cannot skip a
+            # delivery that was hidden behind the moderation filter.
+            last = selected[-1]
+            next_cursor = cursor_after(
+                kind="inbox",
+                scope=agent.agent_id,
+                created_at=last.created_at,
+                record_id=last.delivery_id,
+            )
+        return tuple(self._inbox_item_for_delivery(delivery) for delivery in selected), next_cursor
 
     def get_outbox(self, handle: str, *, limit: int = 20) -> tuple[InboxItem, ...]:
         agent = self._require_agent_by_handle(handle)
@@ -942,9 +968,18 @@ class MessageHubService:
         return self._repository.list_messages_by_sender(agent.agent_id, limit=limit)
 
     def get_thread(self, thread_id: str, *, limit: int = 50) -> tuple[Message, ...]:
+        messages, _ = self.get_thread_page(thread_id, limit=limit)
+        return messages
+
+    def get_thread_page(
+        self, thread_id: str, *, limit: int = 50, cursor: str | None = None
+    ) -> tuple[tuple[Message, ...], str | None]:
+        if limit < 1:
+            raise InvalidMessageError("limit must be positive")
         if self._repository.get_thread(thread_id) is None:
             raise NotFoundError(f"thread not found: {thread_id}")
-        return self._repository.list_thread_messages(thread_id, limit=limit)
+        page = self._repository.list_thread_messages_page(thread_id, limit=limit, cursor=cursor)
+        return page.items, page.next_cursor
 
     def get_thread_context(self, thread_id: str, *, recent_limit: int = 10) -> ThreadContext:
         thread = self._repository.get_thread(thread_id)

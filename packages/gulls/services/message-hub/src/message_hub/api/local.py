@@ -69,6 +69,7 @@ from message_hub.domain.service import (
     normalize_handle,
 )
 from message_hub.storage import InMemoryMessageHubRepository
+from message_hub.storage.pagination import InvalidCursor
 from seagull_common.coerce import datetime_to_string
 from seagull_common.validation import Validator
 
@@ -412,15 +413,25 @@ class LocalMessageHubApi:
         rules = self._service._repository.list_routing_rules()  # noqa: SLF001
         return {"items": [routing_rule_to_dict(rule) for rule in rules]}
 
-    def read_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
+    def read_inbox(
+        self, handle: str, *, limit: int = 20, cursor: str | None = None
+    ) -> dict[str, Any]:
         try:
-            items = self._service.get_inbox(handle, limit=limit)
+            items, next_cursor = self._service.get_inbox_page(handle, limit=limit, cursor=cursor)
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
+        except InvalidCursor as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
 
-        return {"items": [inbox_item_to_dict(item) for item in items]}
+        result: dict[str, Any] = {
+            "items": [inbox_item_to_dict(item) for item in items],
+            "has_more": next_cursor is not None,
+        }
+        if next_cursor is not None:
+            result["next_cursor"] = next_cursor
+        return result
 
     def read_outbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
         try:
@@ -442,8 +453,10 @@ class LocalMessageHubApi:
 
         return {"messages": [message_to_dict(message) for message in messages]}
 
-    def personal_agent_inbox(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
-        return self.read_inbox(handle, limit=limit)
+    def personal_agent_inbox(
+        self, handle: str, *, limit: int = 20, cursor: str | None = None
+    ) -> dict[str, Any]:
+        return self.read_inbox(handle, limit=limit, cursor=cursor)
 
     def agent_me(self, authorization: str | None) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:read")
@@ -456,11 +469,20 @@ class LocalMessageHubApi:
 
         return {"agent": agent_to_dict(agent), "principal": agent_token_principal_to_dict(principal)}
 
-    def agent_inbox(self, authorization: str | None, *, limit: int = 20) -> dict[str, Any]:
+    def agent_inbox(
+        self, authorization: str | None, *, limit: int = 20, cursor: str | None = None
+    ) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:inbox")
-        return self.read_inbox(principal.agent_handle, limit=limit)
+        return self.read_inbox(principal.agent_handle, limit=limit, cursor=cursor)
 
-    def agent_thread(self, authorization: str | None, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
+    def agent_thread(
+        self,
+        authorization: str | None,
+        thread_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
         principal = self._require_agent_token(authorization, required_scope="agent:read")
         try:
             self._service.get_context_pack(
@@ -475,7 +497,7 @@ class LocalMessageHubApi:
             raise ApiError(403, "forbidden", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
-        return self.read_thread(thread_id, limit=limit)
+        return self.read_thread(thread_id, limit=limit, cursor=cursor)
 
     def agent_thread_context(
         self,
@@ -1058,16 +1080,28 @@ class LocalMessageHubApi:
             ttl_epoch=ttl_epoch,
         )
 
-    def read_thread(self, thread_id: str, *, limit: int = 50) -> dict[str, Any]:
+    def read_thread(
+        self, thread_id: str, *, limit: int = 50, cursor: str | None = None
+    ) -> dict[str, Any]:
         try:
-            messages = self._service.get_thread(thread_id, limit=limit)
+            messages, next_cursor = self._service.get_thread_page(
+                thread_id, limit=limit, cursor=cursor
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
+        except InvalidCursor as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
 
-        return {
+        result: dict[str, Any] = {
             "thread_id": thread_id,
             "messages": [message_to_dict(message) for message in messages],
+            "has_more": next_cursor is not None,
         }
+        if next_cursor is not None:
+            result["next_cursor"] = next_cursor
+        return result
 
     def read_thread_context(self, thread_id: str, *, recent_limit: int = 10) -> dict[str, Any]:
         try:

@@ -31,6 +31,7 @@ from message_hub.domain.models import (
     ThreadSummary,
     utc_now,
 )
+from message_hub.storage.pagination import CursorPage, cursor_after, decode_cursor
 
 
 class InMemoryMessageHubRepository:
@@ -195,6 +196,38 @@ class InMemoryMessageHubRepository:
             messages = messages[-limit:]
         return tuple(messages)
 
+    def list_thread_messages_page(
+        self, thread_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="thread", scope=thread_id)
+        with self._lock:
+            messages = [
+                self._messages_by_id[message_id]
+                for message_id in self._message_ids_by_thread.get(thread_id, [])
+            ]
+        messages.sort(key=lambda message: (message.created_at, message.message_id))
+        if position is not None:
+            messages = [
+                message
+                for message in messages
+                if (message.created_at.isoformat(), message.message_id)
+                < (position.created_at, position.record_id)
+            ]
+        page = messages[-limit:]
+        has_more = len(messages) > len(page)
+        next_cursor = None
+        if has_more and page:
+            oldest = page[0]
+            next_cursor = cursor_after(
+                kind="thread",
+                scope=thread_id,
+                created_at=oldest.created_at,
+                record_id=oldest.message_id,
+            )
+        return CursorPage(tuple(page), next_cursor)
+
     def list_messages_by_sender(self, sender_agent_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         with self._lock:
             messages = [
@@ -273,6 +306,38 @@ class InMemoryMessageHubRepository:
         limit: int | None = None,
     ) -> tuple[Delivery, ...]:
         return self._list_deliveries(self._delivery_ids_by_recipient.get(recipient_agent_id, []), limit)
+
+    def list_deliveries_by_recipient_page(
+        self, recipient_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Delivery]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="inbox", scope=recipient_agent_id)
+        with self._lock:
+            deliveries = [
+                self._deliveries_by_id[delivery_id]
+                for delivery_id in self._delivery_ids_by_recipient.get(recipient_agent_id, [])
+                if delivery_id in self._deliveries_by_id
+            ]
+        deliveries.sort(key=lambda delivery: (delivery.created_at, delivery.delivery_id), reverse=True)
+        if position is not None:
+            deliveries = [
+                delivery
+                for delivery in deliveries
+                if (delivery.created_at.isoformat(), delivery.delivery_id)
+                < (position.created_at, position.record_id)
+            ]
+        page = deliveries[:limit]
+        next_cursor = None
+        if len(deliveries) > len(page) and page:
+            last = page[-1]
+            next_cursor = cursor_after(
+                kind="inbox",
+                scope=recipient_agent_id,
+                created_at=last.created_at,
+                record_id=last.delivery_id,
+            )
+        return CursorPage(tuple(page), next_cursor)
 
     def list_deliveries_by_sender(
         self,

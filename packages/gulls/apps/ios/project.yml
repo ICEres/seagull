@@ -1,0 +1,75 @@
+name: GullsIOS
+options:
+  bundleIdPrefix: ai.gulls
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  GullsIOS:
+    type: application
+    platform: iOS
+    sources:
+      - Gulls
+      - path: ../mac/Gulls/Models/CloudModels.swift
+        group: Shared
+      - path: ../mac/Gulls/Models/SavedGull.swift
+        group: Shared
+      - path: ../mac/Gulls/Services/CloudAPI.swift
+        group: Shared
+      - path: ../mac/Gulls/Services/GullPublicProfileService.swift
+        group: Shared
+      - path: ../mac/Gulls/Views/GullAvatar.swift
+        group: Shared
+    settings:
+      base:
+        PRODUCT_NAME: Gulls
+        PRODUCT_MODULE_NAME: GullsIOS
+        PRODUCT_BUNDLE_IDENTIFIER: ai.gulls.ios
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Gulls
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+
+  GullsIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - GullsTests
+    dependencies:
+      - target: GullsIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.gulls.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Gulls.app/Gulls"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  GullsIOS:
+    build:
+      targets:
+        GullsIOS: all
+        GullsIOSTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - GullsIOSTests

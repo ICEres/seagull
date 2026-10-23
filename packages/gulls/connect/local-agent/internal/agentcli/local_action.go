@@ -16,22 +16,28 @@ import (
 
 const (
 	localActionVersion      = 1
+	localActionCodexVersion = 2
 	maxLocalActionRequest   = 256 * 1024
 	maxLocalActionFileInput = 1 * 1024 * 1024
 	maxLocalActionResult    = 8 * 1024 * 1024
 )
 
 type localActionRequest struct {
-	Version          int      `json:"version"`
-	RequestID        string   `json:"request_id"`
-	GullHandle       string   `json:"gull_handle"`
-	Kind             string   `json:"kind"`
-	CreatedAt        string   `json:"created_at"`
-	Executable       string   `json:"executable,omitempty"`
-	Arguments        []string `json:"arguments,omitempty"`
-	WorkingDirectory string   `json:"working_directory,omitempty"`
-	Path             string   `json:"path,omitempty"`
-	Content          *string  `json:"content,omitempty"`
+	Version            int      `json:"version"`
+	RequestID          string   `json:"request_id"`
+	GullHandle         string   `json:"gull_handle"`
+	Kind               string   `json:"kind"`
+	CreatedAt          string   `json:"created_at"`
+	ProfileID          string   `json:"profile_id,omitempty"`
+	CodexTaskID        string   `json:"codex_task_id,omitempty"`
+	CodexTaskFolder    string   `json:"codex_task_folder,omitempty"`
+	CodexTaskDigest    string   `json:"codex_task_digest,omitempty"`
+	ConnectionRevision string   `json:"connection_revision,omitempty"`
+	Executable         string   `json:"executable,omitempty"`
+	Arguments          []string `json:"arguments,omitempty"`
+	WorkingDirectory   string   `json:"working_directory,omitempty"`
+	Path               string   `json:"path,omitempty"`
+	Content            *string  `json:"content,omitempty"`
 }
 
 type localActionResult struct {
@@ -154,7 +160,7 @@ func newLocalActionRequest(config Config, kind, executable string, args []string
 }
 
 func validateLocalActionRequest(request localActionRequest) error {
-	if request.Version != localActionVersion || !validLocalActionID(request.RequestID) {
+	if (request.Version != localActionVersion && request.Version != localActionCodexVersion) || !validLocalActionID(request.RequestID) {
 		return errors.New("invalid local action request metadata")
 	}
 	if strings.TrimSpace(request.GullHandle) == "" {
@@ -162,6 +168,13 @@ func validateLocalActionRequest(request localActionRequest) error {
 	}
 	if request.CreatedAt == "" {
 		return errors.New("local action requires created_at")
+	}
+	if request.Version == localActionCodexVersion {
+		if strings.TrimSpace(request.ProfileID) == "" || !validLocalActionID(request.CodexTaskID) ||
+			!filepath.IsAbs(request.CodexTaskFolder) || len(request.CodexTaskDigest) != 64 ||
+			!isHexDigest(request.CodexTaskDigest) || strings.TrimSpace(request.ConnectionRevision) == "" {
+			return errors.New("Codex local action requires task provenance")
+		}
 	}
 	if _, err := time.Parse(time.RFC3339Nano, request.CreatedAt); err != nil {
 		return errors.New("local action created_at must be RFC3339")
@@ -198,6 +211,15 @@ func validateLocalActionRequest(request localActionRequest) error {
 		return errors.New("working directory must be an absolute path")
 	}
 	return nil
+}
+
+func isHexDigest(value string) bool {
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateLocalActionResult(result localActionResult) error {

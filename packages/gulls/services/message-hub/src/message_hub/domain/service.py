@@ -3,9 +3,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import ipaddress
+import json
 import secrets
+import time
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -70,6 +72,11 @@ from message_hub.domain.safety import (
     safety_status_for,
 )
 from message_hub.storage.repository import MessageHubRepository
+from message_hub.storage.repository import (
+    AtomicCommitConflict,
+    IdempotencyKeyConflict,
+    IdempotencyRecoveryConflict,
+)
 from message_hub.storage.pagination import cursor_after
 
 
@@ -91,6 +98,20 @@ class NotFoundError(MessageHubError):
 
 class ForbiddenDeliveryError(MessageHubError):
     """Raised when an agent tries to mutate another agent's delivery."""
+
+
+class IdempotencyConflictError(MessageHubError):
+    """Raised when a live idempotency key is reused for another request."""
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedMessageSend:
+    message: Message
+    thread: ThreadRecord
+    deliveries: tuple[Delivery, ...]
+    sender: Agent
+    recipients: tuple[Agent, ...]
+    request_fingerprint: str
 
 
 class InvalidTaskTransitionError(MessageHubError):
@@ -750,7 +771,7 @@ class MessageHubService:
             deleted_refs=tuple(deleted_refs),
         )
 
-    def send_message(
+    def _prepare_message_send(
         self,
         *,
         sender_handle: str,
@@ -761,10 +782,9 @@ class MessageHubService:
         intent: str = "message",
         visibility: str = "direct",
         thread_id: str | None = None,
-        idempotency_key: str | None = None,
         runtime_mode: str | None = None,
         safety_evaluator: SafetyEvaluator | None = None,
-    ) -> SendMessageResult:
+    ) -> PreparedMessageSend:
         normalized_runtime_mode = normalized_optional_string(runtime_mode)
         if normalized_runtime_mode is not None and normalized_runtime_mode not in RUNTIME_MODES:
             raise InvalidMessageError("runtime_mode must be cloud, local, or manual")
@@ -774,8 +794,18 @@ class MessageHubService:
             raise InvalidMessageError("message content, content_ref, or refs are required")
 
         sender = self._require_agent_by_handle(sender_handle)
+        request_fingerprint = message_request_fingerprint(
+            sender_agent_id=sender.agent_id,
+            recipient_handles=recipient_handles,
+            content=content,
+            content_ref=normalized_content_ref,
+            refs=message_refs,
+            intent=intent,
+            visibility=visibility,
+            thread_id=thread_id,
+            runtime_mode=normalized_runtime_mode,
+        )
         recipients = self._resolve_recipients(recipient_handles)
-
         recipients, routing_trace, needs_review = self._apply_routing_rules(
             recipients=recipients,
             content=content,
@@ -785,16 +815,6 @@ class MessageHubService:
         if not recipients and visibility != "public":
             raise InvalidMessageError("direct or limited messages require at least one recipient")
 
-        if idempotency_key:
-            existing_message_id = self._repository.get_idempotent_message_id(
-                sender.agent_id,
-                idempotency_key,
-            )
-            if existing_message_id is not None:
-                return self._result_for_existing_message(existing_message_id)
-
-        # ``safety_evaluator`` is a narrow per-call override so guest sends can
-        # wrap the configured evaluator without a second write path.
         safety_decision = (safety_evaluator or self._safety_evaluator).evaluate_send(
             SafetyCheckRequest(
                 sender=sender,
@@ -807,17 +827,10 @@ class MessageHubService:
             )
         )
         require_deliverable(safety_decision)
-        # A deliverable decision can still require a human-review hold (the
-        # safety gateway's ``human_review``, the guest quarantine-first
-        # wrapper): the message persists but every delivery is born held, so
-        # nothing is auto-deliverable and no agent-worker event can leak it.
         needs_review = needs_review or safety_status_for(safety_decision) == "needs_review"
         stored_content, stored_content_ref = envelope_content_for_storage(
-            content,
-            normalized_content_ref,
-            "message content",
+            content, normalized_content_ref, "message content"
         )
-
         now = self._clock()
         resolved_thread_id = thread_id or self._new_id("thread")
         message = Message(
@@ -834,15 +847,11 @@ class MessageHubService:
             runtime_mode=normalized_runtime_mode,
             created_at=now,
         )
-
         existing_thread = self._repository.get_thread(resolved_thread_id)
         if thread_id is not None and existing_thread is None:
             raise NotFoundError(f"thread not found: {thread_id}")
         if existing_thread is not None and sender.agent_id not in existing_thread.participants:
-            # Only current participants may post into an existing thread; otherwise
-            # any agent could inject messages into a conversation by guessing its id.
             raise ForbiddenDeliveryError("sender is not a participant of this thread")
-
         participants = {sender.agent_id, *(agent.agent_id for agent in recipients)}
         if existing_thread is None:
             thread = ThreadRecord(
@@ -854,17 +863,22 @@ class MessageHubService:
                 last_message_at=now,
                 created_at=now,
                 updated_at=now,
+                revision=0,
             )
         else:
+            newest = (now, message.message_id) > (
+                existing_thread.last_message_at,
+                existing_thread.last_message_id,
+            )
             thread = replace(
                 existing_thread,
                 participants=existing_thread.participants | frozenset(participants),
                 message_count=existing_thread.message_count + 1,
-                last_message_id=message.message_id,
-                last_message_at=now,
-                updated_at=now,
+                last_message_id=message.message_id if newest else existing_thread.last_message_id,
+                last_message_at=now if newest else existing_thread.last_message_at,
+                updated_at=max(existing_thread.updated_at, now),
+                revision=existing_thread.revision + 1,
             )
-
         deliveries = tuple(
             Delivery(
                 delivery_id=self._new_id("delivery"),
@@ -883,11 +897,154 @@ class MessageHubService:
             )
             for recipient in recipients
         )
+        return PreparedMessageSend(
+            message=message,
+            thread=thread,
+            deliveries=deliveries,
+            sender=sender,
+            recipients=recipients,
+            request_fingerprint=request_fingerprint,
+        )
 
-        self._repository.put_message(message)
-        self._repository.put_thread(thread)
-        for delivery in deliveries:
-            self._repository.put_delivery(delivery)
+    def send_message(
+        self,
+        *,
+        sender_handle: str,
+        recipient_handles: Sequence[str] = (),
+        content: str | None = None,
+        content_ref: str | None = None,
+        refs: Sequence[MessageRef | dict[str, str | None]] = (),
+        intent: str = "message",
+        visibility: str = "direct",
+        thread_id: str | None = None,
+        idempotency_key: str | None = None,
+        runtime_mode: str | None = None,
+        safety_evaluator: SafetyEvaluator | None = None,
+        _retry_count: int = 0,
+    ) -> SendMessageResult:
+        normalized_idempotency_key = (
+            normalize_required(idempotency_key, "idempotency_key")
+            if idempotency_key is not None
+            else None
+        )
+        # Replay lookup deliberately happens before routing and safety
+        # evaluation. A retry of an already committed request must remain
+        # readable even if policy or routing configuration has since changed.
+        if normalized_idempotency_key is not None:
+            replay_sender = self._require_agent_by_handle(sender_handle)
+            replay_refs = tuple(normalize_message_ref(ref) for ref in refs)
+            replay_fingerprint = message_request_fingerprint(
+                sender_agent_id=replay_sender.agent_id,
+                recipient_handles=recipient_handles,
+                content=content,
+                content_ref=normalized_optional_string(content_ref),
+                refs=replay_refs,
+                intent=intent,
+                visibility=visibility,
+                thread_id=thread_id,
+                runtime_mode=normalized_optional_string(runtime_mode),
+            )
+            existing = self._repository.get_idempotency_record(
+                replay_sender.agent_id, normalized_idempotency_key
+            )
+            if existing is not None:
+                existing_message_id, existing_fingerprint, _ = existing
+                if existing_fingerprint is not None and existing_fingerprint != replay_fingerprint:
+                    raise IdempotencyConflictError("idempotency key reused with a different request")
+                return self._result_for_existing_message(
+                    existing_message_id,
+                    delivery_ids=self._repository.get_idempotency_delivery_ids(
+                        replay_sender.agent_id, normalized_idempotency_key
+                    ),
+                    republish=True,
+                )
+
+        prepared = self._prepare_message_send(
+            sender_handle=sender_handle,
+            recipient_handles=recipient_handles,
+            content=content,
+            content_ref=content_ref,
+            refs=refs,
+            intent=intent,
+            visibility=visibility,
+            thread_id=thread_id,
+            runtime_mode=runtime_mode,
+            safety_evaluator=safety_evaluator,
+        )
+        sender = prepared.sender
+        request_fingerprint = prepared.request_fingerprint
+        if normalized_idempotency_key:
+            existing = self._repository.get_idempotency_record(sender.agent_id, normalized_idempotency_key)
+            if existing is not None:
+                existing_message_id, existing_fingerprint, _ = existing
+                if existing_fingerprint is not None and existing_fingerprint != request_fingerprint:
+                    raise IdempotencyConflictError("idempotency key reused with a different request")
+                return self._result_for_existing_message(
+                    existing_message_id,
+                    delivery_ids=self._repository.get_idempotency_delivery_ids(
+                        sender.agent_id, normalized_idempotency_key
+                    ),
+                    republish=True,
+                )
+        message, thread, deliveries = prepared.message, prepared.thread, prepared.deliveries
+        recipients = prepared.recipients
+
+        try:
+            created = self._repository.commit_message_send(
+                message=message,
+                thread=thread,
+                deliveries=deliveries,
+                sender_agent_id=sender.agent_id,
+                idempotency_key=normalized_idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        except IdempotencyKeyConflict as exc:
+            raise IdempotencyConflictError(str(exc)) from exc
+        except AtomicCommitConflict:
+            if normalized_idempotency_key:
+                existing = self._repository.get_idempotency_record(sender.agent_id, normalized_idempotency_key)
+                if existing is not None:
+                    existing_message_id, existing_fingerprint, _ = existing
+                    if existing_fingerprint is not None and existing_fingerprint != request_fingerprint:
+                        raise IdempotencyConflictError("idempotency key reused with a different request")
+                    return self._result_for_existing_message(
+                        existing_message_id,
+                        delivery_ids=self._repository.get_idempotency_delivery_ids(
+                            sender.agent_id, normalized_idempotency_key
+                        ),
+                        republish=True,
+                    )
+            if _retry_count < 2:
+                time.sleep(0.01 * (2 ** _retry_count))
+                return self.send_message(
+                    sender_handle=sender_handle,
+                    recipient_handles=recipient_handles,
+                    content=content,
+                    content_ref=content_ref,
+                    refs=refs,
+                    intent=intent,
+                    visibility=visibility,
+                    thread_id=thread_id,
+                    idempotency_key=normalized_idempotency_key,
+                    runtime_mode=runtime_mode,
+                    safety_evaluator=safety_evaluator,
+                    _retry_count=_retry_count + 1,
+                )
+            raise
+
+        if not created:
+            existing = self._repository.get_idempotency_record(sender.agent_id, normalized_idempotency_key or "")
+            if existing is None:
+                raise IdempotencyRecoveryConflict("idempotency record is missing after replay")
+            if existing[1] is not None and existing[1] != request_fingerprint:
+                raise IdempotencyConflictError("idempotency key reused with a different request")
+            return self._result_for_existing_message(
+                existing[0],
+                delivery_ids=self._repository.get_idempotency_delivery_ids(
+                    sender.agent_id, normalized_idempotency_key or ""
+                ),
+                republish=True,
+            )
 
         self._publish_delivery_created_events(
             deliveries=deliveries,
@@ -895,13 +1052,6 @@ class MessageHubService:
             sender=sender,
             recipients=recipients,
         )
-
-        if idempotency_key:
-            self._repository.put_idempotency_key(
-                sender.agent_id,
-                idempotency_key,
-                message.message_id,
-            )
 
         return SendMessageResult(message=message, thread=thread, deliveries=deliveries)
 
@@ -1187,9 +1337,9 @@ class MessageHubService:
         allowed_tool_names: Sequence[str] = (),
         allowed_use_terms: Sequence[str] = (),
         idempotency_key: str | None = None,
+        _retry_count: int = 0,
     ) -> TaskRecord:
         requester = self._require_agent_by_handle(requester_handle)
-        recipient = self._require_agent_by_handle(recipient_handle)
         normalized_objective = normalize_required(objective, "objective")
         require_small_inline(normalized_objective, "objective")
         normalized_context_refs = tuple(normalize_required(ref, "context_ref") for ref in context_refs)
@@ -1202,19 +1352,46 @@ class MessageHubService:
             for term in allowed_use_terms
         )
 
-        if idempotency_key:
-            normalized_idempotency_key = normalize_required(idempotency_key, "idempotency_key")
-            existing_task_id = self._repository.get_idempotent_task_id(
-                requester.agent_id,
-                normalized_idempotency_key,
-            )
-            if existing_task_id is not None:
-                existing_task = self._repository.get_task(existing_task_id)
-                if existing_task is not None:
-                    return existing_task
-        else:
-            normalized_idempotency_key = None
+        task_fingerprint = task_request_fingerprint(
+            requester_agent_id=requester.agent_id,
+            recipient_handle=recipient_handle,
+            objective=normalized_objective,
+            thread_id=thread_id,
+            context_refs=normalized_context_refs,
+            context_pack_id=context_pack_id,
+            context_pack_ref=context_pack_ref,
+            input_ref=input_ref,
+            stream_id=stream_id,
+            allowed_tool_names=normalized_allowed_tool_names,
+            allowed_use_terms=normalized_allowed_use_terms,
+        )
 
+        normalized_idempotency_key = (
+            normalize_required(idempotency_key, "idempotency_key")
+            if idempotency_key is not None
+            else None
+        )
+        if normalized_idempotency_key is not None:
+            existing = self._repository.get_idempotency_record(
+                requester.agent_id, normalized_idempotency_key, task=True
+            )
+            if existing is not None:
+                existing_task_id, existing_fingerprint, _ = existing
+                if existing_fingerprint is not None and existing_fingerprint != task_fingerprint:
+                    raise IdempotencyConflictError("idempotency key reused with a different task request")
+                existing_task = self._repository.get_task(existing_task_id)
+                if existing_task is None:
+                    raise IdempotencyRecoveryConflict("task idempotency record has no task")
+                self._result_for_existing_message(
+                    existing_task.request_message_id,
+                    delivery_ids=self._repository.get_idempotency_delivery_ids(
+                        requester.agent_id, normalized_idempotency_key, task=True
+                    ),
+                    republish=True,
+                )
+                return existing_task
+
+        recipient = self._require_agent_by_handle(recipient_handle)
         safety_decision = self._safety_evaluator.evaluate_send(
             SafetyCheckRequest(
                 sender=requester,
@@ -1228,8 +1405,15 @@ class MessageHubService:
         )
         require_deliverable(safety_decision)
 
-        task_id = self._new_id("task")
-        notification = self.send_message(
+        # A keyed retry must prepare the same task reference before the
+        # notification is sent; otherwise two concurrent callers would give
+        # the shared message key different request fingerprints.
+        task_id = (
+            f"task_{hashlib.sha256((task_fingerprint + '|' + normalized_idempotency_key).encode('utf-8')).hexdigest()[:32]}"
+            if normalized_idempotency_key is not None
+            else self._new_id("task")
+        )
+        notification = self._prepare_message_send(
             sender_handle=requester.handle,
             recipient_handles=(recipient.handle,),
             refs=(task_ref(task_id, "task request"),),
@@ -1237,6 +1421,15 @@ class MessageHubService:
             visibility="direct",
             thread_id=thread_id,
         )
+        if safety_status_for(safety_decision) == "needs_review":
+            notification = replace(
+                notification,
+                message=replace(notification.message, safety_status="needs_review"),
+                deliveries=tuple(
+                    replace(delivery, status=DeliveryStatus.NEEDS_REVIEW, current_stage="human.review")
+                    for delivery in notification.deliveries
+                ),
+            )
 
         now = self._clock()
         task = TaskRecord(
@@ -1258,13 +1451,88 @@ class MessageHubService:
             created_at=now,
             updated_at=now,
         )
-        self._repository.put_task(task)
-        if normalized_idempotency_key is not None:
-            self._repository.put_task_idempotency_key(
-                requester.agent_id,
-                normalized_idempotency_key,
-                task.task_id,
+        try:
+            created = self._repository.commit_task_creation(
+                message=notification.message,
+                thread=notification.thread,
+                deliveries=notification.deliveries,
+                task=task,
+                requester_agent_id=requester.agent_id,
+                idempotency_key=normalized_idempotency_key,
+                request_fingerprint=task_fingerprint,
             )
+        except IdempotencyKeyConflict as exc:
+            raise IdempotencyConflictError(str(exc)) from exc
+        except AtomicCommitConflict:
+            if normalized_idempotency_key is not None:
+                existing = self._repository.get_idempotency_record(
+                    requester.agent_id, normalized_idempotency_key, task=True
+                )
+                if existing is not None:
+                    existing_fingerprint = existing[1]
+                    if (
+                        existing_fingerprint is not None
+                        and existing_fingerprint != task_fingerprint
+                    ):
+                        raise IdempotencyConflictError(
+                            "idempotency key reused with a different task request"
+                        )
+                    existing_task = self._repository.get_task(existing[0])
+                    if existing_task is None:
+                        raise IdempotencyRecoveryConflict("task idempotency record has no task")
+                    self._result_for_existing_message(
+                        existing_task.request_message_id,
+                        delivery_ids=self._repository.get_idempotency_delivery_ids(
+                            requester.agent_id, normalized_idempotency_key, task=True
+                        ),
+                        republish=True,
+                    )
+                    return existing_task
+            if _retry_count < 2:
+                time.sleep(0.01 * (2 ** _retry_count))
+                return self.create_task(
+                    requester_handle=requester_handle,
+                    recipient_handle=recipient_handle,
+                    objective=objective,
+                    thread_id=thread_id,
+                    context_refs=context_refs,
+                    context_pack_id=context_pack_id,
+                    context_pack_ref=context_pack_ref,
+                    input_ref=input_ref,
+                    stream_id=stream_id,
+                    allowed_tool_names=allowed_tool_names,
+                    allowed_use_terms=allowed_use_terms,
+                    idempotency_key=idempotency_key,
+                    _retry_count=_retry_count + 1,
+                )
+            raise
+        if not created and normalized_idempotency_key is not None:
+            existing = self._repository.get_idempotency_record(
+                requester.agent_id, normalized_idempotency_key, task=True
+            )
+            if existing is None:
+                raise IdempotencyRecoveryConflict("task idempotency record is missing after replay")
+            if existing[1] is not None and existing[1] != task_fingerprint:
+                raise IdempotencyConflictError(
+                    "idempotency key reused with a different task request"
+                )
+            existing_task = self._repository.get_task(existing[0])
+            if existing_task is None:
+                raise IdempotencyRecoveryConflict("task idempotency record has no task")
+            self._result_for_existing_message(
+                existing_task.request_message_id,
+                delivery_ids=self._repository.get_idempotency_delivery_ids(
+                    requester.agent_id, normalized_idempotency_key, task=True
+                ),
+                republish=True,
+            )
+            return existing_task
+        self._publish_delivery_created_events(
+            deliveries=notification.deliveries,
+            message=notification.message,
+            sender=notification.sender,
+            recipients=notification.recipients,
+        )
         return task
 
     def get_task(self, task_id: str) -> TaskRecord:
@@ -3005,17 +3273,52 @@ class MessageHubService:
             raise NotFoundError(f"message not found: {delivery.message_id}")
         return InboxItem(delivery=delivery, message=message)
 
-    def _result_for_existing_message(self, message_id: str) -> SendMessageResult:
+    def _result_for_existing_message(
+        self, message_id: str, *, delivery_ids: tuple[str, ...] = (), republish: bool = False
+    ) -> SendMessageResult:
         message = self._repository.get_message(message_id)
         if message is None:
-            raise NotFoundError(f"message not found: {message_id}")
+            raise IdempotencyRecoveryConflict(f"idempotent message is missing: {message_id}")
 
         thread = self._repository.get_thread(message.thread_id)
         if thread is None:
-            raise NotFoundError(f"thread not found: {message.thread_id}")
+            raise IdempotencyRecoveryConflict(f"idempotent thread is missing: {message.thread_id}")
 
-        deliveries = self._repository.list_deliveries_by_message(message_id)
-        return SendMessageResult(message=message, thread=thread, deliveries=deliveries)
+        if delivery_ids:
+            deliveries = self._repository.list_deliveries_by_ids(delivery_ids)
+        else:
+            # Legacy keys did not record delivery IDs. An incomplete index
+            # response must remain retryable instead of acknowledging a
+            # partial replay as a successful send.
+            deliveries = self._repository.list_deliveries_by_message(message_id)
+        if (
+            len(deliveries) != len(message.recipient_agent_ids)
+            or any(delivery.message_id != message_id for delivery in deliveries)
+            or {delivery.recipient_agent_id for delivery in deliveries}
+            != set(message.recipient_agent_ids)
+        ):
+            raise IdempotencyRecoveryConflict("idempotent delivery set is incomplete")
+        result = SendMessageResult(
+            message=message,
+            thread=thread,
+            deliveries=deliveries,
+            replayed=True,
+        )
+        if republish and self._delivery_event_publisher is not None:
+            sender = self._repository.get_agent(message.sender_agent_id)
+            if sender is not None:
+                recipients = tuple(
+                    recipient
+                    for delivery in deliveries
+                    if (recipient := self._repository.get_agent(delivery.recipient_agent_id)) is not None
+                )
+                self._publish_delivery_created_events(
+                    deliveries=deliveries,
+                    message=message,
+                    sender=sender,
+                    recipients=recipients,
+                )
+        return result
 
     def _publish_delivery_created_events(
         self,
@@ -3202,6 +3505,73 @@ def normalize_optional_non_negative_int(value: int | None, field_name: str) -> i
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise InvalidMessageError(f"{field_name} must be non-negative")
     return value
+
+
+def message_request_fingerprint(
+    *,
+    sender_agent_id: str,
+    recipient_handles: Sequence[str],
+    content: str | None,
+    content_ref: str | None,
+    refs: Sequence[MessageRef],
+    intent: str,
+    visibility: str,
+    thread_id: str | None,
+    runtime_mode: str | None,
+) -> str:
+    """Hash the caller's normalized send inputs before IDs and routing exist."""
+    payload = {
+        "sender_agent_id": sender_agent_id,
+        "recipient_handles": [normalize_handle(handle) for handle in recipient_handles],
+        "content": content,
+        "content_ref": content_ref,
+        "refs": [
+            {
+                "type": ref.type,
+                "url": ref.url,
+                "find": ref.find,
+                "remember_as": ref.remember_as,
+            }
+            for ref in refs
+        ],
+        "intent": intent,
+        "visibility": visibility,
+        "thread_id": thread_id,
+        "runtime_mode": runtime_mode,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def task_request_fingerprint(
+    *,
+    requester_agent_id: str,
+    recipient_handle: str,
+    objective: str,
+    thread_id: str | None,
+    context_refs: Sequence[str],
+    context_pack_id: str | None,
+    context_pack_ref: str | None,
+    input_ref: str | None,
+    stream_id: str | None,
+    allowed_tool_names: Sequence[str],
+    allowed_use_terms: Sequence[str],
+) -> str:
+    payload = {
+        "requester_agent_id": requester_agent_id,
+        "recipient_handle": normalize_handle(recipient_handle),
+        "objective": objective,
+        "thread_id": thread_id,
+        "context_refs": list(context_refs),
+        "context_pack_id": normalized_optional_string(context_pack_id),
+        "context_pack_ref": normalized_optional_string(context_pack_ref),
+        "input_ref": normalized_optional_string(input_ref),
+        "stream_id": normalized_optional_string(stream_id),
+        "allowed_tool_names": list(allowed_tool_names),
+        "allowed_use_terms": list(allowed_use_terms),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def normalize_payload_access_scope(access_scope: str) -> str:

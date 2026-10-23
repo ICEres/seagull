@@ -19,6 +19,7 @@ import binascii
 import hmac
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable
@@ -40,7 +41,7 @@ from message_hub.domain import (
     MessageHubError,
     MessageHubService,
     SafetyBlockedError,
-    SendMessageResult,
+    WorkflowTraceEntry,
     delivery_created_event,
 )
 from message_hub.domain.safety import SafetyCheckRequest
@@ -342,28 +343,62 @@ class GatedMessageHubService(MessageHubService):
         )
         self._review_hold = review_hold
 
-    def send_message(self, **kwargs: Any) -> SendMessageResult:
-        result = super().send_message(**kwargs)
-        hold = self._review_hold() if self._review_hold is not None else None
-        if hold is None or not result.deliveries:
-            return result
+    def _prepare_message_send(self, **kwargs: Any) -> Any:
+        """Carry a gateway review decision into the initial atomic write.
 
-        note = f"held for human review by safety gateway decision {hold.get('decision_id')}"
+        ``SafetyGatewayEvaluator`` records a human-review decision while it
+        evaluates a request.  Consume that decision inside preparation so the
+        resulting delivery is written as ``needs_review`` in the same commit;
+        a stream consumer can therefore never observe a transiently delivered
+        row.  Task creation evaluates its task policy before preparing the
+        notification, so a pending decision from that first evaluation is also
+        carried into the notification transaction.
+        """
+        evaluator = kwargs.get("safety_evaluator")
+        if evaluator is not None and evaluator is not self._safety_evaluator:
+            if self._review_hold is not None:
+                self._review_hold()
+            return super()._prepare_message_send(**kwargs)
+
+        prior_hold = self._review_hold() if self._review_hold is not None else None
+        inner = self._safety_evaluator
+        holds: list[dict[str, Any]] = []
+
+        class ReviewAwareEvaluator:
+            def evaluate_send(_, request: SafetyCheckRequest) -> Any:
+                decision = inner.evaluate_send(request)
+                hold = self._review_hold() if self._review_hold is not None else None
+                hold = hold or prior_hold
+                if hold is not None:
+                    holds.append(hold)
+                    return _review_held_decision(decision, hold)
+                return decision
+
+        kwargs["safety_evaluator"] = ReviewAwareEvaluator()
+        prepared = super()._prepare_message_send(**kwargs)
+        if not holds:
+            return prepared
+
+        hold = holds[-1]
         reasons = hold.get("reasons") or []
+        note = f"held for human review by safety gateway decision {hold.get('decision_id')}"
         if reasons:
             note = f"{note}: {', '.join(reasons)}"
-        held = tuple(
-            self.apply_hook_result(
-                delivery.delivery_id,
-                hook="delivery.before",
-                runtime="cloud",
-                actor="safety-gateway",
-                action="review",
-                note=note,
-            )
-            for delivery in result.deliveries
+        trace = WorkflowTraceEntry(
+            hook="delivery.before",
+            runtime="cloud",
+            action="review",
+            actor="safety-gateway",
+            note=note,
+            created_at=self._clock(),
         )
-        return SendMessageResult(message=result.message, thread=result.thread, deliveries=held)
+        return replace(
+            prepared,
+            deliveries=tuple(
+                replace(delivery, workflow_trace=(*delivery.workflow_trace, trace))
+                for delivery in prepared.deliveries
+            ),
+        )
 
     def _publish_delivery_created_events(self, *, deliveries, message, sender, recipients) -> None:
         if self._delivery_event_publisher is None:
@@ -380,6 +415,20 @@ class GatedMessageHubService(MessageHubService):
                 )
             )
 
+
+def _review_held_decision(decision: Any, hold: dict[str, Any]) -> Any:
+    class HeldAction:
+        value = "needs_review"
+
+    class HeldDecision:
+        action = HeldAction()
+        deliverable = True
+        decision_id = str(hold.get("decision_id") or getattr(decision, "decision_id", "review_hold"))
+        risk = getattr(decision, "risk", None)
+        reasons = tuple(hold.get("reasons") or getattr(decision, "reasons", ()) or ())
+        policy_ids = tuple(getattr(decision, "policy_ids", ()) or ()) + ("safety_gateway.human_review",)
+
+    return HeldDecision()
 
 class SqsDeliveryEventSink:
     """Sends wire-shaped delivery events to the agent jobs SQS queue."""
@@ -467,7 +516,8 @@ def build_service(
     sink = delivery_event_publisher
     if sink is None:
         queue_url = _cfg(config, "AGENT_JOBS_QUEUE_URL").strip()
-        if queue_url:
+        stream_publication = _cfg(config, "DELIVERY_STREAM_PUBLICATION_ENABLED", "false").lower() == "true"
+        if queue_url and not stream_publication:
             sink = SqsDeliveryEventSink(queue_url)
 
     publisher = None

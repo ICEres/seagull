@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from unittest import TestCase
@@ -12,6 +13,7 @@ from message_hub.domain import (
     ForbiddenDeliveryError,
     ForbiddenPayloadError,
     InvalidMessageError,
+    IdempotencyConflictError,
     InvalidTaskTransitionError,
     MAX_ENVELOPE_INLINE_CHARS,
     MessageHubService,
@@ -82,6 +84,90 @@ class MessageHubServiceTest(TestCase):
         context = self.service.get_thread_context(result.thread.thread_id)
         self.assertIsNone(context.summary)
         self.assertEqual((result.message,), context.recent_messages)
+
+    def test_concurrent_keyed_sends_commit_one_resource_set(self) -> None:
+        barrier = __import__("threading").Barrier(100)
+        original = self.repository.get_idempotency_record
+        calls = {"count": 0}
+        calls_lock = __import__("threading").Lock()
+
+        def synchronized(*args, **kwargs):
+            value = original(*args, **kwargs)
+            with calls_lock:
+                should_wait = args[1] == "concurrent-key" and calls["count"] < 100
+                calls["count"] += 1
+            if should_wait:
+                barrier.wait(timeout=10)
+            return value
+
+        self.repository.get_idempotency_record = synchronized  # type: ignore[method-assign]
+
+        def send():
+            return self.service.send_message(
+                sender_handle="@researcher:gulls.ai",
+                recipient_handles=["@reviewer:gulls.ai"],
+                content="one accepted operation",
+                idempotency_key="concurrent-key",
+            )
+
+        with ThreadPoolExecutor(max_workers=100) as pool:
+            results = list(pool.map(lambda _: send(), range(100)))
+
+        self.assertEqual(1, len(self.repository.list_messages_by_sender(self.sender.agent_id)))
+        self.assertEqual(1, len({result.message.message_id for result in results}))
+        self.assertEqual(1, len({result.thread.thread_id for result in results}))
+        self.assertEqual({1}, {result.thread.message_count for result in results})
+        self.assertEqual(1, len(self.repository.list_deliveries_by_recipient(self.recipient.agent_id)))
+
+    def test_key_reuse_with_changed_content_is_rejected(self) -> None:
+        self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="first",
+            idempotency_key="same-key",
+        )
+        with self.assertRaisesRegex(IdempotencyConflictError, "different request"):
+            self.service.send_message(
+                sender_handle="@researcher:gulls.ai",
+                recipient_handles=["@reviewer:gulls.ai"],
+                content="changed",
+                idempotency_key="same-key",
+            )
+
+    def test_keyed_task_retry_reuses_notification_and_task(self) -> None:
+        first = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the queued task.",
+            idempotency_key="task-key",
+        )
+        second = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the queued task.",
+            idempotency_key="task-key",
+        )
+        self.assertEqual(first.task_id, second.task_id)
+        self.assertEqual(first.request_message_id, second.request_message_id)
+        self.assertEqual(1, len(self.repository.list_tasks_by_requester(self.sender.agent_id)))
+        self.assertEqual(1, len(self.repository.list_messages_by_sender(self.sender.agent_id)))
+
+    def test_same_task_payload_with_different_keys_creates_distinct_tasks(self) -> None:
+        first = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the queued task.",
+            idempotency_key="task-key-a",
+        )
+        second = self.service.create_task(
+            requester_handle="@researcher:gulls.ai",
+            recipient_handle="@reviewer:gulls.ai",
+            objective="Review the queued task.",
+            idempotency_key="task-key-b",
+        )
+        self.assertNotEqual(first.task_id, second.task_id)
+        self.assertNotEqual(first.request_message_id, second.request_message_id)
+        self.assertEqual(2, len(self.repository.list_tasks_by_requester(self.sender.agent_id)))
 
     def test_send_into_existing_thread_requires_participation(self) -> None:
         started = self.service.send_message(

@@ -25,6 +25,8 @@ final class GullsConfig {
     // Local inbox monitoring only. This never enables AI replies.
     var monitoringEnabled: Bool { didSet { defaults.set(monitoringEnabled, forKey: keys.monitoringEnabled) } }
 
+    var codexEnabled: Bool { didSet { defaults.set(codexEnabled, forKey: keys.codexEnabled) } }
+
     // The connection editor saves explicitly; tokens never enter UserDefaults.
     var token: String {
         didSet {
@@ -102,6 +104,7 @@ final class GullsConfig {
         self.monitoringEnabled = defaults.object(forKey: keys.monitoringEnabled) == nil
             ? (legacy ? (defaults.object(forKey: "monitoringEnabled") as? Bool ?? true) : true)
             : defaults.bool(forKey: keys.monitoringEnabled)
+        self.codexEnabled = defaults.bool(forKey: keys.codexEnabled)
         let legacyToken = legacy && !defaults.bool(forKey: keys.legacyTokenMigrated)
             ? tokenStore.legacyToken()
             : nil
@@ -197,12 +200,13 @@ final class GullsConfig {
     }
 
     private struct ProfileKeys {
-        let displayName, apiURL, socialAPIURL, nodeID, agentHandle, pollInterval, contextDir, streamURL, monitoringEnabled, legacyTokenMigrated: String
+        let displayName, apiURL, socialAPIURL, nodeID, agentHandle, pollInterval, contextDir, streamURL, monitoringEnabled, codexEnabled, legacyTokenMigrated: String
         init(profileID: String) {
             let prefix = "gull.profile.\(profileID)."
             displayName = prefix + "displayName"; apiURL = prefix + "apiURL"; socialAPIURL = prefix + "socialAPIURL"
             nodeID = prefix + "nodeID"; agentHandle = prefix + "agentHandle"; pollInterval = prefix + "pollInterval"
             contextDir = prefix + "contextDir"; streamURL = prefix + "streamURL"; monitoringEnabled = prefix + "monitoringEnabled"
+            codexEnabled = prefix + "codexEnabled"
             legacyTokenMigrated = prefix + "legacyTokenMigrated"
         }
     }

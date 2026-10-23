@@ -109,10 +109,25 @@ struct DashboardRelationshipDetailView: View {
         section("Observed activity") {
             VStack(alignment: .leading, spacing: 12) {
                 routeLine(for: relationship)
-                HStack(spacing: 0) {
-                    metric("Received", value: relationship.deliveryCount)
-                    metric("Conversations", value: relationship.groups.count)
-                    metric("Review", value: relationship.attentionCount)
+                if compact {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), alignment: .leading),
+                            GridItem(.flexible(), alignment: .leading)
+                        ],
+                        alignment: .leading,
+                        spacing: 10
+                    ) {
+                        metric("Received", value: relationship.deliveryCount)
+                        metric("Conversations", value: relationship.groups.count)
+                        metric("Review", value: relationship.attentionCount)
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        metric("Received", value: relationship.deliveryCount)
+                        metric("Conversations", value: relationship.groups.count)
+                        metric("Review", value: relationship.attentionCount)
+                    }
                 }
                 statusLine(for: relationship)
             }

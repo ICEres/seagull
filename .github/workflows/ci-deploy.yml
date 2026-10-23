@@ -465,6 +465,26 @@ jobs:
         working-directory: infra/terraform/envs/dev
         run: terraform plan -input=false -out=tfplan
 
+      - name: Protect persistent data stores
+        working-directory: infra/terraform/envs/dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan | python -c '
+          import json, sys
+          plan = json.load(sys.stdin)
+          protected = {"aws_dynamodb_table", "aws_s3_bucket", "aws_cognito_user_pool", "aws_sqs_queue"}
+          blocked = []
+          for resource in plan.get("resource_changes", []):
+              actions = resource["change"]["actions"]
+              if actions != ["no-op"]:
+                  print(resource["address"] + ": " + ", ".join(actions))
+              if resource["type"] in protected and "delete" in actions:
+                  blocked.append(resource["address"])
+          if blocked:
+              sys.exit("Refusing to delete or replace persistent data stores: " + ", ".join(blocked))
+          '
+
       - name: Apply dev deploy
         working-directory: infra/terraform/envs/dev
         run: terraform apply -input=false -auto-approve tfplan

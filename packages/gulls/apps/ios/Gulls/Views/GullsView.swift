@@ -42,7 +42,7 @@ struct GullsView: View {
         .sheet(item: $selectedSaved) { SavedGullDetail(gull: $0).presentationDetents([.medium, .large]) }
         .sheet(isPresented: $showingAdd) { AddGullView().presentationDetents([.medium, .large]) }
         .task {
-            _ = await store.refreshGulls()
+            store.syncInBackground()
         }
         .refreshable { _ = await store.refreshGulls() }
     }

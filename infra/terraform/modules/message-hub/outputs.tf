@@ -51,6 +51,11 @@ output "payload_objects_bucket_name" {
   value       = aws_s3_bucket.payload_objects.bucket
 }
 
+output "deliveries_stream_arn" {
+  description = "DynamoDB Stream ARN for committed delivery publication."
+  value       = aws_dynamodb_table.deliveries.stream_arn
+}
+
 output "payload_objects_bucket_arn" {
   description = "S3 bucket ARN for compressed payload objects."
   value       = aws_s3_bucket.payload_objects.arn

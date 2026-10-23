@@ -358,7 +358,7 @@ struct CloudRoutingRuleDraft: Encodable, Equatable {
     var enabled: Bool
 }
 
-struct CloudServerSnapshot: Equatable {
+struct CloudServerSnapshot: Codable, Equatable {
     var health: [String: CloudHealth]
     var providerConfigs: [CloudProviderConfig]
     var serverBalance: CloudServerCreditBalance?

@@ -3,14 +3,15 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var workspace: GullsWorkspace
     @Bindable var account: CloudAccountStore
+    @Binding var appearance: GullsAppearance
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var section: Section = .account
     @State private var pairingGull: CloudGull?
 
     private enum Section: String, CaseIterable, Identifiable {
         case account = "Account"
+        case appearance = "Appearance"
         case usage = "AI usage"
         case gulls = "My Gulls"
         case local = "This Mac"
@@ -20,6 +21,7 @@ struct SettingsView: View {
         var symbol: String? {
             switch self {
             case .account: return "person.crop.circle"
+            case .appearance: return "circle.lefthalf.filled"
             case .gulls: return nil
             case .usage: return "chart.bar"
             case .server: return "server.rack"
@@ -36,39 +38,30 @@ struct SettingsView: View {
         }
     }
 
-    private var visibleSections: [Section] {
-        Section.allCases.filter { $0 != .server || account.isAdmin }
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 22) {
-                    navigationGroup("Personal", sections: [.account, .usage], proxy: proxy)
+                    navigationGroup("Personal", sections: [.account, .appearance, .usage], proxy: proxy)
                     navigationGroup("Gulls", sections: [.gulls, .local], proxy: proxy)
-                    if account.isAdmin {
-                        navigationGroup("Administration", sections: [.server], proxy: proxy)
-                    }
+                    navigationGroup("Administration", sections: [.server], proxy: proxy)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 18)
                 .frame(width: 174)
 
-                settingsLayout(proxy: proxy)
+                settingsPage(proxy: proxy)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .gullsScrollEdges()
             }
-            .onChange(of: account.isAdmin) { _, isAdmin in
-                if section == .server, !isAdmin { scroll(to: .account, using: proxy) }
-            }
         }
-        .background(GullsStyle.canvas)
+        .gullsWindowBackground()
         .tint(GullsStyle.accent)
         .navigationTitle("Settings")
         .toolbarBackground(.hidden, for: .windowToolbar)
-        .gullsWindowChrome()
-        .frame(width: 800, height: 580)
+        .gullsWindowChrome(resizable: true)
+        .frame(minWidth: 680, minHeight: 520)
         .background {
             Button("Close Settings") { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -111,7 +104,7 @@ struct SettingsView: View {
         }
     }
 
-    private func scroll(to destination: Section, using proxy: ScrollViewProxy) {
+    private func scroll<Destination: Hashable>(to destination: Destination, using proxy: ScrollViewProxy) {
         if reduceMotion {
             proxy.scrollTo(destination, anchor: .top)
         } else {
@@ -121,34 +114,11 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private func settingsLayout(proxy: ScrollViewProxy) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            settingsPage(proxy: proxy).safeAreaBar(edge: .top, spacing: 0) { header }
-        } else {
-            settingsPage(proxy: proxy).safeAreaInset(edge: .top, spacing: 0) {
-                header.background(GullsStyle.canvas)
-            }
-        }
-    }
-
-    private var header: some View {
-        HStack {
-            GullsPageTitle(section.rawValue).font(.title3.weight(.semibold))
-            Spacer()
-            Text("Preferences save automatically")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
-    }
-
     private func settingsPage(proxy: ScrollViewProxy) -> some View {
         GeometryReader { viewport in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(visibleSections) { item in
+                    ForEach(Section.allCases) { item in
                         VStack(alignment: .leading, spacing: 0) {
                             GullsPageTitle(item.rawValue)
                                 .font(.title2.weight(.semibold))
@@ -174,7 +144,7 @@ struct SettingsView: View {
             .gullsHiddenScrollbars()
             .onPreferenceChange(SectionFrames.self) { frames in
                 let atBottom = frames.values.map(\.maxY).max().map { $0 <= viewport.size.height } ?? false
-                let visible = atBottom ? visibleSections.last : visibleSections.last {
+                let visible = atBottom ? Section.allCases.last : Section.allCases.last {
                     (frames[$0]?.minY ?? .infinity) <= 36
                 }
                 if let visible, visible != section { section = visible }
@@ -187,6 +157,19 @@ struct SettingsView: View {
         switch item {
         case .account:
             AccountSettingsView(account: account)
+        case .appearance:
+            CloudSettingsSection("Color scheme", detail: "Match your Mac, or choose a light or dark appearance.") {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(GullsAppearance.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 340, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(24)
         case .local:
             LocalConnectionsView(workspace: workspace, account: account, pairingGull: $pairingGull)
         case .gulls, .usage, .server:
@@ -195,7 +178,7 @@ struct SettingsView: View {
                 case .gulls:
                     GullSettingsView(account: account, onPair: { gull in
                         pairingGull = gull
-                        scroll(to: .local, using: proxy)
+                        scroll(to: LocalConnectionsView.pairingAnchor, using: proxy)
                     })
                 case .usage:
                     AIUsageSettingsView(account: account)
@@ -205,7 +188,7 @@ struct SettingsView: View {
             } else {
                 CloudSettingsSection("Sign in to your account", detail: "Manage your Gulls and cloud settings with your email account.") {
                     Button("Sign in") {
-                        scroll(to: .account, using: proxy)
+                        scroll(to: Section.account, using: proxy)
                         account.startBrowserSignIn()
                     }
                     .buttonStyle(.borderedProminent)

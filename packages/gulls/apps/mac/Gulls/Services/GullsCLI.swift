@@ -56,6 +56,7 @@ actor GullsCLI {
         case launch(String)
         case configuration(String)   // exit code 2: usage/config — point the user at Settings
         case runtime(String)         // exit code 1: runtime/HTTP error from the hub
+        case rejected(String)        // exit code 3: post was definitively rejected before creation
         case decoding(command: String, underlying: Error)
 
         var errorDescription: String? {
@@ -66,13 +67,15 @@ actor GullsCLI {
                 return "Configuration problem — check Settings. \(message)"
             case .runtime(let message):
                 return message
+            case .rejected(let message):
+                return message
             case .decoding(let command, let underlying):
                 return "Unexpected \(command) output from the gulls CLI: \(underlying.localizedDescription)"
             }
         }
     }
 
-    private let executableURL: URL
+    nonisolated let executableURL: URL
     private let decoder = JSONDecoder()
     private let runtimeBridge: GullsRuntimeBridge
     private var runtimeProfiles: [String: RuntimeProfile] = [:]
@@ -144,6 +147,22 @@ actor GullsCLI {
         return response.items
     }
 
+    func history(limit: Int = 50, cursor: String? = nil, query: String? = nil,
+                 status: String? = nil, threadID: String? = nil,
+                 environment: Environment) async throws -> MessageHistoryResponse {
+        var command = ["history", "--limit", String(max(1, min(limit, 100)))]
+        if let cursor, !cursor.isEmpty { command.append(contentsOf: ["--cursor", cursor]) }
+        if let query, !query.isEmpty { command.append(contentsOf: ["--query", query]) }
+        if let status, !status.isEmpty { command.append(contentsOf: ["--status", status]) }
+        if let threadID, !threadID.isEmpty { command.append(contentsOf: ["--thread-id", threadID]) }
+        return try await runDecoding(command, environment: environment)
+    }
+
+    func historySummary(days: Int = 7, environment: Environment) async throws -> MessageHistorySummary {
+        try await runDecoding(["history", "summary", "--days", String(max(1, min(days, 31)))],
+                              environment: environment)
+    }
+
     func openDelivery(id: String, environment: Environment) async throws -> OpenResult {
         try await runDecoding(["open", id], environment: environment)
     }
@@ -178,6 +197,30 @@ actor GullsCLI {
 
     func ignore(id: String, environment: Environment) async throws -> DecisionResult {
         try await runDecoding(["ignore", id], environment: environment)
+    }
+
+    func post(to recipientHandle: String, content: String, threadID: String? = nil,
+              idempotencyKey: String? = nil,
+              environment: Environment) async throws -> GullPostResult {
+        var command = ["post", "--to", recipientHandle]
+        if let threadID, !threadID.isEmpty {
+            command.append(contentsOf: ["--thread-id", threadID])
+        }
+        if let idempotencyKey, !idempotencyKey.isEmpty {
+            command.append(contentsOf: ["--idempotency-key", idempotencyKey])
+        }
+        // Terminate flags so a perfectly valid message beginning with "-"
+        // remains message content. Newlines stay inside the single argument.
+        command.append(contentsOf: ["--", content])
+        return try await runDecoding(command, environment: environment)
+    }
+
+    func thread(id: String, limit: Int = 50, cursor: String? = nil,
+                environment: Environment) async throws -> GullThreadResult {
+        var command = ["thread", "--limit", String(max(1, min(limit, 100)))]
+        if let cursor, !cursor.isEmpty { command.append(contentsOf: ["--cursor", cursor]) }
+        command.append(id)
+        return try await runDecoding(command, environment: environment)
     }
 
     // MARK: - Streaming (long-running `gulls stream`)
@@ -336,6 +379,8 @@ actor GullsCLI {
             return stdout
         case 2:
             throw Failure.configuration(trimmedText(stderr))
+        case 3:
+            throw Failure.rejected(trimmedText(stderr))
         default:
             throw Failure.runtime(trimmedText(stderr))
         }

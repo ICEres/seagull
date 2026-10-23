@@ -52,6 +52,9 @@ func MainWithProgram(programName string, args []string, stdout io.Writer, stderr
 		return 2
 	}
 	fmt.Fprintf(stderr, "%s: %v\n", programName, err)
+	if code == 3 {
+		return 3
+	}
 	return 1
 }
 
@@ -75,12 +78,17 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 
 	command := remaining[0]
 	commandArgs := remaining[1:]
-	if allowRuntimeRoute && client == nil {
+	// Codex result is a local handoff operation. It must read and write only
+	// the profile's private context directory and must never cross the runtime
+	// socket or make a network request.
+	if allowRuntimeRoute && client == nil && remaining[0] != "codex" {
 		if code, handled, err := tryRuntimeRoute(global, remaining, stdout, stderr, env); handled {
 			return code, err
 		}
 	}
 	switch command {
+	case "codex":
+		return runCodexCommand(commandArgs, global, stdout, stderr, env)
 	case "runtime":
 		return runRuntimeCommand(commandArgs, global, stdout, stderr, env)
 	case "version":
@@ -156,6 +164,8 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 		}
 		printJSONOrText(stdout, global.JSON, result, formatInbox(result))
 		return 0, nil
+	case "history":
+		return runHistoryCommand(commandArgs, global, stdout, stderr, env, client)
 	case "open":
 		fs := commandFlagSet("open", stderr)
 		limit := fs.Int("limit", 100, "maximum inbox deliveries to search")
@@ -186,6 +196,7 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 	case "thread":
 		fs := commandFlagSet("thread", stderr)
 		limit := fs.Int("limit", 50, "maximum thread messages")
+		cursor := fs.String("cursor", "", "continue from a thread history page")
 		if err := parseCommand(fs, commandArgs); err != nil {
 			return 0, err
 		}
@@ -199,7 +210,14 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 		if err != nil {
 			return 0, err
 		}
-		result, err := client.GetThread(fs.Arg(0), *limit)
+		var result map[string]any
+		if paged, ok := client.(pagedThreadClient); ok {
+			result, err = paged.GetThreadPage(fs.Arg(0), *limit, *cursor)
+		} else if *cursor != "" {
+			return 0, usage("thread pagination is unavailable for this connection")
+		} else {
+			result, err = client.GetThread(fs.Arg(0), *limit)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -353,6 +371,7 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 		fs.Var(&recipients, "to", "recipient handle")
 		threadID := fs.String("thread-id", "", "thread id")
 		intent := fs.String("intent", "message", "message intent")
+		idempotencyKey := fs.String("idempotency-key", "", "stable key for safe retries")
 		if err := parseCommand(fs, commandArgs); err != nil {
 			return 0, err
 		}
@@ -366,8 +385,24 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 		if err != nil {
 			return 0, err
 		}
-		result, err := client.SendMessage(config.AgentHandle, recipients, strings.Join(fs.Args(), " "), *threadID, *intent, "direct")
+		content := strings.Join(fs.Args(), " ")
+		var result map[string]any
+		if keyed, ok := client.(idempotentMessageClient); ok && strings.TrimSpace(*idempotencyKey) != "" {
+			result, err = keyed.SendMessageWithIdempotency(config.AgentHandle, recipients, content, *threadID, *intent, "direct", strings.TrimSpace(*idempotencyKey))
+		} else {
+			result, err = client.SendMessage(config.AgentHandle, recipients, content, *threadID, *intent, "direct")
+		}
 		if err != nil {
+			// Only explicit pre-commit rejections can be safely distinguished
+			// from a lost response. Conflicts and server/network failures remain
+			// uncertain so durable outboxes never infer that nothing was sent.
+			var rejected *statusError
+			if errors.As(err, &rejected) {
+				switch rejected.code {
+				case 400, 401, 403, 404, 413, 422:
+					return 3, err
+				}
+			}
 			return 0, err
 		}
 		printJSONOrText(stdout, global.JSON, result, fmt.Sprintf("Sent %v in %v.", result["message_id"], result["thread_id"]))
@@ -548,6 +583,21 @@ func requireInboxDelivery(client Client, config Config, deliveryID string, limit
 		return nil, err
 	}
 	item := findInboxItem(inboxItems(inbox), deliveryID)
+	if item == nil {
+		if history, ok := client.(historyDeliveryClient); ok {
+			item, err = history.HistoryDelivery(deliveryID)
+			if err != nil {
+				return nil, err
+			}
+			// Cached bodies may supply an old delivery, but instructions always
+			// come from the authenticated request above, never from SQLite.
+			if item != nil {
+				if instructions := objectValue(inbox, "local_runtime"); instructions != nil {
+					item["local_runtime"] = instructions
+				}
+			}
+		}
+	}
 	if item == nil {
 		return nil, fmt.Errorf("delivery not found in inbox: %s", deliveryID)
 	}
@@ -796,7 +846,7 @@ func printUsage(out io.Writer, programName string) {
 		programName = "gulls"
 	}
 	fmt.Fprintf(out, "usage: %s [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--json] <command> [args]\n", programName)
-	fmt.Fprintln(out, "commands: runtime serve|status, inbox, watch, open, reply, ack, ignore, draft-reply, post, whoami, thread, context, route, local-action")
+	fmt.Fprintln(out, "commands: runtime serve|status, inbox, history [summary], watch, open, reply, ack, ignore, draft-reply, post, whoami, thread, context, route, local-action, codex result")
 }
 
 type stringList []string

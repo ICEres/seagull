@@ -14,6 +14,7 @@ struct DashboardView: View {
     var usageScopeAgentID: String? = nil
     var isSignedIn = false
     var usageError: String? = nil
+    var historySummary: MessageHistorySummary? = nil
     let isRefreshing: Bool
     let hasConnections: Bool
     let onRefresh: () -> Void
@@ -25,15 +26,18 @@ struct DashboardView: View {
     let onSettings: () -> Void
     var localControls: [LocalControlStore] = []
     var onReviewLocalAction: (LocalControlStore, LocalActionRequest) -> Void = { _, _ in }
+    var codexTasks: [CodexTaskStore] = []
+    var onOpenCodexTask: (CodexTaskStore, CodexTask) -> Void = { _, _ in }
     var compact = false
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var relationshipView = RelationshipView.map
+    @State private var isHeaderCondensed = false
 
     private enum RelationshipView: String, CaseIterable {
         case map = "Map"
-        case byGull = "By Gull"
+        case byGull = "List"
     }
 
     private var localActionCount: Int {
@@ -47,7 +51,7 @@ struct DashboardView: View {
     var body: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
             content
-                .safeAreaBar(edge: .top, spacing: 12) { header }
+                .gullsSafeAreaBar(edge: .top, spacing: 0, style: .minimal) { header }
                 .gullsScrollEdges()
         } else {
             content
@@ -60,6 +64,8 @@ struct DashboardView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
+                    headerDetails
+                        .gullsHeaderControlsVisibility(isCondensed: $isHeaderCondensed)
                     if hasConnections {
                         statistics
                         connections.id("dashboard-connections")
@@ -75,24 +81,25 @@ struct DashboardView: View {
                             .id("dashboard-relationship")
                         }
                         needsYou
+                        codexActivity
                         LocalActionsDashboardSection(controls: localControls, onReview: onReviewLocalAction, compact: compact)
                         activityChart
                         cloudUsage
-                        Text("Based on up to 100 loaded deliveries per connected Gull. Connections show observed incoming messages; activity uses creation dates where available.")
+                        Text("Based on message history currently synced to this Mac. Older history may still be loading; activity uses creation dates where available.")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         emptySetup
+                        codexActivity
                         cloudUsage
                     }
                 }
                 .frame(maxWidth: 960, alignment: .leading)
-                .padding(.horizontal, compact ? 16 : 28)
+                .padding(.horizontal, compact ? 14 : 28)
                 .padding(.vertical, 22)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .background(GullsStyle.canvas)
             .gullsHiddenScrollbars()
             .onChange(of: selectedRelationship?.id, initial: true) { oldID, newID in
                 guard oldID != nil || newID != nil else { return }
@@ -104,60 +111,79 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    GullsPageTitle("Overview")
-                        .font(.title2.weight(.semibold))
-                    Text("Your circle of collaboration")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Button(action: onRefresh) {
-                    if isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Refresh dashboard", systemImage: "arrow.clockwise")
-                            .labelStyle(.iconOnly)
-                    }
-                }
-                .disabled(isRefreshing)
-                .help("Refresh messages and cloud usage")
-                Button(action: onConversations) {
-                    Label("All conversations", systemImage: "bubble.left.and.bubble.right")
+        HStack(spacing: 12) {
+            GullsPageTitle("Overview")
+                .font(.title2.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if isHeaderCondensed && scopeOptions.count > 1 {
+                Menu { scopePicker } label: {
+                    Label("Dashboard scope", systemImage: "line.3.horizontal.decrease")
                         .labelStyle(.iconOnly)
                 }
-                .help("Show all loaded conversations")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 28, height: 28)
+                .accessibilityValue(scopeName ?? "All connected Gulls")
+                .help("Dashboard scope: \(scopeName ?? "All connected Gulls")")
             }
-            .buttonStyle(.borderless)
-            if scopeOptions.count > 1 {
-                Picker("Dashboard scope", selection: Binding(get: { scopeProfileID }, set: onScopeChange)) {
-                    Text("All connected Gulls").tag(String?.none)
-                    ForEach(scopeOptions) { gull in
-                        Text(gull.displayName ?? gull.handle).tag(Optional(gull.id))
-                    }
+            Button(action: onRefresh) {
+                if isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Refresh dashboard", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 240, alignment: .leading)
-                .controlSize(.small)
+            }
+            .disabled(isRefreshing)
+            .help("Refresh messages and cloud usage")
+            Button(action: onConversations) {
+                Label("All conversations", systemImage: "bubble.left.and.bubble.right")
+                    .labelStyle(.iconOnly)
+            }
+            .help("Show all loaded conversations")
+        }
+        .buttonStyle(.borderless)
+        .frame(minHeight: 28)
+        .padding(.horizontal, compact ? 14 : 28)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var headerDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your circle of collaboration")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if scopeOptions.count > 1 {
+                scopePicker
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .controlSize(.small)
             } else {
                 Text(scopeName ?? "Connected on this Mac")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, compact ? 16 : 28)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var scopePicker: some View {
+        Picker("Dashboard scope", selection: Binding(get: { scopeProfileID }, set: onScopeChange)) {
+            Text("All connected Gulls").tag(String?.none)
+            ForEach(scopeOptions) { gull in
+                Text(gull.displayName ?? gull.handle).tag(Optional(gull.id))
+            }
+        }
     }
 
     private var statistics: some View {
         HStack(alignment: .top, spacing: 12) {
-            metric("Counterparts", value: relationships.counterpartCount)
-            metric("Conversations", value: relationships.conversationCount)
+            metric("Counterparts", value: historySummary?.distinctSenders ?? relationships.counterpartCount)
+            metric("Conversations", value: historySummary?.distinctThreads ?? relationships.conversationCount)
             metric("Needs you", value: snapshot.needsAttention.count + localActionCount, prominent: true)
         }
         .accessibilityElement(children: .contain)
@@ -185,14 +211,27 @@ struct DashboardView: View {
             HStack {
                 Text("Connections").font(.headline)
                 Spacer(minLength: 8)
-                Picker("Relationship view", selection: $relationshipView) {
+                HStack(spacing: 16) {
                     ForEach(RelationshipView.allCases, id: \.self) { view in
-                        Text(view.rawValue).tag(view)
+                        Button {
+                            relationshipView = view
+                        } label: {
+                            Text(view.rawValue)
+                                .font(.subheadline)
+                                .fontWeight(relationshipView == view ? .semibold : .regular)
+                                .foregroundStyle(relationshipView == view ? GullsStyle.accent : .secondary)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(relationshipView == view ? .isSelected : [])
+                        .help(view == .map ? "Show the relationship map" : "Show connections grouped by Gull")
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 136)
+                .fixedSize()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Relationship view")
+                .accessibilityValue(relationshipView.rawValue)
             }
             if relationshipView == .map {
                 DashboardRelationshipMap(
@@ -294,26 +333,119 @@ struct DashboardView: View {
         }
     }
 
+    private var codexActivity: some View {
+        let entries = codexEntries
+        return Group {
+            if !entries.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Codex").font(.headline)
+                        Spacer(minLength: 8)
+                        Text(codexSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(entries.prefix(4)) { entry in
+                        Button { onOpenCodexTask(entry.store, entry.task) } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                GullAvatar(handle: entry.store.config.cliEnvironment().agentHandle, size: 28)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entry.task.request.goal)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(2)
+                                    Text("\(entry.gullName) · \(codexStatus(entry.task))")
+                                        .font(.caption)
+                                        .foregroundStyle(entry.task.execution?.status == .needsApproval ? GullsStyle.accent : .secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .foregroundStyle(Color.primary)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Codex task: \(entry.task.request.goal), \(codexStatus(entry.task))")
+                    }
+                    if entries.count > 4 {
+                        Text("\(entries.count - 4) more Codex tasks in Settings")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private struct CodexDashboardEntry: Identifiable {
+        let store: CodexTaskStore
+        let task: CodexTask
+
+        var id: String { "\(task.request.profileID):\(task.id)" }
+
+        @MainActor var gullName: String {
+            let configured = store.config.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return configured.isEmpty ? store.config.cliEnvironment().agentHandle : configured
+        }
+    }
+
+    private var codexEntries: [CodexDashboardEntry] {
+        codexTasks.flatMap { store in
+            store.tasks.compactMap { task in
+                task.execution == nil ? nil : CodexDashboardEntry(store: store, task: task)
+            }
+        }
+        .sorted { ($0.task.request.createdAt, $0.id) > ($1.task.request.createdAt, $1.id) }
+    }
+
+    private var codexSummary: String {
+        let statuses = codexEntries.compactMap { $0.task.execution?.status }
+        let active = statuses.filter { $0 == .starting || $0 == .working }.count
+        let approval = statuses.filter { $0 == .needsApproval }.count
+        let ready = statuses.filter { $0 == .draftReady }.count
+        var parts: [String] = []
+        if active > 0 { parts.append("\(active) working") }
+        if approval > 0 { parts.append("\(approval) needs approval") }
+        if ready > 0 { parts.append("\(ready) ready") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func codexStatus(_ task: CodexTask) -> String {
+        switch task.execution?.status {
+        case .starting: return "Starting"
+        case .working: return "Working"
+        case .needsApproval: return "Needs approval"
+        case .draftReady: return "Draft ready"
+        case .interrupted: return "Stopped"
+        case .failed: return "Failed"
+        case nil: return "Awaiting draft"
+        }
+    }
+
     private var activityChart: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let chartActivity = historyActivity ?? activity
+        return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Activity").font(.headline)
                 Spacer()
                 Text("Past 7 days").font(.caption).foregroundStyle(.secondary)
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(activity.reduce(0) { $0 + $1.receivedCount }.formatted())
+                Text(chartActivity.reduce(0) { $0 + $1.receivedCount }.formatted())
                     .font(.title3.weight(.medium)).monospacedDigit()
                 Text("messages received").font(.caption).foregroundStyle(.secondary)
             }
-            Chart(activity) { day in
+            Chart(chartActivity) { day in
                 BarMark(x: .value("Day", day.date, unit: .day), y: .value("Received", day.receivedCount))
                     .foregroundStyle(GullsStyle.accent.opacity(0.7))
                     .cornerRadius(3)
                     .accessibilityLabel(day.date.formatted(.dateTime.month(.abbreviated).day()))
                     .accessibilityValue("\(day.receivedCount) received")
             }
-            .chartYScale(domain: 0...max(1, activity.map(\.receivedCount).max() ?? 0))
+            .chartYScale(domain: 0...max(1, chartActivity.map(\.receivedCount).max() ?? 0))
             .chartYAxis(.hidden)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day)) { _ in
@@ -321,6 +453,18 @@ struct DashboardView: View {
                 }
             }
             .frame(height: 95)
+        }
+    }
+
+    private var historyActivity: [DashboardActivityDay]? {
+        guard let historySummary else { return nil }
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.dateFormat = "yyyy-MM-dd"
+        return historySummary.dailyReceived.compactMap { day in
+            guard let date = formatter.date(from: day.day) else { return nil }
+            return DashboardActivityDay(date: calendar.startOfDay(for: date), receivedCount: day.count)
         }
     }
 
@@ -386,9 +530,54 @@ struct ConversationsView: View {
     let onOpen: (DashboardConversationGroup) -> Void
     var compact: Bool = false
     var selectedGroupID: String? = nil
+    var startedConversations: [GullConversation] = []
+    var selectedStartedConversationID: String? = nil
+    var onOpenStarted: (GullConversation) -> Void = { _ in }
+    var onHistorySearch: (String, String?) -> Void = { _, _ in }
+    var historyMatchedDeliveryIDs: (String) -> Set<String> = { _ in [] }
+    var isHistorySearchReady: (String, String, String?) -> Bool = { _, _, _ in false }
+    var onLoadMore: () -> Void = {}
+    var isLoadingMore = false
+    var hasMoreHistory = false
+    var isHistoryUnavailable = false
+    var isHistorySyncIncomplete = false
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.gullsWindowControlInset) private var windowControlInset
     @State private var searchText = ""
     @State private var filter: ConversationFilter = .all
+    @State private var searchScrollOffset: CGFloat = 0
+    @State private var isSearchExpanded = false
+    @State private var searchFocusRequest = 0
+    @State private var searchMetadataHeight: CGFloat = 0
+    @State private var searchTitleWidth: CGFloat = 0
+    @State private var isHistoryNoticePresented = false
+
+    private let searchHeaderTopPadding: CGFloat = 12
+    private let searchHeaderBottomPadding: CGFloat = 4
+
+    private var searchCollapseInset: CGFloat { searchHeaderTopPadding + 28 + 8 }
+
+    private var searchPinDistance: CGFloat {
+        28 + searchHeaderBottomPadding + searchMetadataHeight + 10
+    }
+    private var searchDistanceFromTitle: CGFloat {
+        if #available(macOS 15.0, *) { return max(searchPinDistance - searchScrollOffset, 0) }
+        return 0
+    }
+    private var isHeaderCondensed: Bool {
+        searchDistanceFromTitle <= searchCollapseInset - searchHeaderTopPadding
+    }
+    private var searchControlsTopInset: CGFloat {
+        let scrolledInset = searchHeaderTopPadding + searchDistanceFromTitle
+        return isHeaderCondensed && isSearchExpanded
+            ? max(scrolledInset, searchCollapseInset)
+            : scrolledInset
+    }
+    private var showsHistoryInfo: Bool {
+        (isHeaderCondensed || isHistoryNoticePresented) && historyNotice != nil
+    }
 
     private enum ConversationFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -397,6 +586,15 @@ struct ConversationsView: View {
         case handled = "Handled"
 
         var id: String { rawValue }
+
+        var historyStatus: String? {
+            switch self {
+            case .all: return nil
+            case .needsYou: return "delivered"
+            case .inProgress: return nil
+            case .handled: return nil
+            }
+        }
     }
 
     private var filteredGroups: [DashboardConversationGroup] {
@@ -409,80 +607,249 @@ struct ConversationsView: View {
             case .handled: guard group.state == .handled else { return false }
             }
             guard !query.isEmpty else { return true }
-            return [group.title, group.counterpart, group.ownedGullHandle, group.snippet ?? ""]
+            let localMatch = [group.title, group.counterpart, group.ownedGullHandle, group.snippet ?? ""]
                 .joined(separator: " ")
                 .lowercased()
                 .contains(query)
+            if localMatch { return true }
+            guard isHistorySearchReady(group.profileID, query, filter.historyStatus) else { return false }
+            let matchedIDs = historyMatchedDeliveryIDs(group.profileID)
+            return group.items.contains { matchedIDs.contains($0.id) }
         }
     }
 
+    private var filteredStartedConversations: [GullConversation] {
+        guard filter == .all else { return [] }
+        let existing = Set(snapshot.allGroups.compactMap { group -> String? in
+            guard let threadID = group.threadID else { return nil }
+            return "\(group.profileID):\(threadID)"
+        })
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return startedConversations.filter { conversation in
+            if let threadID = conversation.threadID,
+               existing.contains("\(conversation.senderProfileID):\(threadID)") { return false }
+            guard query.isEmpty else {
+                return [conversation.displayName, conversation.recipientHandle, conversation.senderHandle]
+                    .joined(separator: " ").lowercased().contains(query)
+            }
+            return true
+        }
+    }
+
+    private var conversationCount: Int {
+        filteredGroups.count + filteredStartedConversations.count
+    }
+
+    private var historyNotice: String? {
+        if isHistoryUnavailable {
+            return "History is temporarily unavailable. Showing loaded messages; search results may be incomplete."
+        }
+        if isHistorySyncIncomplete {
+            return "Older history hasn't finished syncing. Search results may be incomplete."
+        }
+        return nil
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: compact ? 10 : 14) {
-                HStack(spacing: 10) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(.secondary)
-                        TextField(compact ? "Search" : "Search conversations", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .accessibilityLabel("Search conversations")
-                    }
-                    .padding(.horizontal, compact ? 9 : 11)
-                    .padding(.vertical, compact ? 7 : 8)
-                    .background(GullsStyle.field, in: Capsule())
+        Group {
+            if #available(macOS 26.0, *), !reduceTransparency {
+                content
+                    .gullsSafeAreaBar(edge: .top, spacing: 0, style: .minimal) { searchHeader }
+                    .gullsScrollEdges()
+                    .onAppear { onHistorySearch(searchText, filter.historyStatus) }
+            } else {
+                content
+                    .safeAreaInset(edge: .top, spacing: 0) { searchHeader.background(GullsStyle.canvas) }
+                    .gullsScrollEdges()
+                    .onAppear { onHistorySearch(searchText, filter.historyStatus) }
+            }
+        }
+        .background {
+            Button("Search conversations") { searchFocusRequest += 1 }
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden()
+        }
+        .overlay(alignment: .topLeading) { stickySearchControls }
+    }
 
-                    Picker("Filter", selection: $filter) {
-                        ForEach(ConversationFilter.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
+    private var searchHeader: some View {
+        HStack(spacing: 8) {
+            GullsPageTitle("Messages")
+                .font(.title2.weight(.semibold))
+                .lineLimit(1)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    searchTitleWidth = $0
                 }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 28)
+        .frame(maxWidth: compact ? .infinity : 860, alignment: .leading)
+        .padding(.horizontal, compact ? 14 : 28)
+        .padding(.top, searchHeaderTopPadding)
+        .padding(.bottom, searchHeaderBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-                HStack(alignment: compact ? .center : .firstTextBaseline, spacing: 8) {
-                    VStack(alignment: .leading, spacing: compact ? 2 : 0) {
-                        GullsPageTitle("Messages")
-                            .font(compact ? .headline.weight(.semibold) : .title2.weight(.semibold))
-                        if let scopeName {
-                            Text(scopeName)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        if compact {
-                            Text("\(filteredGroups.count) conversations")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
+    private var searchMetadata: some View {
+        HStack(spacing: 8) {
+            if let scopeName {
+                Text(scopeName)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Text(conversationCount == 1 ? "1 conversation" : "\(conversationCount) conversations")
+                .foregroundStyle(.tertiary)
+        }
+        .font(.caption)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+            searchMetadataHeight = $0
+        }
+    }
+
+    private var stickySearchControls: some View {
+        GeometryReader { geometry in
+            let inset: CGFloat = compact ? 14 : 28
+            let rowWidth = max(min(geometry.size.width - inset * 2, compact ? .infinity : 860), 0)
+            let infoSpace: CGFloat = showsHistoryInfo ? 38 : 0
+            let titleSpace = compact ? 0 : searchTitleWidth + 12
+            let expandedWidth = max(min(rowWidth - titleSpace - infoSpace - 38, 260), 56)
+            HStack(spacing: 10) {
+                GullsStickySearchField(
+                    text: searchBinding, isPinned: isHeaderCondensed,
+                    focusRequest: searchFocusRequest, expandedWidth: expandedWidth,
+                    isExpanded: $isSearchExpanded,
+                    accessibilityLabel: "Search conversations", help: "Search conversations (⌘F)"
+                )
+                filterMenu.gullsGlass(cornerRadius: 14)
+                if showsHistoryInfo, let historyNotice {
+                    Button { isHistoryNoticePresented = true } label: {
+                        Image(systemName: "info.circle")
+                            .frame(width: 28, height: 28)
                     }
-                    Spacer(minLength: 0)
-                    if !compact {
-                        Text("\(filteredGroups.count)")
+                    .buttonStyle(.borderless)
+                    .gullsGlass(cornerRadius: 14)
+                    .accessibilityLabel("Message history status")
+                    .help(historyNotice)
+                    .popover(isPresented: $isHistoryNoticePresented, arrowEdge: .bottom) {
+                        Text(historyNotice)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if filteredGroups.isEmpty {
-                    ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right")
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 70)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(filteredGroups) { group in
-                            conversationRow(group)
-                        }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .frame(width: 280, alignment: .leading)
                     }
                 }
             }
+            .frame(width: rowWidth, height: 28)
+            .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: isHeaderCondensed)
+            .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: infoSpace)
+            .offset(x: inset, y: windowControlInset + searchControlsTopInset)
+            .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: isSearchExpanded)
+        }
+    }
+
+    private var searchBinding: Binding<String> {
+        Binding(get: { searchText }, set: {
+            searchText = $0
+            onHistorySearch($0, filter.historyStatus)
+        })
+    }
+
+    private var filterMenu: some View {
+        Menu { filterOptions } label: {
+            Label("Filter conversations", systemImage: "line.3.horizontal.decrease")
+                .labelStyle(.iconOnly)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .foregroundStyle(filter == .all ? Color.secondary : GullsStyle.accent)
+        .frame(width: 28, height: 28)
+        .accessibilityValue(filter.rawValue)
+        .help("Filter: \(filter.rawValue)")
+    }
+
+    private var filterOptions: some View {
+        Picker("Filter", selection: Binding(
+            get: { filter },
+            set: {
+                filter = $0
+                onHistorySearch(searchText, $0.historyStatus)
+            }
+        )) {
+            ForEach(ConversationFilter.allCases) { option in
+                Text(option.rawValue).tag(option)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if #available(macOS 15.0, *) {
+            messageScrollView
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    min(max(geometry.contentOffset.y + geometry.contentInsets.top, 0), searchPinDistance)
+                } action: { _, offset in
+                    searchScrollOffset = offset
+                }
+        } else {
+            messageScrollView
+        }
+    }
+
+    private var messageScrollView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                searchMetadata.padding(.bottom, 10)
+                Color.clear
+                    .frame(height: 28)
+                    .padding(.bottom, compact ? 10 : 14)
+                    .accessibilityHidden(true)
+                if let historyNotice {
+                    Text(historyNotice)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, compact ? 10 : 14)
+                }
+                conversationRows
+            }
             .frame(maxWidth: compact ? .infinity : 860, alignment: .leading)
             .padding(.horizontal, compact ? 14 : 28)
-            .padding(.vertical, compact ? 16 : 24)
+            .padding(.bottom, compact ? 16 : 24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(GullsStyle.canvas)
         .gullsHiddenScrollbars()
-        .gullsScrollEdges()
+    }
+
+    @ViewBuilder
+    private var conversationRows: some View {
+        if filteredGroups.isEmpty && filteredStartedConversations.isEmpty && !hasMoreHistory {
+            ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right")
+                .frame(maxWidth: .infinity)
+                .padding(.top, 70)
+        } else {
+            ForEach(filteredStartedConversations) { conversation in
+                startedConversationRow(conversation)
+            }
+            ForEach(filteredGroups) { group in
+                conversationRow(group)
+            }
+            if hasMoreHistory {
+                Button(action: onLoadMore) {
+                    HStack {
+                        if isLoadingMore { ProgressView().controlSize(.small) }
+                        Text(isLoadingMore ? "Loading history…" : "Load more history")
+                        Spacer()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(GullsStyle.accent)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 10)
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoadingMore)
+            }
+        }
     }
 
     private func conversationRow(_ group: DashboardConversationGroup) -> some View {
@@ -527,18 +894,44 @@ struct ConversationsView: View {
             }
             .foregroundStyle(Color.primary)
             .padding(.vertical, compact ? 8 : 12)
-            .padding(.horizontal, compact ? 10 : 0)
+            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background {
-            if compact && selectedGroupID == group.id {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(GullsStyle.accent.opacity(0.14))
+        .buttonStyle(GullsListRowButtonStyle(isSelected: selectedGroupID == group.id))
+        .accessibilityAddTraits(selectedGroupID == group.id ? .isSelected : [])
+    }
+
+    private func startedConversationRow(_ conversation: GullConversation) -> some View {
+        Button { onOpenStarted(conversation) } label: {
+            HStack(alignment: .top, spacing: 12) {
+                GullAvatar(handle: conversation.recipientHandle, size: compact ? 26 : 28)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(conversation.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("Started")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text("\(conversation.recipientHandle) · via \(conversation.senderHandle)")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(compact ? 1 : nil)
+                    if conversation.threadID == nil {
+                        Text("Ready to send")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
             }
+            .foregroundStyle(Color.primary)
+            .padding(.vertical, compact ? 8 : 12)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .accessibilityAddTraits(compact && selectedGroupID == group.id ? .isSelected : [])
+        .buttonStyle(GullsListRowButtonStyle(isSelected: selectedStartedConversationID == conversation.id))
+        .accessibilityAddTraits(selectedStartedConversationID == conversation.id ? .isSelected : [])
     }
 
     private func stateLabel(_ state: DashboardGroupState) -> String {

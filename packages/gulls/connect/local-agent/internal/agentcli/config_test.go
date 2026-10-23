@@ -31,8 +31,8 @@ func TestConfigFilePathIgnoresCurrentWorkingDirectory(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	if path := configFilePath(map[string]string{}); path != "" {
-		t.Fatalf("expected no config file from CWD, got %q", path)
+	if path := configFilePath(map[string]string{}); path != "" && path != expandHome("~/.config/seagull/env") {
+		t.Fatalf("config must use only the trusted per-user path, got %q", path)
 	}
 }
 

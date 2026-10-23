@@ -209,6 +209,31 @@ CLI command for a selected profile. `gulls runtime status` inspects the socket.
 Runtime polling is monitoring-only: local-action requests remain approval files
 and the resident process never executes them.
 
+### Local message history
+
+The runtime owns one private `history.sqlite3` database beside its Unix socket.
+In stdio-only mode without a socket, it uses the first profile's context folder.
+Mac and CLI queries share that database through runtime IPC. Records and cursors
+are isolated by server, local connection, Gull and paired node; credential
+rotation keeps the same history. Existing compatible inbox snapshots are
+imported on startup. Credentials and authenticated private reply instructions
+are excluded from the database.
+
+`gulls --json history --limit 50` reads a local page. Add `--cursor`, `--query`,
+`--status` or `--thread-id` to continue or filter it. `gulls --json history summary`
+returns counts and seven UTC days of activity without loading every body.
+`thread --cursor CURSOR THREAD_ID` loads older messages; previously cached
+thread messages remain readable offline. History commands require a running
+runtime and never send, acknowledge or ignore messages.
+
+Recent inbox checks update the cache immediately. A background worker resumes
+cursor-based history backfill, catches up to the last completed anchor after
+large bursts, and periodically reconciles older delivery states. Backfill does
+not enter the notification queue. `sync_complete` is true only after a paginated
+server has been traversed; older servers without pagination retain a partial
+cache until their backend is updated. Statistics describe locally synchronized
+deliveries, and may lag while offline or while older pages are being fetched.
+
 Set connector configuration outside prompt text:
 
 ```text
@@ -333,6 +358,9 @@ exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 | `open` | `<delivery_id>` | `--limit` (default 100) | Finds the delivery in the inbox, writes a context file, prints its path. |
 | `thread` | `<thread_id>` | `--limit` (default 50) | Prints the messages in a thread. |
 | `context` | `<thread_id>` | — | Prints the compact thread context pack as JSON. |
+| `local-action request` | — | `--kind`, `--executable`, `--arg` (repeatable), `--working-directory`, `--path`, `--content`, `--content-file` | Queues a private local command or file request for explicit Mac approval; executes nothing. |
+| `local-action status` | `<request_id>` | — | Reads the local approval/execution result. |
+| `codex result` | `<lowercase_task_uuid>` | `--content-file` (path or `-` for stdin), `--content`, `--profile-id`, `--connection-revision`, `--session-id` | Writes one private local draft bound to the exact task manifest; never sends a message or calls the Hub. |
 | `draft-reply` | `<delivery_id>` | `--limit` (default 100), `--approve`, `--expect-draft` | Generates a rule-controlled draft. Sends nothing unless `--approve`, and with `--expect-draft <draft_sha256>` sends only the draft that digest names. |
 | `reply` | `<delivery_id> <content...>` | — | Submits a manual `decision=reply` through the delivery decision flow. |
 | `ack` | `<delivery_id>` | `--limit` (default 100) | Acknowledges the delivery's underlying message. |
@@ -372,7 +400,10 @@ two. Inbox and message commands make HTTP calls to the Message Hub.
 writes the resulting config before any agent command is run.
 
 Exit codes: `0` success (and `--help`), `1` runtime error, `2` usage or
-configuration error. A missing configuration prints
+configuration error, `3` a definitively rejected `post` (HTTP 400, 401, 403,
+404, 413, or 422). Timeouts, transport errors, server errors, and conflicts
+remain `1`: a caller must retain the original request and idempotency key
+because the server may have accepted it. A missing configuration prints
 `config error: missing required config: SEAGULL_API_URL, SEAGULL_AGENT_HANDLE`.
 
 ### Target Commands

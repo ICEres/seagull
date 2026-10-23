@@ -77,6 +77,18 @@ variable "dynamodb_deletion_protection_enabled" {
   default     = true
 }
 
+variable "delivery_stream_publisher_enabled" {
+  description = "Whether the DynamoDB Streams delivery publisher is active."
+  type        = bool
+  default     = true
+}
+
+variable "delivery_stream_direct_publication_disabled" {
+  description = "Disable the API's direct SQS publication only after the stream publisher is ready."
+  type        = bool
+  default     = false
+}
+
 variable "api_throttling_burst_limit" {
   type        = number
   description = "Default API Gateway burst throttle for public APIs in this environment."

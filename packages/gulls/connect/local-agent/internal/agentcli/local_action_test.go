@@ -111,6 +111,26 @@ func TestLocalActionStatusReadsRequestThenResultAndChecksHandle(t *testing.T) {
 	}
 }
 
+func TestLocalActionStatusAcceptsCodexRequestProvenance(t *testing.T) {
+	dir := t.TempDir()
+	config := localActionTestConfig(dir)
+	taskID := "11111111-1111-4111-8111-111111111111"
+	request := localActionTestRequest(t, config, "read_file")
+	request.Version = localActionCodexVersion
+	request.ProfileID = "profile-one"
+	request.CodexTaskID = taskID
+	request.CodexTaskFolder = "/tmp/task"
+	request.CodexTaskDigest = strings.Repeat("a", 64)
+	request.ConnectionRevision = "revision-one"
+	if err := writeLocalActionRequest(dir, request); err != nil {
+		t.Fatal(err)
+	}
+	payload, state, err := readLocalActionStatus(dir, config.AgentHandle, request.RequestID)
+	if err != nil || state != "needs_approval" || payload["codex_task_id"] != taskID {
+		t.Fatalf("Codex request status = %#v, %s, %v", payload, state, err)
+	}
+}
+
 func TestLocalActionValidationAndBounds(t *testing.T) {
 	config := localActionTestConfig(t.TempDir())
 	request := localActionTestRequest(t, config, "command")

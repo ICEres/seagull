@@ -213,6 +213,7 @@ actor GullsRuntimeBridge {
                                          revision: profile.revision, arguments: arguments)
         guard response.exitCode == 0 else {
             let message = Self.trimmed(response.stderr)
+            if response.exitCode == 3 { throw GullsCLI.Failure.rejected(message) }
             throw response.exitCode == 2
                 ? GullsCLI.Failure.configuration(message)
                 : GullsCLI.Failure.runtime(message)

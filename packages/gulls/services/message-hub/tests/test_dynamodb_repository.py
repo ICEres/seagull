@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 try:  # pragma: no cover - environment probe
@@ -54,10 +55,12 @@ from message_hub.domain.models import (
     ToolGrant,
 )
 from message_hub.domain.service import MessageHubService
+from message_hub.domain import IdempotencyConflictError
 from message_hub.storage.dynamodb import (
     DynamoDbMessageHubRepository,
     RepositoryTableNotConfiguredError,
 )
+from message_hub.storage.repository import SendTooLargeError
 
 REGION = "us-east-1"
 BUCKET = "test-payload-objects"
@@ -870,6 +873,190 @@ class DynamoDbRepositoryTest(unittest.TestCase):
         inbox = service.get_inbox("@recipient:gulls.ai")
         self.assertEqual(len(inbox), 1)
         self.assertEqual(inbox[0].message.content_inline, "hello over dynamodb")
+
+    def test_atomic_idempotency_and_task_commit_over_dynamodb(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@atomic-sender:gulls.ai")
+        service.register_agent("@atomic-recipient:gulls.ai")
+
+        def send():
+            return service.send_message(
+                sender_handle="@atomic-sender:gulls.ai",
+                recipient_handles=("@atomic-recipient:gulls.ai",),
+                content="one transaction",
+                idempotency_key="atomic-key",
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: send(), range(4)))
+        self.assertEqual(1, len(self.repository.list_messages_by_sender(
+            service.get_agent("@atomic-sender:gulls.ai").agent_id  # type: ignore[union-attr]
+        )))
+        self.assertEqual(1, len({result.message.message_id for result in results}))
+
+        with self.assertRaises(IdempotencyConflictError):
+            service.send_message(
+                sender_handle="@atomic-sender:gulls.ai",
+                recipient_handles=("@atomic-recipient:gulls.ai",),
+                content="changed",
+                idempotency_key="atomic-key",
+            )
+
+        first_task = service.create_task(
+            requester_handle="@atomic-sender:gulls.ai",
+            recipient_handle="@atomic-recipient:gulls.ai",
+            objective="run once",
+            idempotency_key="task-atomic-key",
+        )
+        replay_task = service.create_task(
+            requester_handle="@atomic-sender:gulls.ai",
+            recipient_handle="@atomic-recipient:gulls.ai",
+            objective="run once",
+            idempotency_key="task-atomic-key",
+        )
+        self.assertEqual(first_task.task_id, replay_task.task_id)
+        self.assertIsNotNone(self.repository.get_task(first_task.task_id))
+
+    def test_keyed_message_action_limit_accepts_97_and_rejects_98_atomically(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@many-sender:gulls.ai")
+        handles = []
+        for index in range(98):
+            handle = f"@recipient-{index}:gulls.ai"
+            service.register_agent(handle)
+            handles.append(handle)
+
+        accepted = service.send_message(
+            sender_handle="@many-sender:gulls.ai",
+            recipient_handles=tuple(handles[:97]),
+            content="boundary",
+            idempotency_key="boundary-97",
+        )
+        self.assertEqual(97, len(accepted.deliveries))
+
+        with self.assertRaises(SendTooLargeError):
+            service.send_message(
+                sender_handle="@many-sender:gulls.ai",
+                recipient_handles=tuple(handles),
+                content="too many deliveries",
+                idempotency_key="boundary-98",
+            )
+        sender = service.get_agent("@many-sender:gulls.ai")
+        assert sender is not None
+        self.assertEqual(1, len(self.repository.list_messages_by_sender(sender.agent_id)))
+        self.assertEqual(97, len(self.repository.list_deliveries_by_sender(sender.agent_id)))
+
+    def test_dynamodb_rejects_item_and_transaction_size_before_writes(self) -> None:
+        with self.assertRaises(SendTooLargeError):
+            self.repository._transact_write([
+                {
+                    "Put": {
+                        "TableName": self.messages.name,
+                        "Item": {"message_id": "oversize", "blob": "x" * (400 * 1024)},
+                    }
+                }
+            ])
+
+        with self.assertRaises(SendTooLargeError):
+            self.repository._transact_write([
+                {
+                    "Put": {
+                        "TableName": self.messages.name,
+                        "Item": {"message_id": f"aggregate-{index}", "blob": "x" * 50000},
+                    }
+                }
+                for index in range(85)
+            ])
+        self.assertIsNone(self.messages.get_item(Key={"message_id": "oversize"}).get("Item"))
+
+    def test_concurrent_keyed_tasks_are_one_set_and_different_keys_are_distinct(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@task-sender:gulls.ai")
+        service.register_agent("@task-worker:gulls.ai")
+
+        def create(key: str):
+            return service.create_task(
+                requester_handle="@task-sender:gulls.ai",
+                recipient_handle="@task-worker:gulls.ai",
+                objective="same objective",
+                idempotency_key=key,
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            same_key = list(pool.map(lambda _: create("same-key"), range(4)))
+        self.assertEqual(1, len({task.task_id for task in same_key}))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            different_keys = list(pool.map(create, ("key-a", "key-b")))
+        self.assertEqual(2, len({task.task_id for task in different_keys}))
+
+    def test_expired_idempotency_key_can_be_replaced(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@expiry-sender:gulls.ai")
+        service.register_agent("@expiry-recipient:gulls.ai")
+        sender = service.get_agent("@expiry-sender:gulls.ai")
+        assert sender is not None
+        self.idempotency.put_item(Item={
+            "sender_agent_id": sender.agent_id,
+            "idempotency_key": "expired-key",
+            "message_id": "old-message",
+            "expires_at": int(time.time()) - 1,
+        })
+        result = service.send_message(
+            sender_handle="@expiry-sender:gulls.ai",
+            recipient_handles=("@expiry-recipient:gulls.ai",),
+            content="replacement",
+            idempotency_key="expired-key",
+        )
+        self.assertNotEqual("old-message", result.message.message_id)
+        self.assertEqual(result.message.message_id, self.repository.get_idempotent_message_id(sender.agent_id, "expired-key"))
+
+    def test_legacy_thread_without_revision_can_advance(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@legacy-sender:gulls.ai")
+        service.register_agent("@legacy-recipient:gulls.ai")
+        first = service.send_message(
+            sender_handle="@legacy-sender:gulls.ai",
+            recipient_handles=("@legacy-recipient:gulls.ai",),
+            content="root",
+        )
+        self.threads.update_item(
+            Key={"thread_id": first.thread.thread_id},
+            UpdateExpression="REMOVE revision",
+        )
+        second = service.send_message(
+            sender_handle="@legacy-sender:gulls.ai",
+            recipient_handles=("@legacy-recipient:gulls.ai",),
+            content="after legacy row",
+            thread_id=first.thread.thread_id,
+        )
+        self.assertEqual(1, second.thread.revision)
+
+    def test_concurrent_different_keys_on_same_thread_both_commit(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@race-sender:gulls.ai")
+        service.register_agent("@race-recipient:gulls.ai")
+        root = service.send_message(
+            sender_handle="@race-sender:gulls.ai",
+            recipient_handles=("@race-recipient:gulls.ai",),
+            content="root",
+        )
+
+        def send(key: str):
+            return service.send_message(
+                sender_handle="@race-sender:gulls.ai",
+                recipient_handles=("@race-recipient:gulls.ai",),
+                content=key,
+                thread_id=root.thread.thread_id,
+                idempotency_key=key,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(send, ("race-a", "race-b")))
+        self.assertEqual(2, len({result.message.message_id for result in results}))
+        thread = self.repository.get_thread(root.thread.thread_id)
+        assert thread is not None
+        self.assertEqual(3, thread.message_count)
+        self.assertEqual(2, thread.revision)
 
 
 if __name__ == "__main__":  # pragma: no cover

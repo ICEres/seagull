@@ -6,6 +6,16 @@ struct DeliveryDetailView: View {
     let localGullName: String
     var relatedItems: [InboxItem] = []
     var onSelectItem: ((InboxItem) -> Void)? = nil
+    var onOpenProfile: ((String) -> Void)? = nil
+    var senderProfileHandle: String? = nil
+    var onOpenCodex: (() -> Void)? = nil
+    var codexTask: CodexTask? = nil
+    var onUseCodexDraft: (() -> Void)? = nil
+    var onReopenCodexTask: (() -> Void)? = nil
+    var onContinueCodex: ((String) -> Void)? = nil
+    var onStopCodex: (() -> Void)? = nil
+    var onApproveCodex: (() -> Void)? = nil
+    var onDeclineCodex: (() -> Void)? = nil
     var compact = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var contextExpanded = false
@@ -14,7 +24,7 @@ struct DeliveryDetailView: View {
     var body: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
             messageContent
-                .safeAreaBar(edge: .top, spacing: 16) {
+                .gullsSafeAreaBar(edge: .top, spacing: 12) {
                     header
                 }
         } else {
@@ -62,6 +72,17 @@ struct DeliveryDetailView: View {
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                 }
+                if let codexTask {
+                    CodexTaskResultView(
+                        task: codexTask,
+                        onUseDraft: onUseCodexDraft,
+                        onOpen: onReopenCodexTask,
+                        onContinue: onContinueCodex,
+                        onStop: onStopCodex,
+                        onApprove: onApproveCodex,
+                        onDecline: onDeclineCodex
+                    )
+                }
                 DisclosureGroup("Message details") {
                     metadata.padding(.top, 10)
                 }
@@ -69,7 +90,7 @@ struct DeliveryDetailView: View {
                 .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, compact ? 14 : 26)
+            .padding(.horizontal, compact ? 14 : 28)
             .padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -120,19 +141,45 @@ struct DeliveryDetailView: View {
             HStack(spacing: 12) {
                 senderIdentity.fixedSize()
                 Spacer(minLength: 12)
+                codexButton
                 routingInformation.fixedSize()
             }
             VStack(alignment: .leading, spacing: 8) {
                 senderIdentity
+                codexButton
                 routingInformation
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
-        .padding(.horizontal, compact ? 14 : 26)
+        .padding(.horizontal, compact ? 14 : 28)
         .padding(.vertical, 12)
     }
 
+    @ViewBuilder
+    private var codexButton: some View {
+        if let onOpenCodex {
+            Button(action: onOpenCodex) {
+                Label { Text("Work with Codex") } icon: { GullsAIIcon() }
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Work with Codex")
+            .help("Start a Codex task for this message")
+        }
+    }
+
     private var senderIdentity: some View {
+        Group {
+            if let handle = senderProfileHandle ?? item.message?.senderHandle.flatMap(SavedGull.canonicalHandle), let onOpenProfile {
+                Button { onOpenProfile(handle) } label: { senderLabel }
+                    .buttonStyle(.plain)
+                    .help("View Gull profile")
+            } else {
+                senderLabel
+            }
+        }
+    }
+
+    private var senderLabel: some View {
         HStack(spacing: 12) {
             WingAvatar(identity: item.senderDisplay, size: 26)
             Text(verbatim: item.senderDisplay)

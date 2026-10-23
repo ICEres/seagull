@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CryptoKit
 
 @MainActor
 @Observable
@@ -41,6 +42,14 @@ final class CloudAccountStore {
     private(set) var serverSnapshot: CloudServerSnapshot?
 
     private enum Keys { static let websiteURL = "cloudWebsiteURL" }
+    private struct CachedAccount: Codable {
+        var identity: CloudHumanIdentity
+        var ownedGulls: [CloudGull]
+        var aiUsage: CloudAIUsageSummary?
+        var serverSnapshot: CloudServerSnapshot?
+        var runtime: CloudRuntimeConfig?
+        var savedAt: Date
+    }
 
     init(defaults: UserDefaults = .standard, session: URLSession = .shared,
          cli: GullsCLI? = nil, sharedSessionURL: URL? = nil) {
@@ -51,7 +60,8 @@ final class CloudAccountStore {
         websiteURL = defaults.string(forKey: Keys.websiteURL) ?? "https://sea.gulls.ai"
     }
 
-    var isSignedIn: Bool { !accessToken.isEmpty && (tokenExpiresAt ?? .distantPast) > Date() }
+    var isSignedIn: Bool { account != nil && !accessToken.isEmpty && (tokenExpiresAt ?? .distantPast) > Date() }
+    var hasWorkspace: Bool { account != nil && !accessToken.isEmpty }
     var accountLabel: String { account?.displayName ?? account?.email ?? email }
     var userID: String? { account?.userID }
     var canStartBrowserSignIn: Bool {
@@ -64,6 +74,7 @@ final class CloudAccountStore {
 
     func loadConfiguration() async {
         let generation = sessionID
+        let previousRuntime = runtime
         isBusy = true; error = nil
         defer { isBusy = false }
         do {
@@ -76,8 +87,7 @@ final class CloudAccountStore {
             runtime = loaded
         } catch let caughtError {
             guard generation == sessionID else { return }
-            runtime = nil
-            if isSignedIn { signOut() }
+            runtime = previousRuntime
             self.error = sanitized(caughtError)
         }
     }
@@ -127,11 +137,13 @@ final class CloudAccountStore {
             account = identityResponse.identity
             isAdmin = decodeAdminClaim(authResult.idToken ?? token)
             challengePending = false; challengeSession = nil; code = ""
+            persistCachedAccount()
             sessionID = UUID()
         } catch let caughtError { if generation == sessionID { self.error = sanitized(caughtError) } }
     }
 
     func signOut(sharedWebsiteURL: String? = nil) {
+        purgeCachedAccount(websiteURL: sharedWebsiteURL ?? websiteURL)
         cancelBrowserSignIn()
         clearAccountSession()
         guard let sharedSessionFile else { return }
@@ -197,12 +209,14 @@ final class CloudAccountStore {
     }
 
     func cancelBrowserSignIn() {
+        let shouldClearSession = isBrowserSignInPending || importedSharedSession != nil
         browserSignInID = nil
         browserSignInTask?.cancel()
         browserSignInHandle?.terminate()
         browserSignInTask = nil
         browserSignInHandle = nil
         isBrowserSignInPending = false
+        if shouldClearSession { clearAccountSession() }
     }
 
     func synchronizeSharedSession() async {
@@ -215,13 +229,31 @@ final class CloudAccountStore {
         if isSignedIn, importedSharedSession == nil { return }
         isRestoringSharedSession = true
         defer { isRestoringSharedSession = false }
-        let generation = sessionID
+        var generation = sessionID
         do {
-            guard let saved = try source.read(for: websiteURL), saved.expirationDate > Date() else {
+            guard let saved = try source.read(for: websiteURL) else {
                 if importedSharedSession != nil { clearAccountSession() }
                 return
             }
+            if !accessToken.isEmpty, cacheKey(token: accessToken) != cacheKey(token: saved.accessToken) {
+                clearAccountSession()
+                generation = sessionID
+            }
+            guard saved.expirationDate > Date() else {
+                accessToken = saved.accessToken
+                tokenExpiresAt = saved.expirationDate
+                loadCachedAccount(token: saved.accessToken)
+                importedSharedSession = saved
+                if hasWorkspace { error = "Sign in again to sync. Showing your last saved workspace." }
+                return
+            }
             guard saved != importedSharedSession else { return }
+            // Restore the last known workspace before the network verifies the
+            // shared session. The cache is isolated by website and token
+            // subject, so another account cannot reuse it.
+            accessToken = saved.accessToken
+            tokenExpiresAt = saved.expirationDate
+            loadCachedAccount(token: saved.accessToken)
             if runtime == nil { await loadConfiguration() }
             guard generation == sessionID, !Task.isCancelled else { return }
             guard let socialURL = runtime?.socialAPIURL else { throw CloudAccountError.identityUnavailable }
@@ -231,18 +263,39 @@ final class CloudAccountStore {
                   saved.expirationDate > Date(), !response.identity.userID.isEmpty,
                   try source.read(for: websiteURL) == saved else { return }
             if source.url != sharedSessionFile.url { try sharedSessionFile.write(saved) }
+            if let account, account.userID != response.identity.userID { clearAccountSession() }
             accessToken = saved.accessToken
             tokenExpiresAt = saved.expirationDate
             account = response.identity
             email = response.identity.email ?? ""
             isAdmin = decodeAdminClaim(saved.accessToken)
             importedSharedSession = saved
-            ownedGulls = []; aiUsage = nil; serverSnapshot = nil
+            persistCachedAccount()
             sessionID = UUID()
             error = nil
+            refreshCachedAccountInBackground()
         } catch {
             if generation == sessionID, !Task.isCancelled {
-                self.error = "The saved sign-in could not be verified. Sign in again from your browser."
+                if let cloud = error as? CloudAPIError, case .http(let status, _) = cloud, status == 401 || status == 403 {
+                    if let saved = try? source.read(for: websiteURL), saved.accessToken == accessToken {
+                        try? source.remove(for: websiteURL)
+                    }
+                    purgeCachedAccount(websiteURL: websiteURL)
+                    clearAccountSession()
+                    self.error = "Your cloud session has expired. Sign in again."
+                    return
+                }
+                // A token that could not be verified must not make the app
+                // appear signed in unless a matching cached workspace was
+                // already restored for it.
+                if account == nil {
+                    accessToken = ""
+                    tokenExpiresAt = nil
+                    importedSharedSession = nil
+                }
+                self.error = account == nil
+                    ? "Cloud sign-in is temporarily unavailable. Try again when you are online."
+                    : "Cloud sign-in is temporarily unavailable. Showing your last saved workspace."
             }
         }
     }
@@ -259,6 +312,7 @@ final class CloudAccountStore {
             let response: CloudGullsResponse = try await client.get("/profiles", query: userID.map { [URLQueryItem(name: "owner_user_id", value: $0)] } ?? [])
             guard generation == sessionID, isSignedIn else { return false }
             ownedGulls = response.items
+            persistCachedAccount()
             return true
         } catch let caughtError {
             if generation == sessionID { self.error = sanitized(caughtError) }
@@ -273,6 +327,7 @@ final class CloudAccountStore {
         let response: CloudProfileResponse = try await client.patch("/profiles/\(gull.handle)", body: Body(ownerUserID: owner, displayName: displayName, bio: bio))
         guard generation == sessionID else { throw CancellationError() }
         ownedGulls = ownedGulls.map { $0.agentID == response.profile.agentID ? response.profile : $0 }
+        persistCachedAccount()
     }
 
     func loadPrompt(for gull: CloudGull) async throws -> String {
@@ -320,6 +375,7 @@ final class CloudAccountStore {
             let value: CloudAIUsageSummary = try await client.get("/me/ai-usage")
             guard generation == sessionID, isSignedIn else { return false }
             aiUsage = value
+            persistCachedAccount()
             return true
         }
         catch let caughtError {
@@ -338,22 +394,25 @@ final class CloudAccountStore {
         if let provider = providerClient {
             snapshot.health["provider"] = try? await provider.get("/health")
         }
-        do { snapshot.routingRules = try await (message.get("/routing-rules") as CloudRoutingRulesResponse).items }
-        catch { failures.append("Routing: \(sanitized(error))") }
-        do { snapshot.moderationRecords = try await (social.get("/moderation") as CloudModerationResponse).items }
-        catch { failures.append("Moderation: \(sanitized(error))") }
-        if isAdmin, let provider = providerClient {
-            do { snapshot.providerConfigs = try await (provider.get("/admin/ai-providers") as CloudProviderConfigsResponse).providerConfigs }
-            catch { failures.append("AI provider: \(sanitized(error))") }
-            do { snapshot.serverBalance = try await (provider.get("/admin/ai-credits/server-balance") as CloudServerBalanceResponse).balance }
-            catch { failures.append("Server credits: \(sanitized(error))") }
-            do { snapshot.serverLedger = try await (provider.get("/admin/ai-credits/server-ledger") as CloudServerLedgerResponse).entries }
-            catch { failures.append("Server ledger: \(sanitized(error))") }
-            do { snapshot.auditEvents = try await (provider.get("/admin/ai-audit-events") as CloudAuditResponse).events }
-            catch { failures.append("Audit: \(sanitized(error))") }
+        if isAdmin {
+            do { snapshot.routingRules = try await (message.get("/routing-rules") as CloudRoutingRulesResponse).items }
+            catch { failures.append("Routing: \(sanitized(error))") }
+            do { snapshot.moderationRecords = try await (social.get("/moderation") as CloudModerationResponse).items }
+            catch { failures.append("Moderation: \(sanitized(error))") }
+            if let provider = providerClient {
+                do { snapshot.providerConfigs = try await (provider.get("/admin/ai-providers") as CloudProviderConfigsResponse).providerConfigs }
+                catch { failures.append("AI provider: \(sanitized(error))") }
+                do { snapshot.serverBalance = try await (provider.get("/admin/ai-credits/server-balance") as CloudServerBalanceResponse).balance }
+                catch { failures.append("Server credits: \(sanitized(error))") }
+                do { snapshot.serverLedger = try await (provider.get("/admin/ai-credits/server-ledger") as CloudServerLedgerResponse).entries }
+                catch { failures.append("Server ledger: \(sanitized(error))") }
+                do { snapshot.auditEvents = try await (provider.get("/admin/ai-audit-events") as CloudAuditResponse).events }
+                catch { failures.append("Audit: \(sanitized(error))") }
+            }
         }
         guard generation == sessionID, isSignedIn else { return }
         serverSnapshot = snapshot
+        persistCachedAccount()
         error = failures.isEmpty ? nil : failures.joined(separator: "\n")
     }
 
@@ -375,6 +434,68 @@ final class CloudAccountStore {
         guard let client = messageClient else { throw CloudAccountError.notSignedIn }
         _ = try await client.post("/routing-rules", body: draft) as CloudRoutingRuleResponse
         await refreshServer()
+    }
+
+    /// Starts the slow cloud reads after cached content has already been
+    /// published to the UI. These requests are deliberately independent of
+    /// the window lifecycle and preserve the last good snapshot on failure.
+    private func refreshCachedAccountInBackground() {
+        let generation = sessionID
+        Task { @MainActor [weak self] in
+            guard let self, generation == self.sessionID, self.isSignedIn else { return }
+            _ = await self.refreshGulls()
+            _ = await self.refreshAIUsage()
+            await self.refreshServer()
+        }
+    }
+
+    private func cacheKey(token: String, websiteURL: String? = nil) -> String? {
+        guard let website = SharedCloudSessionFile.normalizedWebsite(websiteURL ?? self.websiteURL) else { return nil }
+        let parts = token.split(separator: ".")
+        var identity = "opaque:\(token)"
+        if parts.count == 3 {
+            var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+            if let data = Data(base64Encoded: payload),
+               let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let subject = claims["sub"] as? String, !subject.isEmpty {
+                let issuer = claims["iss"] as? String ?? ""
+                identity = "subject:\(issuer.utf8.count):\(issuer):\(subject)"
+            }
+        }
+        let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "cloudAccountCache.v2.\(website).\(digest)"
+    }
+
+    private func loadCachedAccount(token: String) {
+        guard let key = cacheKey(token: token),
+              let data = defaults.data(forKey: key),
+              let cached = try? JSONDecoder().decode(CachedAccount.self, from: data) else { return }
+        account = cached.identity
+        email = cached.identity.email ?? ""
+        ownedGulls = cached.ownedGulls
+        aiUsage = cached.aiUsage
+        serverSnapshot = cached.serverSnapshot
+        if runtime == nil { runtime = cached.runtime }
+        error = nil
+    }
+
+    private func persistCachedAccount() {
+        guard let account, !accessToken.isEmpty, let key = cacheKey(token: accessToken),
+              let data = try? JSONEncoder().encode(CachedAccount(
+                identity: account,
+                ownedGulls: ownedGulls,
+                aiUsage: aiUsage,
+                serverSnapshot: serverSnapshot,
+                runtime: runtime,
+                savedAt: Date()
+              )) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    private func purgeCachedAccount(websiteURL: String) {
+        guard !accessToken.isEmpty, let key = cacheKey(token: accessToken, websiteURL: websiteURL) else { return }
+        defaults.removeObject(forKey: key)
     }
 
     private func safeWebsiteURL() -> String? {

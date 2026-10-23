@@ -25,8 +25,8 @@ func (s *runtimeEventSink) Write(p []byte) (int, error) { s.lines <- string(p); 
 
 func TestRuntimeProfileIdentityNormalizesConfiguredPath(t *testing.T) {
 	dir := t.TempDir()
-	a := RuntimeProfile{Environment: map[string]string{"SEAGULL_API_URL": "https://api.example/", "SEAGULL_AGENT_HANDLE": "@Worker:Gulls.AI", "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(dir, ".")}}
-	b := RuntimeProfile{Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}}
+	a := RuntimeProfile{Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example/", "SEAGULL_AGENT_HANDLE": "@Worker:Gulls.AI", "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(dir, ".")}}
+	b := RuntimeProfile{Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}}
 	if profileIdentity(a) != profileIdentity(b) {
 		t.Fatalf("identity mismatch: %q vs %q", profileIdentity(a), profileIdentity(b))
 	}
@@ -36,7 +36,7 @@ func TestRuntimePausedSnapshotPermissions(t *testing.T) {
 	dir := t.TempDir()
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"items":[]}`)) }))
 	defer hub.Close()
-	p, err := newRuntimeProfile(context.Background(), RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_API_URL": hub.URL, "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, &runtimeServer{})
+	p, err := newRuntimeProfile(context.Background(), RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": hub.URL, "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, &runtimeServer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestRuntimePausedSnapshotPermissions(t *testing.T) {
 
 func TestRuntimeStdioConfigureStatusAndEOF(t *testing.T) {
 	dir := t.TempDir()
-	env := map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}
+	env := map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@worker:gulls.ai", "SEAGULL_AGENT_CONTEXT_DIR": dir}
 	profile := RuntimeProfile{ID: "p1", Environment: env, Monitoring: false, Revision: "r1"}
 	configure, _ := json.Marshal(RuntimeRequest{Version: 1, ID: "c", Operation: "configure", Profiles: []RuntimeProfile{profile}})
 	status, _ := json.Marshal(RuntimeRequest{Version: 1, ID: "s", Operation: "status"})
@@ -85,7 +85,7 @@ func TestRuntimeStdioConfigureStatusAndEOF(t *testing.T) {
 }
 
 func TestSameRuntimeProfileDetectsMonitoringChanges(t *testing.T) {
-	a := RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_API_URL": "https://a", "SEAGULL_AGENT_HANDLE": "@a"}, Monitoring: true, PollInterval: 1}
+	a := RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://a", "SEAGULL_AGENT_HANDLE": "@a"}, Monitoring: true, PollInterval: 1}
 	b := a
 	b.Monitoring = false
 	if sameRuntimeProfile(a, b) {
@@ -97,7 +97,7 @@ func TestRuntimeConfigureReplacesAndRemovesProfiles(t *testing.T) {
 	server := &runtimeServer{ctx: context.Background(), profiles: map[string]*runtimeProfile{}}
 	dir := t.TempDir()
 	base := func(id string) RuntimeProfile {
-		return RuntimeProfile{ID: id, Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@" + id, "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(dir, id)}, Monitoring: false, Revision: "r1"}
+		return RuntimeProfile{ID: id, Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@" + id, "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(dir, id)}, Monitoring: false, Revision: "r1"}
 	}
 	server.configure([]RuntimeProfile{base("one"), base("two")})
 	if len(server.profiles) != 2 {
@@ -125,7 +125,7 @@ func TestRuntimeCommandReadsSharedCache(t *testing.T) {
 
 func TestRuntimeRestoresIdentityAndRevisionBoundSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	profile := RuntimeProfile{ID: "p", Revision: "r1", Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}
+	profile := RuntimeProfile{ID: "p", Revision: "r1", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestRuntimeRestoresIdentityAndRevisionBoundSnapshot(t *testing.T) {
 
 func TestRuntimeRestoredConnectedSnapshotBecomesPaused(t *testing.T) {
 	dir := t.TempDir()
-	profile := RuntimeProfile{ID: "p", Revision: "r1", Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}
+	profile := RuntimeProfile{ID: "p", Revision: "r1", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}
 	snapshot := runtimeSnapshot{Version: 1, Identity: profileIdentity(profile), Revision: "r1", CheckedAt: time.Now().UTC().Format(time.RFC3339), Inbox: map[string]any{"items": []any{}}, Status: "connected", Error: "authorization_required"}
 	payload, _ := json.Marshal(snapshot)
 	if err := os.WriteFile(filepath.Join(dir, "inbox-snapshot.json"), payload, 0o600); err != nil {
@@ -173,7 +173,7 @@ func TestRuntimeConfigureReportsInvalidProfileWhileKeepingValid(t *testing.T) {
 	defer cancel()
 	var events bytes.Buffer
 	s := &runtimeServer{ctx: ctx, cancel: cancel, profiles: map[string]*runtimeProfile{}, eventOut: &events}
-	valid := RuntimeProfile{ID: "valid", Revision: "r", Monitoring: false, Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@valid", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}}
+	valid := RuntimeProfile{ID: "valid", Revision: "r", Monitoring: false, Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@valid", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}}
 	valid.Environment["SEAGULL_AGENT_ENV_FILE"] = filepath.Join(t.TempDir(), "missing-env")
 	invalid := RuntimeProfile{ID: "invalid", Revision: "r", Monitoring: false, Environment: map[string]string{"SEAGULL_AGENT_HANDLE": "@invalid", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir(), "SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env")}}
 	var out bytes.Buffer
@@ -211,7 +211,7 @@ func TestRuntimeProfilesPollIndependently(t *testing.T) {
 	events := newRuntimeEventSink()
 	s := &runtimeServer{ctx: ctx, cancel: cancel, profiles: map[string]*runtimeProfile{}, eventOut: events}
 	makeProfile := func(id, api string) RuntimeProfile {
-		return RuntimeProfile{ID: id, Revision: id + "-r", PollInterval: 60, Monitoring: true, Environment: map[string]string{"SEAGULL_API_URL": api, "SEAGULL_AGENT_HANDLE": "@" + id, "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(t.TempDir(), id)}}
+		return RuntimeProfile{ID: id, Revision: id + "-r", PollInterval: 60, Monitoring: true, Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": api, "SEAGULL_AGENT_HANDLE": "@" + id, "SEAGULL_AGENT_CONTEXT_DIR": filepath.Join(t.TempDir(), id)}}
 	}
 	s.configure([]RuntimeProfile{makeProfile("slow", first.URL), makeProfile("fast", second.URL)})
 	select {
@@ -270,7 +270,7 @@ func TestRuntimeAckRefreshesSharedCache(t *testing.T) {
 	defer cancel()
 	s := &runtimeServer{ctx: ctx, cancel: cancel, profiles: map[string]*runtimeProfile{}, eventOut: io.Discard}
 	dir := t.TempDir()
-	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "r", Environment: map[string]string{"SEAGULL_API_URL": hub.URL, "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, s)
+	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "r", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": hub.URL, "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestRuntimeContextInboxRequiresFreshAuthorization(t *testing.T) {
 	ctx := context.Background()
 	s := &runtimeServer{ctx: ctx, profiles: map[string]*runtimeProfile{}}
 	dir := t.TempDir()
-	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "r", Environment: map[string]string{"SEAGULL_API_URL": api.URL, "SEAGULL_SOCIAL_API_URL": heartbeat.URL, "SEAGULL_NODE_ID": "node", "SEAGULL_CONNECTOR_TOKEN": "sga_token", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, s)
+	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "r", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": api.URL, "SEAGULL_SOCIAL_API_URL": heartbeat.URL, "SEAGULL_NODE_ID": "node", "SEAGULL_CONNECTOR_TOKEN": "sga_token", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": dir}, Monitoring: false}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestRuntimeContextInboxRequiresFreshAuthorization(t *testing.T) {
 
 func TestRuntimeWatcherUsesCacheAndAuthorizesNewHandoffs(t *testing.T) {
 	p, err := newRuntimeProfile(context.Background(), RuntimeProfile{ID: "p", Revision: "r", Environment: map[string]string{
-		"SEAGULL_API_URL": "https://hub.example", "SEAGULL_SOCIAL_API_URL": "https://social.example",
+		"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://hub.example", "SEAGULL_SOCIAL_API_URL": "https://social.example",
 		"SEAGULL_NODE_ID": "node", "SEAGULL_CONNECTOR_TOKEN": "sga_token",
 		"SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir(),
 	}, Monitoring: false}, nil)
@@ -379,7 +379,7 @@ func TestRuntimeWatcherUsesCacheAndAuthorizesNewHandoffs(t *testing.T) {
 func TestRuntimeRejectsStaleRevisionCommand(t *testing.T) {
 	ctx := context.Background()
 	s := &runtimeServer{ctx: ctx, profiles: map[string]*runtimeProfile{}}
-	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "new", Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}, Monitoring: false}, s)
+	p, err := newRuntimeProfile(ctx, RuntimeProfile{ID: "p", Revision: "new", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}, Monitoring: false}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestRuntimeUnixSocketAndDuplicateInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	profile := RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}, Monitoring: false, Revision: "r"}
+	profile := RuntimeProfile{ID: "p", Environment: map[string]string{"SEAGULL_AGENT_ENV_FILE": filepath.Join(t.TempDir(), "missing-env"), "SEAGULL_API_URL": "https://api.example", "SEAGULL_AGENT_HANDLE": "@p", "SEAGULL_AGENT_CONTEXT_DIR": t.TempDir()}, Monitoring: false, Revision: "r"}
 	request, _ := json.Marshal(RuntimeRequest{Version: 1, ID: "c", Operation: "configure", Profiles: []RuntimeProfile{profile}})
 	_, _ = conn.Write(append(request, '\n'))
 	scanner := bufio.NewScanner(conn)

@@ -6,7 +6,6 @@ struct MessagesView: View {
     @State private var showingComposer = false
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var hasLoaded = false
 
     private var conversations: [MessageConversation] {
         let all = store.ownedGulls.flatMap { gull in
@@ -22,14 +21,17 @@ struct MessagesView: View {
                 let name = store.savedGulls.first(where: { $0.handle == counterpart })?.displayName
                 return MessageConversation(id: "\(gull.handle)|\(threadID)", ownedHandle: gull.handle, threadID: threadID, counterpartHandle: counterpart, counterpartName: name, latestContent: message.contentInline ?? "", latestDate: parseDate(message.createdAt))
             }
-            return incoming + outgoing
+            let pending = store.pendingMessages.filter { $0.sender.handle == gull.handle }.map { item in
+                MessageConversation(id: "\(gull.handle)|\(item.conversationID)", ownedHandle: gull.handle, threadID: item.conversationID, counterpartHandle: item.recipientHandle, counterpartName: store.savedGulls.first(where: { $0.handle == item.recipientHandle })?.displayName, latestContent: item.content, latestDate: item.createdAt)
+            }
+            return incoming + outgoing + pending
         }
         .reduce(into: [String: MessageConversation]()) { result, conversation in
             if let existing = result[conversation.id], existing.latestDate >= conversation.latestDate { return }
             result[conversation.id] = conversation
         }
         .values
-        .sorted { $0.latestDate > $1.latestDate }
+        .sorted { $0.latestDate == $1.latestDate ? $0.id < $1.id : $0.latestDate > $1.latestDate }
 
         guard !searchText.isEmpty else { return all }
         return all.filter {
@@ -66,12 +68,14 @@ struct MessagesView: View {
                         NavigationLink(value: conversation) { MessageConversationRow(conversation: conversation) }
                             .buttonStyle(.plain)
                     }
-                    if !store.inboxCursors.isEmpty {
+                    if store.canLoadMoreInbox {
                         Button("Load more conversations") { Task { await loadMore() } }
                             .frame(minHeight: 44)
                             .disabled(isLoading)
                     }
-                    if isLoading { ProgressView().padding(.vertical, 14) }
+                }
+                if let issue = store.syncIssue {
+                    Text(issue).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
@@ -82,7 +86,7 @@ struct MessagesView: View {
         .toolbar {
             GullsNavigationTitle("Messages")
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showingComposer = true } label: { Image(systemName: "square.and.pencil").frame(minWidth: 44, minHeight: 44) }
+                Button { showingComposer = true } label: { Image(systemName: "square.and.pencil") }
                     .accessibilityLabel("New message")
             }
         }
@@ -90,34 +94,24 @@ struct MessagesView: View {
             NetworkConversationView(ownedHandle: conversation.ownedHandle, threadID: conversation.threadID, counterpartHandle: conversation.counterpartHandle)
         }
         .refreshable { await refresh() }
-        .task { await refreshIfNeeded() }
+        .task { store.syncInBackground() }
         .sheet(isPresented: $showingComposer) { NewMessageSheet().presentationDetents([.medium, .large]) }
         .alert("Messages unavailable", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "Try again in a moment.") }
     }
 
-    private func refreshIfNeeded() async {
-        guard !hasLoaded, !isLoading, !store.ownedGulls.isEmpty else { return }
-        hasLoaded = true
-        await refresh()
-    }
-
     private func refresh() async {
         isLoading = true
         defer { isLoading = false }
-        for gull in store.ownedGulls {
-            let inboxLoaded = await store.refreshInbox(for: gull)
-            let sentLoaded = await store.refreshSent(for: gull)
-            if !inboxLoaded || !sentLoaded { errorMessage = store.error ?? "Pull to refresh and try again." }
-        }
+        await store.refresh()
     }
 
     private func loadMore() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
-        for gull in store.ownedGulls where store.inboxCursors[gull.handle] != nil {
+        for gull in store.ownedGulls where store.inboxCursors[gull.handle] != nil || store.moreCachedInboxes.contains(gull.handle) {
             if !(await store.loadMoreInbox(for: gull)) { errorMessage = store.error }
         }
     }
@@ -173,13 +167,16 @@ struct NetworkConversationView: View {
     let threadID: String
     let counterpartHandle: String
     @State private var draft = ""
-    @State private var pending: [PendingMessage] = []
-    @State private var failedPendingIDs: Set<String> = []
     @State private var isLoading = false
     @State private var isLoadingEarlier = false
     @State private var isSending = false
     @State private var errorMessage: String?
-    @State private var sentScrollTarget: String?
+    @State private var retryTarget: MobilePendingMessage?
+    private var effectiveThreadID: String { store.resolvedThreadIDs[threadID] ?? threadID }
+    private var isLocalConversation: Bool { effectiveThreadID.hasPrefix("pending:") }
+    private var pending: [MobilePendingMessage] {
+        store.pendingMessages.filter { $0.sender.handle == ownedHandle && ($0.conversationID == threadID || $0.threadID == effectiveThreadID) }
+    }
     private var ownedGull: CloudGull? { store.ownedGulls.first(where: { $0.handle == ownedHandle }) }
     private var resolvedRecipient: String? {
         if let handle = SavedGull.canonicalHandle(counterpartHandle) { return handle }
@@ -194,7 +191,7 @@ struct NetworkConversationView: View {
         self.init(ownedHandle: gull.handle, threadID: threadID, counterpartHandle: counterpartHandle)
     }
 
-    private var messages: [MobileMessage] { store.messagesByThreadID[threadID] ?? [] }
+    private var messages: [MobileMessage] { store.messagesByThreadID[effectiveThreadID] ?? [] }
     private var identifiedMessages: [IdentifiedMessage] {
         messages.map { message in
             IdentifiedMessage(message: message, id: message.messageID ?? "\(threadID):\(message.senderHandle ?? ""):\(message.createdAt ?? ""):\(message.contentInline ?? "")")
@@ -205,7 +202,7 @@ struct NetworkConversationView: View {
         ScrollViewReader { proxy in
             let history = ScrollView {
                 LazyVStack(spacing: 12) {
-                    if store.threadCursors[threadID] != nil {
+                    if store.hasMoreMessages(in: effectiveThreadID) {
                         Button {
                             Task { await loadEarlier() }
                         } label: {
@@ -233,7 +230,10 @@ struct NetworkConversationView: View {
                             MessageBubble(message: identified.message, ownedHandle: ownedHandle).id(identified.id)
                         }
                         ForEach(pending) { message in
-                            PendingMessageBubble(message: message, failed: failedPendingIDs.contains(message.id)) { retry(message) }
+                            PendingMessageBubble(message: message) {
+                                if message.state == .unconfirmed { retryTarget = message }
+                                else { retry(message) }
+                            }
                                 .id(message.id)
                         }
                     }
@@ -252,10 +252,6 @@ struct NetworkConversationView: View {
                     history.safeAreaInset(edge: .bottom, spacing: 0) { composer }
                 }
             }
-            .onChange(of: sentScrollTarget) { _, target in
-                guard let target else { return }
-                withAnimation(.snappy) { proxy.scrollTo(target, anchor: .bottom) }
-            }
             .onChange(of: pending.last?.id) { _, target in
                 guard let target else { return }
                 withAnimation(.snappy) { proxy.scrollTo(target, anchor: .bottom) }
@@ -271,17 +267,26 @@ struct NetworkConversationView: View {
                     }
                 }
             }
-            .task { await load(proxy: proxy) }.refreshable { await load(proxy: proxy) }
+            .task(id: effectiveThreadID) { await load() }.refreshable { await load() }
             .task(id: scenePhase) { if scenePhase == .active { await poll() } }
             .alert("Message unavailable", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK", role: .cancel) { errorMessage = nil }
             } message: { Text(errorMessage ?? "Try again in a moment.") }
+            .confirmationDialog("Retry this message?", isPresented: Binding(get: { retryTarget != nil }, set: { if !$0 { retryTarget = nil } }), presenting: retryTarget) { item in
+                Button("Retry") { retry(item); retryTarget = nil }
+                Button("Cancel", role: .cancel) { retryTarget = nil }
+            } message: { _ in
+                Text("The server may have received it. Check this conversation before retrying.")
+            }
         }
     }
 
     @ViewBuilder
     private var composer: some View {
-        if let resolvedRecipient {
+        if isLocalConversation {
+            Text("Your first message is saved on this device.")
+                .font(.caption).foregroundStyle(.secondary).padding()
+        } else if let resolvedRecipient {
             MessageComposer(text: $draft, isSending: isSending, placeholder: "Message \(resolvedRecipient)") { send() }
         } else {
             Text("This Gull's identity is unavailable. Pull to refresh before replying.")
@@ -298,16 +303,20 @@ struct NetworkConversationView: View {
         return !Calendar.current.isDate(date, inSameDayAs: previous)
     }
 
-    private func load(proxy: ScrollViewProxy) async {
-        isLoading = true; defer { isLoading = false }
+    private func load() async {
+        guard !isLocalConversation else { return }
+        await store.restoreCachedThread(effectiveThreadID)
+        isLoading = messages.isEmpty && pending.isEmpty
+        defer { isLoading = false }
         do {
             guard let ownedGull else {
                 errorMessage = "This Gull is no longer available."
                 return
             }
-            try await store.loadThread(threadID, for: ownedGull)
-            if let last = messages.last, let messageID = last.messageID { proxy.scrollTo(messageID, anchor: .bottom) }
-        } catch { errorMessage = error.localizedDescription }
+            try await store.loadThread(effectiveThreadID, for: ownedGull)
+        } catch {
+            if messages.isEmpty { errorMessage = error.localizedDescription }
+        }
     }
 
     private func loadEarlier() async {
@@ -317,7 +326,7 @@ struct NetworkConversationView: View {
         }
         isLoadingEarlier = true
         defer { isLoadingEarlier = false }
-        do { _ = try await store.loadMoreThread(threadID, for: ownedGull) }
+        do { _ = try await store.loadMoreThread(effectiveThreadID, for: ownedGull) }
         catch { errorMessage = error.localizedDescription }
     }
 
@@ -326,11 +335,12 @@ struct NetworkConversationView: View {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled else { return }
+            guard !isLocalConversation else { continue }
             guard let ownedGull else {
                 errorMessage = "This Gull is no longer available."
                 return
             }
-            do { _ = try await store.loadThread(threadID, for: ownedGull) }
+            do { _ = try await store.loadThread(effectiveThreadID, for: ownedGull) }
             catch { /* Keep the current conversation visible during quiet refresh. */ }
         }
     }
@@ -338,28 +348,21 @@ struct NetworkConversationView: View {
     private func send() {
         let content = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty, !isSending else { return }
-        let item = PendingMessage(content: content, idempotencyKey: UUID().uuidString)
-        pending.append(item); draft = ""; Task { await transmit(item) }
+        guard let ownedGull, let resolvedRecipient else { return }
+        isSending = true
+        Task {
+            defer { isSending = false }
+            do {
+                try await store.enqueueMessage(sender: ownedGull, recipientHandle: resolvedRecipient, content: content, threadID: effectiveThreadID)
+                draft = ""
+            } catch { errorMessage = error.localizedDescription }
+        }
     }
 
-    private func retry(_ item: PendingMessage) { guard !isSending else { return }; Task { await transmit(item) } }
-
-    private func transmit(_ item: PendingMessage) async {
-        isSending = true; defer { isSending = false }
-        do {
-            guard let ownedGull else {
-                failedPendingIDs.insert(item.id)
-                errorMessage = "This Gull is no longer available."
-                return
-            }
-            failedPendingIDs.remove(item.id)
-            guard let resolvedRecipient else { throw SavedGullError.notFound }
-            let response = try await store.send(sender: ownedGull, recipientHandle: resolvedRecipient, content: item.content, threadID: threadID, idempotencyKey: item.idempotencyKey)
-            pending.removeAll { $0.id == item.id }
-            sentScrollTarget = response.message?.messageID
-        } catch {
-            failedPendingIDs.insert(item.id)
-            errorMessage = "Message could not be sent. The draft is kept below so you can retry."
+    private func retry(_ item: MobilePendingMessage) {
+        Task {
+            do { try await store.retryPendingMessage(item.id) }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 }
@@ -367,13 +370,6 @@ struct NetworkConversationView: View {
 private struct IdentifiedMessage: Identifiable {
     let message: MobileMessage
     let id: String
-}
-
-private struct PendingMessage: Identifiable, Hashable {
-    let id: String
-    let content: String
-    let idempotencyKey: String
-    init(content: String, idempotencyKey: String) { self.id = idempotencyKey; self.content = content; self.idempotencyKey = idempotencyKey }
 }
 
 private struct MessageBubble: View {
@@ -394,16 +390,21 @@ private struct MessageBubble: View {
 }
 
 private struct PendingMessageBubble: View {
-    let message: PendingMessage
-    let failed: Bool
+    let message: MobilePendingMessage
     let retry: () -> Void
     var body: some View {
         HStack { Spacer(minLength: 48); VStack(alignment: .trailing, spacing: 5) {
             Text(message.content).font(.body).foregroundStyle(.white.opacity(0.85)).padding(.horizontal, 14).padding(.vertical, 10).background(GullsTheme.accent.opacity(0.65), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            if failed {
-                Button("Tap to retry", action: retry).font(.caption.weight(.medium)).foregroundStyle(GullsTheme.accent).frame(minHeight: 44)
-            } else {
-                Text("Sending…").font(.caption).foregroundStyle(.secondary).frame(minHeight: 44)
+            switch message.state {
+            case .queued:
+                Text("Waiting to send").font(.caption).foregroundStyle(.secondary)
+            case .sending:
+                Text("Sending…").font(.caption).foregroundStyle(.secondary)
+            case .failed, .unconfirmed:
+                HStack(spacing: 10) {
+                    Text(message.state == .unconfirmed ? "Delivery unconfirmed" : "Not sent").font(.caption).foregroundStyle(.secondary)
+                    Button("Retry", action: retry).font(.caption.weight(.medium)).foregroundStyle(GullsTheme.accent).frame(minHeight: 44)
+                }
             }
         } }
     }
@@ -446,7 +447,6 @@ struct NewMessageSheet: View {
     @State private var content = ""
     @State private var isSending = false
     @State private var errorMessage: String?
-    @State private var idempotencyKey = UUID().uuidString
     init(recipientHandle: String = "") {
         _recipientHandle = State(initialValue: recipientHandle)
     }
@@ -477,9 +477,6 @@ struct NewMessageSheet: View {
             }
             .disabled(isSending)
             .onAppear { senderHandle = store.ownedGulls.first?.handle ?? "" }
-            .onChange(of: senderHandle) { _, _ in idempotencyKey = UUID().uuidString }
-            .onChange(of: recipientHandle) { _, _ in idempotencyKey = UUID().uuidString }
-            .onChange(of: content) { _, _ in idempotencyKey = UUID().uuidString }
         }
         .gullsSheet()
     }
@@ -488,7 +485,7 @@ struct NewMessageSheet: View {
         Task {
             do {
                 guard let sender = store.ownedGulls.first(where: { $0.handle == senderHandle }) else { throw MobileStoreError.notSignedIn }
-                try await store.send(sender: sender, recipientHandle: normalizedHandle(recipientHandle), content: content.trimmingCharacters(in: .whitespacesAndNewlines), threadID: nil, idempotencyKey: idempotencyKey)
+                try await store.enqueueMessage(sender: sender, recipientHandle: normalizedHandle(recipientHandle), content: content)
                 dismiss()
             }
             catch { errorMessage = error.localizedDescription; isSending = false }

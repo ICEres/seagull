@@ -17,30 +17,14 @@ struct WorkspaceSidebar: View {
     let onGulls: () -> Void
 
     @Environment(\.openSettings) private var openSettings
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .safeAreaBar(edge: .top, spacing: 12) {
-                    navigation
-                }
-                .safeAreaBar(edge: .bottom, spacing: 12) {
-                    accountFooter
-                }
-                .gullsScrollEdges()
-        } else {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    navigation.background(GullsStyle.canvas)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    accountFooter.background(GullsStyle.canvas)
-                }
-                .gullsScrollEdges()
+        VStack(spacing: 0) {
+            navigation
+            Spacer(minLength: 0)
+            accountFooter
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var navigation: some View {

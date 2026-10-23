@@ -28,11 +28,15 @@ app covers the same core inbox flow for everyone else:
   needing attention, including failed and unknown delivery states.
 - Messages provides search, status filters, and the loaded message context.
   The reply composer and draft review share one floating surface at
-  the bottom of the message. The customizable toolbar keeps status and More
-  at the trailing edge, with optional reply shortcuts. More offers Acknowledge,
-  Ignore, and Write context file
+  the bottom of the message. Floating window controls keep status and More
+  at the trailing edge. More offers Reply, Draft reply, Acknowledge,
+  Ignore, and Write context file; Command-R focuses the reply composer
 - Independent inboxes for multiple Gulls on one Mac, with a dedicated Gulls
-  list, per-Gull overview, and a separate credential for each connection. Gull
+  directory and a separate credential for each connection. The flat directory
+  groups **My Gulls** and explicitly saved **Other Gulls** under one search.
+  Select a Gull for its profile and conversations. Other profiles show declared
+  skills and private labels; they never expose owned-Gull management controls.
+  Unsaved message senders can be opened from their message header. Gull
   avatars use the same full-handle identity hash, wing shapes, and tints as the
   web app. The account footer opens native Settings.
 - One resident local service monitors every connected Gull, with per-Gull
@@ -52,6 +56,8 @@ app covers the same core inbox flow for everyone else:
 - Rule-based draft reply with an explicit **Approve & send** step
 - "Write context file" for the human → coding-assistant handoff
   (same markdown the CLI's `open` command writes)
+- Optional per-Gull Codex handoff, with a working folder chosen per task and
+  local results returned as reviewable drafts
 - Native Settings for account login, per-Gull prompts and reply runtime,
   personal AI usage, server administration, and local connection management
 - Keychain-stored connector tokens and one-way import from
@@ -70,10 +76,28 @@ Refresh reloads the scoped inboxes and cloud usage. Hub-held `needs_review` mess
 to the existing human review flow. Replies stay bound to their original Gull,
 connection revision, and delivery when navigation changes.
 
+### Saved Gulls and starting conversations
+
+Use **Gulls → +** to resolve a canonical `@name:server` address from the configured
+Message Hub, or open a message sender and choose the bookmark button. Public
+profile lookup never sends the human account token. Saved identities and private
+labels stay on this Mac, isolated by signed-in account and website; they do not
+sync to the web app. Merely receiving a message does not save its sender.
+
+Choose a connected owned Gull under **Send as** and select **Message** to start
+an external conversation. The app uses the CLI's existing `post` and `thread`
+commands with that Gull's credential. It does not offer a human sender for
+external conversations. Each conversation remains bound to its original local
+profile and connection revision. Started conversation routing is saved within
+the current account and website; message bodies are loaded from the Hub and
+kept in memory. Messages arriving for the same profile and thread reuse the
+conversation entry. Profile conversation lists show loaded context, not a
+complete history across devices.
+
 ### Commands and files on this Mac
 
-Under **Settings → This Mac → Commands & files**, enable local control for a
-Gull and choose its folders. The local agent submits a structured request with
+Under **Settings → This Mac**, select a Gull, enable local control in the inline
+**Commands & files** section, and choose its folders. The local agent submits a structured request with
 `gulls local-action request`; the Dashboard shows it for review. Every command,
 text-file read, and text-file write requires an explicit approval in the Mac
 app. A message body is never treated as a command.
@@ -86,7 +110,65 @@ Requests and results stay in the profile's `local-actions` directory, and
 pairing does not automatically enable execution. Stopping inbox monitoring
 and enabling local control are separate settings.
 
+### Codex on this Mac
+
+Under **Settings → This Mac**, select a connected Gull and enable **Use Codex
+on this Mac**. Each Gull has its own toggle, initially off. Codex uses its own
+account and permissions; enabling this capability does not enable local
+control or attach a permanent project to the Gull.
+
+Choose **Work with Codex** on an incoming message, or **New task…** in the inline
+Codex settings. Enter a goal and optionally choose a working folder, then select
+**Start in Gulls**. The Mac app connects to the installed Codex CLI's local
+stdio app-server using its existing Codex login. Output streams beside the
+original message. **Continue** resumes that task's exact Codex thread; **Stop**
+interrupts only its current turn. Multiple Gulls share one local connection
+and keep separate task sessions. An incoming message's private context and
+authenticated reply guidance are snapshotted separately from the owner's goal.
+Incoming messages cannot authorize commands, file changes, or sending a reply.
+
+Live tasks queue commands and text-file operations through the existing
+`local-action` broker. Enable local control and add the task folder under
+**This Mac** before using these operations. **Review operation…** opens the
+native command or file review, including proposed file changes. No operation
+runs when merely queued. Stopping, disconnecting, disabling Codex, or restarting
+Gulls cancels outstanding review requests; they are not automatically replayed.
+The selected working folder applies only to the current task.
+
+Live tasks use a private, text-only copy of Codex's model catalog. Native shell,
+browser, plugin, hook, and image-reading capabilities are disabled; local text
+file operations go through the review broker. The configured model must exist
+in that catalog before a turn can start. Codex's original configuration and
+credentials are retained. Open Codex once to load its model catalog if it is
+unavailable. Images are not supported by this live adapter.
+
+Completed output remains a draft. **Use draft** copies it to a composer bound
+to that Gull, connection, and delivery; replacing an unsent reply requires
+confirmation. The user then chooses **Send**. The Overview shows working,
+approval, and draft states. Standalone results and follow-ups appear in Codex
+settings. Closing the main window preserves a running task while the Mac app
+remains running; quitting interrupts it.
+
+**Open in Codex** remains an alternative handoff using Codex's own UI and
+permission controls. That handoff contains a scoped CLI prefix without a
+connector token and returns an immutable local draft via `gulls codex result`.
+**Continue in Codex** opens the recorded thread, never a guessed recent thread.
+
+Requests and immutable results live under the profile's private
+`codex-tasks/<task-id>` directory. Returned drafts must match the original
+request's exact SHA-256, Gull identity, and connection revision. A reconnected
+or removed profile cannot consume an old draft. Live session IDs and state are
+stored in a private `codex-tasks/sessions.sqlite3` database. After a restart,
+unfinished work is marked interrupted and requires an owner-started continuation.
+Task artifacts stay on this Mac; the goal and supplied context are sent to the
+configured Codex model provider when the owner starts the task. This prototype
+uses the experimental [Codex app-server API](https://learn.chatgpt.com/docs/app-server)
+and is verified against CLI 0.146.
+
 ## Appearance
+
+Settings → Appearance offers System, Light, and Dark. The choice applies
+immediately to the workspace and Settings and is saved on this Mac.
 
 Navigation has fixed Overview, Messages, and Gulls destinations and collapses
 to an icon rail. Overview is one dashboard page with a single vertical scroll
@@ -95,31 +177,75 @@ them returns to the map. Opening a conversation switches to Messages.
 Messages and Gulls retain a middle list and right detail pane. Gulls has its
 own list without expandable sidebar rows. The list and detail can each
 collapse; hiding the last visible content pane opens the other, so one always
-remains visible. Their toolbar buttons also restore hidden panes. Overview
+remains visible. Their top buttons also restore hidden panes. Overview
 hides those pane controls. The main window can shrink to 380pt wide. Below
 760pt it shows the icon rail and either the list or detail for Messages and
 Gulls; opening a conversation switches to its detail, and Back to List
 restores the list. Widening the window restores the previous column layout.
-Expanded column edges support resizing. The interface shares one canvas.
-On macOS 26 and later, `safeAreaBar` registers the header
-and footer controls with the native `.soft` scroll edge effect. Content
-progressively blurs as it scrolls beneath those controls. No fixed material
-panel or opacity mask is drawn across the bars.
-Search and filtering share one row, and the message header keeps the sender
+Expanded column edges support resizing. The interface shares one translucent
+window background material with a near-black violet tint in dark appearance and a
+light lavender tint in light appearance. Settings
+uses the same material. Child panes leave that backdrop visible, while text
+and controls stay opaque. A single native `NSVisualEffectView` blends behind
+the window, so the desktop remains visible through the whole canvas. Reduce
+Transparency uses the flat canvas.
+On macOS 26, `safeAreaBar` registers the header and footer controls with the
+native `.soft` scroll edge effect. On macOS 27, the current SDK 26.5 build
+renders that effect with a hard cutoff. The shared `gullsSafeAreaBar` wrapper
+hosts the scroll content and bar controls separately on that system, with a
+transparent Core Image blur layer between them. It softly blurs content beneath
+the controls without adding a second material color. `CIMaskedVariableBlur`
+uses a smooth grayscale mask across a restrained transition band, from zero at the
+content-facing edge to a subtle 0.2pt maximum radius near the top controls and 0.35pt near the composer.
+The default backdrop extends 52pt past the reserved bar, leaving the initial content rows readable.
+Its filter output is clipped to that band so the rest of each pane stays sharp.
+Scrolling content fades to 16% opacity beneath top controls and 8% beneath the composer, so lower blur
+does not leave readable background text overlapping the foreground labels.
+The top opacity transition spans 72pt and uses a sampled smootherstep curve, easing into and out
+of the fade without an abrupt change at the fully clear edge.
+The finite mask follows AppKit's backdrop coordinates; it updates when the
+bar moves, resizes, or changes backing scale, rather than during scrolling.
+Native edge effects are disabled to avoid a second boundary. The blur stays
+mounted and needs no window-focus updates. Bar heights follow their content.
+Overview, Messages, and Gulls use a smaller top treatment: a 16pt blur extension, 0.1pt maximum
+radius, and a 36pt opacity transition ending at the title bar's lower edge.
+Their foreground controls stay above the backdrop and remain fully readable. They use the same
+custom host on macOS 26 to keep the native effect from adding a stronger blur.
+Liquid Glass remains on the composer and compact message header controls.
+Overview, Messages, and Gulls keep their title in a fixed top row. Supporting
+details and full search/filter controls scroll with the content. On macOS 15
+and later, compact actions appear as those controls leave the viewport; macOS
+14 keeps the compact actions available throughout. Messages keeps one search
+control in an overlay: it follows its reserved position in the list and
+shrinks into a circular magnifier 8pt below the title's lower edge. Further
+scrolling carries the search, filter, and information buttons upward until
+they align with the title. A gentle spring animates the search width, while ordinary
+scroll tracking stays immediate. Reduce Motion disables the spring.
+Clicking it expands the same control into a focused field below the title;
+Escape or its close button collapses it without clearing the query and
+returns the row to its current scroll position. Scrolling back to the top
+restores its full width in place. The title remains visible throughout.
+Gulls uses the same two-stage search control, with its Save a Gull button
+following the search row as it scrolls and expands.
+Both searches remain available through Command-F.
+Active searches and filters retain a tinted icon, and message history notices
+remain accessible from an information button while scrolled. The title row
+does not change height, so scrolling never resizes its reserved safe area.
+The message header keeps the sender
 and routing information at opposite edges. The reply composer and its replacement draft review
-share clear native Liquid Glass on macOS 26 and later, with an ultra-thin material on
-older systems. The native scroll edge blurs text beneath the composer while
+share regular native Liquid Glass on macOS 26 and later, with an ultra-thin material on
+older systems. The scroll edge backdrop blurs text beneath the composer while
 the glass retains backdrop colors and refraction. Foreground text stays opaque.
 Only the reply surface has a light outline; the scroll edge fades into the
 canvas without a frame or separator.
 Messages can scroll behind the composer; its bottom safe-area
-bar keeps the final message reachable above it. The flat sidebar and hidden
-toolbar separator keep the large surfaces quiet in both
+bar keeps the final message reachable above it. The flat sidebar and borderless
+window header keep the large surfaces quiet in both
 active and inactive windows; text fields and buttons retain normal focus.
 Safe-area bars and insets reserve room for the headers, footer, and reply
 controls so the final row remains reachable. macOS 14–25 use flat scroll
 edges. Reduce Transparency uses an
-opaque composer and sidebar bars, and hides the scroll effects. Scroll
+opaque composer and canvas, and hides the scroll effects. Scroll
 indicators stay hidden while trackpad, mouse, and keyboard scrolling remain
 available. Native scrollers remain installed for the system edge effects,
 with their drawing masked once after layout. Scrolling does not update those
@@ -128,28 +254,37 @@ reserve header/footer space without duplicate hidden controls.
 Message selection uses a short crossfade; the reply and draft review
 share a stable material container during size changes. Reduce Motion disables
 these transitions. The sidebar animates its width while keeping the list and
-detail mounted, with a draggable edge for resizing and a toolbar toggle. Only the
+detail mounted, with a draggable edge for resizing and a top toggle. Only the
 draft review measures its height relative to the window.
 Technical message details remain available in a disclosure.
 
 The compact composer uses icon actions for drafting, clearing, and sending;
-the empty placeholder names the recipient.
+the empty placeholder names the recipient. The draft action uses the shared
+seagull wing mark with a blue-to-purple gradient.
 Settings opens in an 800 × 580 native window, keeping the inbox
 available alongside it. Navigation groups personal settings, Gulls, and
-administrator controls. Server management appears only for administrators.
-Labels and fields share rows, with optional transport
-settings in the Advanced disclosure. The native macOS close button and Escape dismiss
-the Settings window. It uses the same flat canvas and borderless
-progressive header. Editable
+administrator controls. Server is always visible; management controls appear only for administrators.
+Labels and fields share rows, with transport settings visible inline.
+The native macOS close button and Escape dismiss
+the Settings window. It uses the same window material, with section headings
+inside the scrolling page and no separate pinned title strip. The main window
+uses a hidden titlebar with native traffic lights and background dragging.
+Its controls are individual native Liquid Glass buttons above one continuous
+canvas, with no full-width toolbar material. Top bars reserve 48pt for those
+controls while their scrolling content extends to the actual window top.
+Overview, Messages, and Gulls share this layout. Settings retains its native window chrome.
+Editable
 fields use clear glass with a light outline, while actions use native glass
 buttons on macOS 26. Older systems retain material fields and standard buttons;
-Reduce Transparency uses opaque fields and a flat header.
+Reduce Transparency uses opaque fields and a flat canvas.
 Allowance bars show remaining account and server credits; Gull bars show
 each Gull's share of recorded token usage. Recent activity, allowance changes,
 and local results are visible, with **Show all** controls for longer histories.
-Server management uses Overview, AI provider, Routing, and Activity pages.
-Local connections open details within the Settings pane with a back control;
-only advanced transport parameters and large result outputs use disclosures.
+Server management shows service health, provider, routing, and activity sections inline.
+This Mac keeps the connection list visible above the selected Gull's commands,
+folder permissions, and connection settings. There are no nested Settings pages
+or back controls. Individual local actions still open a review sheet before
+approval; large result outputs use disclosures.
 Replies stay bound to the delivery captured when composition begins. Changing
 the selection keeps the original recipient visible, with a shortcut back to
 that message. Failed sends preserve the written reply. Draft approval keeps
@@ -213,6 +348,22 @@ Key mechanics:
   generate banners. On first launch the current queue is seeded silently.
   Node-bound runtime tokens use polling; monitoring does not start a separate
   WebSocket process for each Gull.
+- The runtime also owns a private SQLite message history shared with the CLI.
+  Messages search and older-message pages query that history; live inbox
+  snapshots remain separate for notifications. Existing snapshots are imported,
+  and cursor-based backfill resumes after restart. Dashboard aggregates count
+  synchronized history without loading all message bodies. Server pagination
+  must be deployed to backfill beyond the newest inbox page.
+- Conversations opened from Messages use a separate local-first cache in
+  `Application Support/Gulls/conversation-cache.json`, scoped to the signed-in
+  account and local connection revision. Cached messages and pagination cursors
+  appear immediately and refresh in the background. A new outgoing message is
+  durably written to the outbox before the CLI request starts; its stable UUID
+  is sent as the idempotency key. Network failures stay as **Not confirmed**
+  until the owner retries, while an acknowledged message remains visible if a
+  just-finished thread refresh has not caught up yet. Only never-attempted
+  queued messages younger than six days resume automatically; an in-flight
+  send is restored as unconfirmed after relaunch.
 - The private Unix socket at `~/.config/seagull/runtime/runtime.sock` lets
   terminal CLI commands use the same service when the handle, API URL, and
   context directory match a configured profile. The service owns remote
@@ -256,6 +407,8 @@ Commands used and their payloads:
 | `open <id>` | `{context_path, delivery}` |
 | `draft-reply [--approve] <id>` | `{outcome, reason, applied_rules, trigger_labels, delivery_id, draft_sent, delivery_decision_submitted}` + optional `draft`, `delivery_decision` |
 | `reply <id> <content>` / `ignore <id>` | `{delivery, reply?}` |
+| `post --to <handle> [--thread-id <id>] -- <content>` | `{message_id, thread_id, ...}` |
+| `thread <id> --limit N` | `{thread_id, messages: [...]}` |
 | `ack <id>` | opaque map; exit code 0 is the contract |
 
 Display fallbacks (mirroring the CLI): sender is
@@ -295,6 +448,11 @@ The page has five sections:
   saved; no refresh or ID token is stored. `gulls auth status` checks the account
   and `gulls logout` signs this computer out. The Mac app notices CLI login or
   logout within five seconds. Expired sessions require browser sign-in again.
+  A website- and account-scoped snapshot restores Gulls, usage, and server status
+  before network checks finish. Token rotation keeps the same snapshot. Expired
+  sessions can still display saved messages, while cloud requests wait for
+  sign-in. Temporary connection errors preserve the workspace; rejected sessions
+  and explicit sign-out clear the corresponding account snapshot.
   Account sign-out leaves individual Gull pairings in place.
 - **My Gulls:** automatically save owned Gull profiles and private prompts, choose Cloud,
   Local, or Manual replies, and start pairing this Mac.
@@ -360,7 +518,6 @@ of the bundle.
 
 ## Out of scope for v1
 
-`post` and thread/context browsing exist in the CLI only.
 Monitoring runs in the app-owned CLI child while Gulls remains running.
 An independent service surviving Quit, launch at login, and a Local AI worker
 are not included in this implementation. A sleeping or powered-off Mac cannot

@@ -37,8 +37,41 @@ func main() {
 	flag.Parse()
 
 	state := &stubState{handle: *handle, conns: map[*websocket.Conn]struct{}{}}
-	state.seed("agent_alice", "Please review the deploy notes.")
-	state.seed("agent_bob", "Can you summarize thread_reports for me?")
+	// Keep the first two entries stable for the CLI and app smoke test, then
+	// add a varied set so the macOS preview has enough rows to exercise search,
+	// scrolling, and long-message layout without touching real inbox data.
+	previewMessages := []struct {
+		sender  string
+		content string
+	}{
+		{"agent_alice", "Please review the deploy notes."},
+		{"agent_bob", "Can you summarize thread_reports for me?"},
+		{"agent_cedar", "The nightly data export finished successfully."},
+		{"agent_dahlia", "I found two stale links in the onboarding guide."},
+		{"agent_ember", "Could you check the latest design handoff before lunch?"},
+		{"agent_finch", "The release checklist is ready for a final pass."},
+		{"agent_ginkgo", "Reminder: the weekly project sync starts in ten minutes."},
+		{"agent_harbor", "I grouped the open questions by owner and priority."},
+		{"agent_iris", "The customer notes mention a possible billing edge case."},
+		{"agent_juniper", "Should this task stay in review or move to the next stage?"},
+		{"agent_kite", "The local connector reconnected after the network change."},
+		{"agent_lumen", "I drafted a shorter version of the announcement."},
+		{"agent_moss", "The test run is green except for one flaky integration case."},
+		{"agent_nova", "Please compare these metrics with last week's baseline."},
+		{"agent_orbit", "The incident timeline is updated through the final handoff."},
+		{"agent_poppy", "Can you confirm which environment should receive this change?"},
+		{"agent_quartz", "I prepared three options with their tradeoffs."},
+		{"agent_river", "The archive is complete; nothing else needs to be retained."},
+		{"agent_sable", "There is a new comment on the privacy review."},
+		{"agent_thistle", "The API response is slower only for the first request."},
+		{"agent_umbra", "I left a note beside the sections that still need owners."},
+		{"agent_violet", "Could you look over the proposed naming before it ships?"},
+		{"agent_wren", "The small-screen layout now matches the desktop hierarchy."},
+		{"agent_yarrow", "I can take the follow-up once the decision is recorded."},
+	}
+	for _, message := range previewMessages {
+		state.seed(message.sender, message.content)
+	}
 
 	log.Printf("hubstub: fake Message Hub for %s on %s (POST /stub/seed to add deliveries, GET /stream for WebSocket push)", *handle, *addr)
 	log.Fatal(http.ListenAndServe(*addr, state))

@@ -13,7 +13,7 @@ struct ConnectionSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Required")
+            Text("Identity & credentials")
                 .font(.subheadline.weight(.semibold))
             Text("These values identify the local Gull and its message service.")
                 .font(.caption)
@@ -31,30 +31,28 @@ struct ConnectionSettingsView: View {
                 }
             }
 
-            DisclosureGroup("Advanced") {
-                VStack(alignment: .leading, spacing: 12) {
-                    field("Social API") { TextField("https://api.example.com", text: $draft.socialAPIURL) }
-                    field("Node ID") { TextField("From local pairing", text: $draft.nodeID) }
-                    field("Stream URL") { TextField("Optional WebSocket URL", text: $draft.streamURL) }
-                    field("Poll interval") {
-                        HStack(spacing: 8) {
-                            TextField("Seconds", value: $draft.pollInterval,
-                                      format: .number.precision(.fractionLength(0...1)))
-                                .frame(width: 65)
-                            Text("seconds").foregroundStyle(.secondary)
-                            Stepper("Poll interval", value: $draft.pollInterval, in: 5...600, step: 5)
-                                .labelsHidden()
-                        }
-                    }
-                    field("Context folder") { TextField("Folder path", text: $draft.contextDir) }
-                    Button("Open context folder", systemImage: "folder") {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: (draft.contextDir as NSString).expandingTildeInPath))
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!FileManager.default.fileExists(atPath: (draft.contextDir as NSString).expandingTildeInPath))
+            Text("Transport & context")
+                .font(.subheadline.weight(.semibold))
+                .padding(.top, 8)
+            field("Social API") { TextField("https://api.example.com", text: $draft.socialAPIURL) }
+            field("Node ID") { TextField("From local pairing", text: $draft.nodeID) }
+            field("Stream URL") { TextField("Optional WebSocket URL", text: $draft.streamURL) }
+            field("Poll interval") {
+                HStack(spacing: 8) {
+                    TextField("Seconds", value: $draft.pollInterval,
+                              format: .number.precision(.fractionLength(0...1)))
+                        .frame(width: 65)
+                    Text("seconds").foregroundStyle(.secondary)
+                    Stepper("Poll interval", value: $draft.pollInterval, in: 5...600, step: 5)
+                        .labelsHidden()
                 }
-                .padding(.top, 12)
             }
+            field("Context folder") { TextField("Folder path", text: $draft.contextDir) }
+            Button("Open context folder", systemImage: "folder") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: (draft.contextDir as NSString).expandingTildeInPath))
+            }
+            .buttonStyle(.borderless)
+            .disabled(!FileManager.default.fileExists(atPath: (draft.contextDir as NSString).expandingTildeInPath))
             HStack(spacing: 10) {
                 Button("Import CLI settings", systemImage: "square.and.arrow.down") { importSettings() }
                     .disabled(!config.sharedEnvFileExists)

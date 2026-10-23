@@ -20,7 +20,7 @@ struct OverviewView: View {
                 connections
                 activity
                 if !snapshot.attention.isEmpty { attention }
-                Text("Based on loaded message history. Pull to refresh.")
+                Text(store.syncIssue ?? "Based on saved message history. Pull to refresh.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

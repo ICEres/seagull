@@ -28,7 +28,7 @@ final class MobileCloudStoreTests: XCTestCase {
                 return .json(#"{}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         XCTAssertTrue(store.isSignedIn)
         XCTAssertEqual(store.accessToken, "new")
@@ -62,7 +62,7 @@ final class MobileCloudStoreTests: XCTestCase {
             default: return .json(#"{}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         let profile = try XCTUnwrap(recorder.requests.first { $0.url?.path == "/profiles" })
         XCTAssertEqual(profile.value(forHTTPHeaderField: "Authorization"), "Bearer token")
@@ -85,7 +85,7 @@ final class MobileCloudStoreTests: XCTestCase {
             default: return .json(#"{}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         let gull = CloudGull(agentID: "gull-1", ownerUserID: "user-1", handle: "@mine:gulls.ai", displayName: nil, bio: nil, capabilities: [], relationshipPosture: "open", approvalRequiredFor: [], allowedUseTerms: [], contactExplanation: nil, protocols: [], status: "active", nodeID: nil, deliveryMode: "cloud", lastSeenAt: nil, createdAt: nil, updatedAt: nil)
         let loaded = await store.refreshInbox(for: gull)
@@ -113,7 +113,7 @@ final class MobileCloudStoreTests: XCTestCase {
                 return .json(#"{"items":[],"usage":[],"entries":[],"balance":{"available_credits":0},"ok":true}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: TestCredentials(session: nil))
+        let store = isolatedStore(session: session, credentials: TestCredentials(session: nil))
         store.email = "Fresh@example.com"
         await store.beginSignIn()
         XCTAssertTrue(store.challengePending)
@@ -133,7 +133,7 @@ final class MobileCloudStoreTests: XCTestCase {
             if request.url?.path == "/me" { return .json(#"{"identity":{"user_id":"restored","provider":"cognito","subject":"sub","email":"restored@example.com"}}"#) }
             return .json(#"{"items":[],"usage":[],"entries":[],"balance":{"available_credits":0},"ok":true}"#)
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         XCTAssertTrue(store.isSignedIn)
         XCTAssertEqual(store.userID, "restored")
@@ -188,7 +188,7 @@ final class MobileCloudStoreTests: XCTestCase {
             default: return .json(#"{"items":[],"usage":[],"entries":[],"balance":{"available_credits":0},"ok":true}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         let gull = CloudGull(agentID: "g1", ownerUserID: "owner", handle: "@mine:gulls.ai", displayName: "Mine", bio: nil, capabilities: [], relationshipPosture: "open", approvalRequiredFor: [], allowedUseTerms: [], contactExplanation: nil, protocols: [], status: "active", nodeID: nil, deliveryMode: "cloud", lastSeenAt: nil, createdAt: nil, updatedAt: nil)
         let response = try await store.send(sender: gull, recipientHandle: "@other:gulls.ai", content: "hello", idempotencyKey: "idem-1")
@@ -209,7 +209,7 @@ final class MobileCloudStoreTests: XCTestCase {
             if request.url?.path == "/config.js" { return .json(Self.configuration, contentType: "text/javascript") }
             return .json(#"{"message":"Temporarily unavailable"}"#, status: 503)
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         XCTAssertNotNil(credentials.session)
         XCTAssertTrue(store.canRetryRestore)
@@ -222,7 +222,7 @@ final class MobileCloudStoreTests: XCTestCase {
             if request.url?.path == "/config.js" { return .json(Self.configuration, contentType: "text/javascript") }
             return .json(#"{"message":"Not authorized"}"#, status: 400)
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         XCTAssertNil(credentials.session)
         XCTAssertFalse(store.isSignedIn)
@@ -243,7 +243,7 @@ final class MobileCloudStoreTests: XCTestCase {
             default: return .json(#"{"items":[],"ok":true}"#)
             }
         }
-        let store = MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials)
+        let store = isolatedStore(session: session, credentials: credentials)
         await store.prepare()
         let gull = try XCTUnwrap(MobileAppStore.preview().ownedGulls.first)
         _ = try await store.loadThread("thread-1", for: gull)
@@ -253,6 +253,11 @@ final class MobileCloudStoreTests: XCTestCase {
         _ = try await store.loadThread("thread-1", for: gull)
         XCTAssertEqual(store.messagesByThreadID["thread-1"]?.compactMap(\.messageID), ["old", "new"])
         XCTAssertNil(store.threadCursors["thread-1"])
+    }
+
+    private func isolatedStore(session: URLSession, credentials: TestCredentials) -> MobileAppStore {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gulls-cloud-store-\(UUID().uuidString).sqlite")
+        return MobileAppStore(websiteURL: "https://sea.test", session: session, credentials: credentials, defaults: UserDefaults(suiteName: "gulls-cloud-store-\(UUID().uuidString)")!, database: MobileLocalDatabase(url: url), monitorNetwork: false)
     }
 
     private static let configuration = #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://social.test","auth":{"mode":"cognito","issuer":"https://cognito.test","clientId":"client"}}"#

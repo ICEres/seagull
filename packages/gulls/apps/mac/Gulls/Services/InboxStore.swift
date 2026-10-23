@@ -12,6 +12,7 @@ final class InboxStore {
     let cli: GullsCLI?
     let config: GullsConfig
     let notifier: Notifier
+    let history: MessageHistoryStore
     /// Revision of the connection this store was created for. The mutable
     /// config can change before GullsWorkspace has replaced the store.
     let connectionRevision: String
@@ -21,14 +22,36 @@ final class InboxStore {
     var selectedDeliveryID: String?
     var agent: Agent?
     var lastError: String?
+    struct ActionFailure: Identifiable, Equatable {
+        let id: UUID
+        let title: String
+        let message: String
+
+        init(id: UUID = UUID(), title: String, message: String) {
+            self.id = id
+            self.title = title
+            self.message = message
+        }
+    }
+    var actionFailure: ActionFailure?
     var lastRefresh: Date?
     var isRefreshing = false
     var notificationsPaused = false
     // Banners are readable on a locked screen, so message and draft text are
     // shown there only when the owner asks for it.
     var showContentInNotifications = false
-    var filter: InboxFilter = .awaiting
-    var searchText = ""
+    var filter: InboxFilter = .awaiting {
+        didSet {
+            guard filter != oldValue else { return }
+            history.search(query: searchText, status: filter.historyStatus)
+        }
+    }
+    var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            history.search(query: searchText, status: filter.historyStatus)
+        }
+    }
     var monitoringEnabled: Bool {
         didSet {
             if config.monitoringEnabled != monitoringEnabled { config.monitoringEnabled = monitoringEnabled }
@@ -80,6 +103,16 @@ final class InboxStore {
             case .all: return true
             }
         }
+
+        var historyStatus: String? {
+            switch self {
+            case .awaiting: return DeliveryStatus.delivered.rawValue
+            case .replied: return DeliveryStatus.replied.rawValue
+            case .acked: return DeliveryStatus.acked.rawValue
+            case .ignored: return DeliveryStatus.ignored.rawValue
+            case .all: return nil
+            }
+        }
     }
 
     // Stream health, shown in the status menu (mirrored from StreamController).
@@ -99,7 +132,7 @@ final class InboxStore {
     var filteredItems: [InboxItem] {
         guard isCurrent else { return [] }
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        return items.filter { item in
+        return mergedItems.filter { item in
             guard filter.matches(item.delivery.statusValue) else { return false }
             guard !query.isEmpty else { return true }
             return item.senderDisplay.lowercased().contains(query)
@@ -116,7 +149,14 @@ final class InboxStore {
     var selectedItem: InboxItem? {
         guard isCurrent else { return nil }
         guard let selectedDeliveryID else { return nil }
-        return items.first { $0.id == selectedDeliveryID }
+        return mergedItems.first { $0.id == selectedDeliveryID }
+    }
+
+    /// Live inbox data remains the source for notifications. This projection
+    /// only adds durable history for browsing, search and dashboard display.
+    var mergedItems: [InboxItem] {
+        var seen = Set<String>()
+        return (items + history.items).filter { seen.insert($0.id).inserted }
     }
 
     init(
@@ -128,6 +168,7 @@ final class InboxStore {
         self.cli = cli
         self.config = config
         self.notifier = notifier
+        self.history = MessageHistoryStore(cli: cli, config: config)
         self.connectionRevision = config.connectionRevision
         self.notifiedStore = notifiedStore
         hasSeededFirstRun = notifiedStore.existedOnDisk
@@ -166,6 +207,7 @@ final class InboxStore {
         }
         isRefreshing = true
         defer { isRefreshing = false }
+        await history.loadInitial()
         repeat {
             pendingRefresh = false
             let generation = notificationGeneration
@@ -221,6 +263,7 @@ final class InboxStore {
     // inbox and may notify the owner; it does not enable AI replies.
     func startMonitoring() {
         guard isCurrent else { return }
+        Task { await history.loadInitial() }
         if !monitoringEnabled { monitoringEnabled = true }
         if runtimeManaged {
             if runtimeStatus == "paused" || runtimeStatus == "stopped" { runtimeStatus = "connecting" }
@@ -263,12 +306,16 @@ final class InboxStore {
     }
 
     func receiveRuntimeSnapshot(
-        _ fetched: [InboxItem]?, status: String, error: String?, checkedAt: Date?
+        _ fetched: [InboxItem]?, status: String, error: String?, checkedAt: Date?,
+        historyTotal: Int? = nil, historySyncComplete: Bool? = nil,
+        historyGeneration: Int? = nil
     ) {
         guard runtimeManaged, isCurrent, runtimeStatus != "stopped",
               monitoringEnabled || status == "paused" else { return }
         runtimeStatus = status
         lastError = error
+        history.noteRuntimeMetadata(total: historyTotal, syncComplete: historySyncComplete,
+                                    generation: historyGeneration)
         guard let fetched else { return }
         if status == "connected" {
             acceptSnapshot(fetched, checkedAt: checkedAt)
@@ -396,20 +443,20 @@ final class InboxStore {
 
     @discardableResult
     func reply(to deliveryID: String, content: String) async -> DecisionResult? {
-        await performAction { cli, environment in
+        await performAction(title: "Couldn’t send reply") { cli, environment in
             try await cli.reply(id: deliveryID, content: content, environment: environment)
         }
     }
 
     func ack(_ deliveryID: String) async {
-        _ = await performAction { cli, environment in
+        _ = await performAction(title: "Couldn’t acknowledge message") { cli, environment in
             try await cli.ack(id: deliveryID, environment: environment)
         }
     }
 
     @discardableResult
     func ignore(_ deliveryID: String) async -> DecisionResult? {
-        await performAction { cli, environment in
+        await performAction(title: "Couldn’t ignore message") { cli, environment in
             try await cli.ignore(id: deliveryID, environment: environment)
         }
     }
@@ -437,25 +484,29 @@ final class InboxStore {
 
     @discardableResult
     func writeContextFile(for deliveryID: String) async -> OpenResult? {
-        await performAction(refreshAfter: false) { cli, environment in
+        await performAction(title: "Couldn’t open context", refreshAfter: false) { cli, environment in
             try await cli.openDelivery(id: deliveryID, environment: environment)
         }
     }
 
     private func performAction<T>(
+        title: String,
         refreshAfter: Bool = true,
         _ action: (GullsCLI, GullsCLI.Environment) async throws -> T
     ) async -> T? {
         guard isCurrent, let cli else { return nil }
+        actionFailure = nil
         do {
             let result = try await action(cli, config.cliEnvironment())
             lastError = nil
+            actionFailure = nil
             if refreshAfter {
                 await refresh()
             }
             return result
         } catch {
             lastError = error.localizedDescription
+            actionFailure = ActionFailure(title: title, message: error.localizedDescription)
             return nil
         }
     }

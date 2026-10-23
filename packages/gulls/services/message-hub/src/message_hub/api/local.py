@@ -25,6 +25,7 @@ from message_hub.domain import (
     ForbiddenPayloadError,
     InboxItem,
     InvalidMessageError,
+    IdempotencyConflictError,
     Message,
     MessageRef,
     MessageHubError,
@@ -70,6 +71,12 @@ from message_hub.domain.service import (
 )
 from message_hub.storage import InMemoryMessageHubRepository
 from message_hub.storage.pagination import InvalidCursor
+from message_hub.storage.repository import (
+    AtomicCommitConflict,
+    IdempotencyKeyConflict,
+    IdempotencyRecoveryConflict,
+    SendTooLargeError,
+)
 from seagull_common.coerce import datetime_to_string
 from seagull_common.validation import Validator
 
@@ -103,6 +110,11 @@ class ApiError(Exception):
 # and migrate in a later slice.
 DOMAIN_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
     DuplicateAgentHandleError: (409, "conflict"),
+    IdempotencyConflictError: (409, "idempotency_key_reused"),
+    IdempotencyKeyConflict: (409, "idempotency_key_reused"),
+    IdempotencyRecoveryConflict: (409, "idempotency_recovery_required"),
+    AtomicCommitConflict: (409, "send_conflict"),
+    SendTooLargeError: (413, "send_too_large"),
     ForbiddenDeliveryError: (403, "forbidden"),
     ForbiddenPayloadError: (403, "forbidden"),
     InvalidMessageError: (400, "bad_request"),
@@ -111,6 +123,14 @@ DOMAIN_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
     PostureNotOpenError: (403, "posture_not_open"),
     SafetyBlockedError: (403, "blocked"),
 }
+SEND_ERRORS = (
+    MessageHubError,
+    SafetyBlockedError,
+    AtomicCommitConflict,
+    IdempotencyKeyConflict,
+    IdempotencyRecoveryConflict,
+    SendTooLargeError,
+)
 
 
 def raise_api_error(exc: Exception) -> NoReturn:
@@ -381,12 +401,8 @@ class LocalMessageHubApi:
                 idempotency_key=optional_string(body, "idempotency_key"),
                 runtime_mode=optional_string(body, "runtime_mode"),
             )
-        except InvalidMessageError as exc:
-            raise ApiError(400, "bad_request", str(exc)) from exc
-        except NotFoundError as exc:
-            raise ApiError(404, "not_found", str(exc)) from exc
-        except SafetyBlockedError as exc:
-            raise ApiError(403, "blocked", str(exc)) from exc
+        except SEND_ERRORS as exc:
+            raise_api_error(exc)
 
         return send_result_to_dict(result)
 
@@ -777,20 +793,6 @@ class LocalMessageHubApi:
         except MessageHubError as exc:
             raise_api_error(exc)
 
-        replayed = False
-        if key:
-            # send_message resolves replays itself; peek at the repository
-            # (as read_routing_rules does for its missing read model) so the
-            # transport can tell 202-created from 200-replayed without a
-            # second send path.
-            replayed = (
-                self._service._repository.get_idempotent_message_id(  # noqa: SLF001
-                    principal.agent_id,
-                    key,
-                )
-                is not None
-            )
-
         try:
             result = self._service.send_message(
                 sender_handle=principal.agent_handle,
@@ -803,8 +805,10 @@ class LocalMessageHubApi:
                 thread_id=optional_string(body, "thread_id"),
                 idempotency_key=key,
             )
-        except (MessageHubError, SafetyBlockedError) as exc:
+        except SEND_ERRORS as exc:
             raise_api_error(exc)
+
+        replayed = result.replayed
 
         deliveries = [
             delivery
@@ -924,7 +928,7 @@ class LocalMessageHubApi:
                 callback_url=callback_url,
                 guest_invite_valid=invite_valid,
             )
-        except (MessageHubError, SafetyBlockedError) as exc:
+        except SEND_ERRORS as exc:
             raise_api_error(exc)
 
         deliveries = [
@@ -1187,14 +1191,8 @@ class LocalMessageHubApi:
                 allowed_use_terms=string_list(body.get("allowed_use_terms", ()), "allowed_use_terms"),
                 idempotency_key=optional_string(body, "idempotency_key"),
             )
-        except InvalidMessageError as exc:
-            raise ApiError(400, "bad_request", str(exc)) from exc
-        except ForbiddenDeliveryError as exc:
-            raise ApiError(403, "forbidden", str(exc)) from exc
-        except NotFoundError as exc:
-            raise ApiError(404, "not_found", str(exc)) from exc
-        except SafetyBlockedError as exc:
-            raise ApiError(403, "blocked", str(exc)) from exc
+        except SEND_ERRORS as exc:
+            raise_api_error(exc)
 
         return {"created": True, "task": task_to_dict(task), "task_id": task.task_id, "thread_id": task.thread_id}
 

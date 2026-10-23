@@ -1,7 +1,7 @@
 package agentcli
 
 // The resident runtime is deliberately small. It owns polling and a durable
-// inbox snapshot; all command behavior remains in cli.go and local-action
+// inbox snapshot and SQLite history; command behavior remains in cli.go and local-action
 // requests remain files for the Mac app to approve.
 
 import (
@@ -75,19 +75,22 @@ type runtimeSnapshot struct {
 }
 
 type runtimeProfile struct {
-	profile RuntimeProfile
-	config  Config
-	client  *HTTPClient
-	ctx     context.Context
-	server  *runtimeServer
-	cancel  context.CancelFunc
-	mu      sync.RWMutex
-	inbox   map[string]any
-	status  string
-	errText string
-	checked time.Time
-	opMu    sync.Mutex
-	opSlots chan struct{}
+	profile           RuntimeProfile
+	config            Config
+	client            *HTTPClient
+	ctx               context.Context
+	server            *runtimeServer
+	cancel            context.CancelFunc
+	mu                sync.RWMutex
+	inbox             map[string]any
+	status            string
+	errText           string
+	checked           time.Time
+	opMu              sync.Mutex
+	opSlots           chan struct{}
+	history           *HistoryStore
+	historyWake       chan struct{}
+	historyGeneration int64
 }
 
 func RuntimeSocketPath(env []string) string {
@@ -235,8 +238,14 @@ func runtimeServeWithProfiles(ctx context.Context, socket string, stdio bool, st
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	s := &runtimeServer{ctx: ctx, cancel: cancel, profiles: map[string]*runtimeProfile{}, eventOut: stdout}
-	defer s.close()
+	s := &runtimeServer{ctx: ctx, cancel: cancel, profiles: map[string]*runtimeProfile{}, eventOut: stdout, historyEnabled: true}
+	defer func() {
+		s.close()
+		s.wg.Wait()
+		if s.history != nil {
+			_ = s.history.Close()
+		}
+	}()
 	if socket == "" && !stdio {
 		return errors.New("runtime serve requires --socket or --stdio")
 	}
@@ -252,6 +261,7 @@ func runtimeServeWithProfiles(ctx context.Context, socket string, stdio bool, st
 		}
 		_ = os.Chmod(socket, 0o600)
 		defer func() { _ = ln.Close() }()
+		s.historyPath = filepath.Join(filepath.Dir(socket), "history.sqlite3")
 	}
 	if len(seed) > 0 {
 		if err := s.configure(seed); err != nil {
@@ -299,15 +309,18 @@ func runtimeServeWithProfiles(ctx context.Context, socket string, stdio bool, st
 }
 
 type runtimeServer struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	wg          sync.WaitGroup
-	profiles    map[string]*runtimeProfile
-	eventOut    io.Writer
-	closed      bool
-	connections map[net.Conn]struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	wg             sync.WaitGroup
+	profiles       map[string]*runtimeProfile
+	eventOut       io.Writer
+	closed         bool
+	connections    map[net.Conn]struct{}
+	history        *HistoryStore
+	historyPath    string
+	historyEnabled bool
 }
 
 func (s *runtimeServer) serveConn(conn net.Conn) {
@@ -457,10 +470,12 @@ func (s *runtimeServer) handle(req RuntimeRequest, out io.Writer) {
 			break
 		}
 		p.opMu.Lock()
-		if err := p.ensureReadyLocked(); err != nil {
-			p.opMu.Unlock()
-			resp.ExitCode, resp.Stderr = 1, safeRuntimeError(err)
-			break
+		if !isHistoryCommand(req.Arguments) {
+			if err := p.ensureReadyLocked(); err != nil {
+				p.opMu.Unlock()
+				resp.ExitCode, resp.Stderr = 1, safeRuntimeError(err)
+				break
+			}
 		}
 		if err := p.ctx.Err(); err != nil {
 			p.opMu.Unlock()
@@ -527,7 +542,7 @@ func (s *runtimeServer) configure(profiles []RuntimeProfile) error {
 			continue
 		}
 		s.profiles[id] = rp
-		s.emit(RuntimeInboxEvent{Version: runtimeProtocolVersion, Event: "inbox", ProfileID: id, Revision: p.Revision, Inbox: rp.inbox, CheckedAt: rp.checked.UTC().Format(time.RFC3339), Status: "paused"})
+		s.emit(RuntimeInboxEvent{Version: runtimeProtocolVersion, Event: "inbox", ProfileID: id, Revision: p.Revision, Inbox: rp.historyEnvelope(rp.inbox), CheckedAt: rp.checked.UTC().Format(time.RFC3339), Status: "paused"})
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -633,16 +648,50 @@ func newRuntimeProfile(parent context.Context, p RuntimeProfile, s *runtimeServe
 	if err != nil {
 		return nil, err
 	}
+	if s != nil && s.history == nil && s.historyEnabled {
+		path := s.historyPath
+		if path == "" {
+			path = filepath.Join(cfg.ContextDir, "history.sqlite3")
+		}
+		s.history, err = OpenHistoryStore(path, "runtime")
+		if err != nil {
+			return nil, err
+		}
+	}
 	profileCtx, cancel := context.WithCancel(parent)
 	hc := NewHTTPClient(cfg.APIURL, cfg.Token)
 	hc.SocialAPIURL, hc.NodeID = cfg.SocialAPIURL, cfg.NodeID
 	hc.Client = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{}}
 	rp := &runtimeProfile{profile: p, config: cfg, client: hc, ctx: profileCtx, server: s, cancel: cancel, status: "paused", opSlots: make(chan struct{}, 32)}
 	rp.loadSnapshot()
+	if s != nil && s.history != nil {
+		rp.history, err = s.history.ForScope(historyProfileScope(cfg))
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		rp.historyWake = make(chan struct{}, 1)
+		if err := rp.restoreHistory(); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	return rp, nil
 }
 
 func (p *runtimeProfile) run(ctx context.Context) {
+	if p.history != nil {
+		done := make(chan struct{})
+		go func() { defer close(done); p.syncHistoryLoop() }()
+		defer func() { p.cancel(); <-done }()
+		if !p.profile.Monitoring {
+			select {
+			case <-ctx.Done():
+			case <-p.ctx.Done():
+			}
+			return
+		}
+	}
 	if !p.profile.Monitoring {
 		return
 	}
@@ -715,6 +764,9 @@ func (p *runtimeProfile) refreshLocked(ctx context.Context, force bool) error {
 	p.emitLocked()
 	p.mu.Unlock()
 	inbox, err := p.client.withContext(ctx).GetInbox(p.config.AgentHandle, 100)
+	if err == nil && p.history != nil {
+		err = p.history.ImportInboxPageNamed("recent", inboxItems(inbox), "", false)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -753,6 +805,7 @@ func (p *runtimeProfile) refreshLocked(ctx context.Context, force bool) error {
 		return saveErr
 	}
 	p.mu.Unlock()
+	p.wakeHistorySync()
 	return nil
 }
 
@@ -802,7 +855,7 @@ func (p *runtimeProfile) emitLocked() {
 	if p.server == nil {
 		return
 	}
-	p.server.emitProfile(p, RuntimeInboxEvent{Version: runtimeProtocolVersion, Event: "inbox", ProfileID: p.profile.ID, Revision: p.profile.Revision, Inbox: p.inbox, CheckedAt: p.checked.UTC().Format(time.RFC3339), Status: p.status, Error: p.errText})
+	p.server.emitProfile(p, RuntimeInboxEvent{Version: runtimeProtocolVersion, Event: "inbox", ProfileID: p.profile.ID, Revision: p.profile.Revision, Inbox: p.historyEnvelope(p.inbox), CheckedAt: p.checked.UTC().Format(time.RFC3339), Status: p.status, Error: p.errText})
 }
 
 func (p *runtimeProfile) snapshotPath() string {

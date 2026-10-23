@@ -10,10 +10,10 @@ struct InboxListView: View {
     var body: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
             inboxList
-                .safeAreaBar(edge: .top, spacing: 16) {
+                .gullsSafeAreaBar(edge: .top, spacing: 16) {
                     sidebarHeader
                 }
-                .safeAreaBar(edge: .bottom, spacing: 16) {
+                .gullsSafeAreaBar(edge: .bottom, spacing: 16) {
                     accountFooter
                 }
                 .gullsScrollEdges()

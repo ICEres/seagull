@@ -56,6 +56,16 @@ struct WhoamiResponse: Decodable, Equatable {
 
 struct InboxResponse: Decodable, Equatable {
     let items: [InboxItem]
+    let historyTotal: Int?
+    let historySyncComplete: Bool?
+    let historyGeneration: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case historyTotal = "history_total"
+        case historySyncComplete = "history_sync_complete"
+        case historyGeneration = "history_generation"
+    }
 }
 
 struct InboxItem: Decodable, Equatable, Identifiable {

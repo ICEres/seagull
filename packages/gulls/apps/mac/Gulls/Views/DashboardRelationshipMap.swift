@@ -12,6 +12,7 @@ struct DashboardRelationshipMap: View {
 
     private let routeLimit = 6
     private let ownNodeLimit = 4
+    @State private var hoveredNodeID: String?
 
     private var orderedRelationships: [DashboardRelationship] {
         snapshot.relationships.sorted { lhs, rhs in
@@ -96,39 +97,62 @@ struct DashboardRelationshipMap: View {
 
                 ForEach(visibleOwnHandles, id: \.self) { handle in
                     if let point = layout.ownPoints[handle] {
+                        let nodeID = "own:\(handle)"
+                        let isSelected = snapshot.relationships.contains {
+                            $0.id == selectedRelationshipID && $0.ownedGullHandle == handle
+                        }
                         Button {
                             if let relationship = renderedRelationships.first(where: { $0.ownedGullHandle == handle }) {
                                 onSelect(relationship)
                             }
                         } label: {
-                            RelationshipNode(avatar: .gull(handle), title: layout.ownLabel(for: handle))
+                            RelationshipNode(
+                                avatar: .gull(handle),
+                                title: layout.ownLabel(for: handle),
+                                isSelected: isSelected,
+                                isHovered: hoveredNodeID == nodeID
+                            )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(RelationshipNodeButtonStyle())
                         .frame(width: 84, height: 68, alignment: .top)
                         // Layout points are avatar centers; the fixed node
                         // frame keeps two-line labels below the route.
                         .position(CGPoint(x: point.x, y: point.y + 18))
+                        .onHover { isHovered in
+                            hoveredNodeID = isHovered ? nodeID : nil
+                        }
                         .accessibilityLabel("Local Gull \(layout.ownLabel(for: handle))")
                         .accessibilityHint("Select its newest observed relationship")
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
 
                 ForEach(visibleCounterpartIDs, id: \.self) { counterpartID in
                     if let point = layout.counterpartPoints[counterpartID],
                        let relationship = renderedRelationships.first(where: { $0.counterpartID == counterpartID }) {
+                        let nodeID = "counterpart:\(counterpartID)"
+                        let isSelected = snapshot.relationships.contains {
+                            $0.id == selectedRelationshipID && $0.counterpartID == counterpartID
+                        }
                         Button {
                             onSelect(layout.selectedRelationship(for: counterpartID, preferredID: selectedRelationshipID))
                         } label: {
                             RelationshipNode(
                                 avatar: .gull(relationship.counterpartHandle ?? counterpartID),
-                                title: participantLabel(relationship)
+                                title: participantLabel(relationship),
+                                isSelected: isSelected,
+                                isHovered: hoveredNodeID == nodeID
                             )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(RelationshipNodeButtonStyle())
                         .frame(width: 84, height: 68, alignment: .top)
                         .position(CGPoint(x: point.x, y: point.y + 18))
+                        .onHover { isHovered in
+                            hoveredNodeID = isHovered ? nodeID : nil
+                        }
                         .accessibilityLabel("Participant \(relationship.counterpart), connected to \(relationship.deliveryCount) deliveries")
                         .accessibilityHint("Select this participant's newest observed route")
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                         .help(relationship.counterpartHandle ?? relationship.counterpart)
                     }
                 }
@@ -312,13 +336,16 @@ private struct DashboardRelationshipEdges: View {
 }
 
 private struct RelationshipNode: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     enum Avatar { case gull(String) }
     let avatar: Avatar
     let title: String
+    let isSelected: Bool
+    let isHovered: Bool
 
     var body: some View {
         VStack(spacing: 4) {
-            switch avatar { case let .gull(handle): GullAvatar(handle: handle, size: 32) }
+            avatarView
             Text(title)
                 .font(.caption.weight(.medium))
                 .lineLimit(2)
@@ -327,6 +354,38 @@ private struct RelationshipNode: View {
                 .truncationMode(.middle)
         }
         .frame(width: 84, height: 68, alignment: .top)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+    }
+
+    private var avatarView: some View {
+        Group {
+            switch avatar {
+            case let .gull(handle):
+                GullAvatar(handle: handle, size: 32)
+            }
+        }
+        .background {
+            Circle()
+                .fill(isHovered && !isSelected ? GullsStyle.field : .clear)
+                .frame(width: 36, height: 36)
+        }
+        .overlay {
+            Circle().stroke(
+                isSelected ? GullsStyle.accent.opacity(0.55) : isHovered ? Color.primary.opacity(0.18) : .clear,
+                lineWidth: isSelected ? 1.2 : 0.8
+            )
+            .frame(width: 36, height: 36)
+        }
+    }
+}
+
+private struct RelationshipNodeButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.98 : 1)
     }
 }
 

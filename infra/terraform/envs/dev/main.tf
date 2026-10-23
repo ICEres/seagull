@@ -28,14 +28,15 @@ locals {
   # Built by scripts/build-message-hub.sh: lambda_function.py + vendored
   # message_hub and seagull_policy packages (the lambda is a thin adapter
   # over the domain service and imports them at runtime).
-  message_hub_api_package = "${path.module}/.terraform/build/message-hub-api/package"
-  agent_worker_src        = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
-  router_bootstrap        = "${path.module}/.terraform/build/message-router/bootstrap"
-  mcp_connector_package   = "${path.module}/.terraform/build/mcp-connector/package"
-  ai_provider_package     = "${path.module}/.terraform/build/ai-provider/package"
-  safety_gateway_package  = "${path.module}/.terraform/build/safety-gateway/package"
-  social_auth_guard_src   = "${path.module}/../../../../packages/seagulls/services/social-api/aws/auth_domain_guard.py"
-  social_api_package      = "${path.module}/.terraform/build/social-api/package"
+  message_hub_api_package       = "${path.module}/.terraform/build/message-hub-api/package"
+  agent_worker_src              = "${path.module}/../../../../packages/gulls/services/message-hub/aws/agent_worker.py"
+  delivery_stream_publisher_src = "${path.module}/../../../../packages/gulls/services/message-hub/aws/delivery_stream_publisher.py"
+  router_bootstrap              = "${path.module}/.terraform/build/message-router/bootstrap"
+  mcp_connector_package         = "${path.module}/.terraform/build/mcp-connector/package"
+  ai_provider_package           = "${path.module}/.terraform/build/ai-provider/package"
+  safety_gateway_package        = "${path.module}/.terraform/build/safety-gateway/package"
+  social_auth_guard_src         = "${path.module}/../../../../packages/seagulls/services/social-api/aws/auth_domain_guard.py"
+  social_api_package            = "${path.module}/.terraform/build/social-api/package"
   message_hub_tags = {
     Project     = var.project
     Environment = var.environment
@@ -172,6 +173,12 @@ data "archive_file" "agent_worker" {
   output_path = "${path.module}/.terraform/build/message-hub-agent-worker.zip"
 }
 
+data "archive_file" "delivery_stream_publisher" {
+  type        = "zip"
+  source_file = local.delivery_stream_publisher_src
+  output_path = "${path.module}/.terraform/build/message-hub-delivery-stream-publisher.zip"
+}
+
 data "archive_file" "message_router" {
   type        = "zip"
   source_file = local.router_bootstrap
@@ -264,7 +271,8 @@ resource "aws_iam_role_policy" "lambda" {
           "dynamodb:PutItem",
           "dynamodb:Query",
           "dynamodb:Scan",
-          "dynamodb:UpdateItem"
+          "dynamodb:UpdateItem",
+          "dynamodb:TransactWriteItems"
         ]
         Resource = local.message_hub_storage_resources
       },
@@ -311,10 +319,13 @@ resource "aws_lambda_function" "message_hub_api" {
 
   environment {
     variables = {
-      AGENTS_TABLE                        = module.message_hub_storage.table_names.agents
-      RUNTIME_PROFILES_TABLE              = module.social_api.table_names.profiles
-      AGENT_TOKENS_TABLE                  = module.message_hub_storage.table_names.agent_tokens
-      AGENT_JOBS_QUEUE_URL                = aws_sqs_queue.agent_jobs.url
+      AGENTS_TABLE           = module.message_hub_storage.table_names.agents
+      RUNTIME_PROFILES_TABLE = module.social_api.table_names.profiles
+      AGENT_TOKENS_TABLE     = module.message_hub_storage.table_names.agent_tokens
+      AGENT_JOBS_QUEUE_URL   = aws_sqs_queue.agent_jobs.url
+      # Keep direct publication enabled by default while the stream mapping
+      # is rolled out. Disable it only after the mapping is healthy.
+      DELIVERY_STREAM_PUBLICATION_ENABLED = tostring(var.delivery_stream_direct_publication_disabled)
       APP_NAME                            = local.message_hub_prefix
       DELIVERIES_TABLE                    = module.message_hub_storage.table_names.deliveries
       FEED_EVENTS_TABLE                   = module.message_hub_storage.table_names.feed_events
@@ -344,12 +355,147 @@ resource "aws_lambda_function" "message_hub_api" {
   depends_on = [
     aws_cloudwatch_log_group.lambda,
     aws_iam_role_policy.lambda,
+    # When direct publication is explicitly disabled, the stream mapping must
+    # exist and be enabled before this Lambda can switch modes.
+    aws_lambda_event_source_mapping.delivery_stream_publisher,
   ]
 
   tags = {
     Project     = var.project
     Environment = var.environment
     App         = "message-hub-api"
+  }
+}
+
+resource "aws_s3_bucket" "delivery_stream_failures" {
+  bucket = "${var.project}-${var.environment}-delivery-failures-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+
+  tags = merge(local.message_hub_tags, { App = "message-hub-delivery-stream" })
+}
+
+resource "aws_s3_bucket_public_access_block" "delivery_stream_failures" {
+  bucket                  = aws_s3_bucket.delivery_stream_failures.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_iam_role" "delivery_stream_publisher" {
+  name = "${local.message_hub_prefix}-delivery-stream-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "delivery_stream_publisher" {
+  name              = "/aws/lambda/${local.message_hub_prefix}-delivery-stream-publisher"
+  retention_in_days = 7
+
+  tags = merge(local.message_hub_tags, { App = "message-hub-delivery-stream" })
+}
+
+resource "aws_iam_role_policy" "delivery_stream_publisher" {
+  name = "${local.message_hub_prefix}-delivery-stream-policy"
+  role = aws_iam_role.delivery_stream_publisher.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.delivery_stream_publisher.arn}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:DescribeStream", "dynamodb:ListStreams"]
+        Resource = module.message_hub_storage.deliveries_stream_arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem"]
+        Resource = [
+          module.message_hub_storage.table_arns.deliveries,
+          module.message_hub_storage.table_arns.messages,
+          module.message_hub_storage.table_arns.agents,
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.agent_jobs.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.delivery_stream_failures.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.delivery_stream_failures.arn
+      },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "delivery_stream_publisher" {
+  function_name    = "${local.message_hub_prefix}-delivery-stream-publisher"
+  role             = aws_iam_role.delivery_stream_publisher.arn
+  handler          = "delivery_stream_publisher.handler"
+  runtime          = "python3.13"
+  filename         = data.archive_file.delivery_stream_publisher.output_path
+  source_code_hash = data.archive_file.delivery_stream_publisher.output_base64sha256
+  timeout          = 30
+  memory_size      = 256
+
+  lifecycle {
+    precondition {
+      condition     = !var.delivery_stream_direct_publication_disabled || var.delivery_stream_publisher_enabled
+      error_message = "Direct SQS publication cannot be disabled while the delivery stream publisher is disabled."
+    }
+  }
+
+  environment {
+    variables = {
+      AGENT_JOBS_QUEUE_URL = aws_sqs_queue.agent_jobs.url
+      AGENTS_TABLE         = module.message_hub_storage.table_names.agents
+      DELIVERIES_TABLE     = module.message_hub_storage.table_names.deliveries
+      MESSAGES_TABLE       = module.message_hub_storage.table_names.messages
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.delivery_stream_publisher,
+    aws_iam_role_policy.delivery_stream_publisher,
+  ]
+}
+
+resource "aws_lambda_event_source_mapping" "delivery_stream_publisher" {
+  enabled                            = var.delivery_stream_publisher_enabled
+  event_source_arn                   = module.message_hub_storage.deliveries_stream_arn
+  function_name                      = aws_lambda_function.delivery_stream_publisher.arn
+  starting_position                  = "LATEST"
+  batch_size                         = 100
+  maximum_batching_window_in_seconds = 5
+  maximum_record_age_in_seconds      = 86400
+  maximum_retry_attempts             = 3
+  function_response_types            = ["ReportBatchItemFailures"]
+  metrics_config {
+    metrics = ["EventCount"]
+  }
+
+  destination_config {
+    on_failure {
+      destination_arn = aws_s3_bucket.delivery_stream_failures.arn
+    }
   }
 }
 

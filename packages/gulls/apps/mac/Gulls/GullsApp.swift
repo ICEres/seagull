@@ -5,6 +5,7 @@ struct GullsApp: App {
     @State private var workspace: GullsWorkspace
     @State private var account: CloudAccountStore
     @State private var lifecycle: AppLifecycleCoordinator
+    @AppStorage(GullsAppearance.storageKey) private var appearance: GullsAppearance = .system
     private let isTestHost: Bool
 
     init() {
@@ -18,6 +19,7 @@ struct GullsApp: App {
         let defaults = isTestHost
             ? UserDefaults(suiteName: "ai.gulls.test-host.\(UUID().uuidString)")!
             : .standard
+        _appearance = AppStorage(wrappedValue: .system, GullsAppearance.storageKey, store: defaults)
         let connections = isTestHost
             ? LocalConnectionsStore(defaults: defaults, tokenStore: TestHostTokenStore())
             : LocalConnectionsStore()
@@ -50,20 +52,24 @@ struct GullsApp: App {
     var body: some Scene {
         Window("Gulls", id: "workspace") {
             WorkspaceWindow(workspace: workspace, account: account, lifecycle: lifecycle)
+                .preferredColorScheme(appearance.colorScheme)
         }
         .defaultSize(width: 980, height: 720)
-        .windowToolbarStyle(.unified)
+        .windowStyle(.hiddenTitleBar)
 
         MenuBarExtra {
             GullsMenuBarView(workspace: workspace, lifecycle: lifecycle)
+                .preferredColorScheme(appearance.colorScheme)
         } label: {
             GullsMenuBarLabel(workspace: workspace, lifecycle: lifecycle)
         }
 
         Settings {
-            SettingsView(workspace: workspace, account: account)
+            SettingsView(workspace: workspace, account: account, appearance: $appearance)
+                .preferredColorScheme(appearance.colorScheme)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 800, height: 580)
+        .windowResizability(.contentMinSize)
     }
 }
 

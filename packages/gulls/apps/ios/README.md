@@ -54,6 +54,16 @@ Email sign-in, Gull settings, and AI usage use existing Social API routes. Owner
 
 Inbox and thread history load in pages. The current Hub sent-message endpoint returns up to 100 messages per Gull; the app shows a history limit notice when that cap is reached. Saved counterpart profiles are scoped to this device and account. Server administration links to the web from the native status section.
 
+## Local data and synchronization
+
+The app keeps account and endpoint snapshots, owned Gulls, usage, message pages, and an outbox in `Application Support/Gulls/mobile.sqlite`. SQLite runs on its own actor with WAL and durable commits. The directory is excluded from backups and uses iOS file protection. Credentials remain in Keychain.
+
+Cached workspaces appear before network configuration or identity checks finish. Foreground refreshes merge message and delivery IDs without clearing the page or forcing its scroll position. Recent conversations are warmed locally; older cached messages are read in pages. Usage and server checks do not gate the workspace. First sign-in and history that has never been downloaded still require the network.
+
+Cache records are isolated by website and account. Sign-out clears visible state, invalidates old requests, and removes that account's cached rows and pending sends. Refresh-token rejection ends the session; temporary network errors retain saved content. An expired session without a refresh token can still display saved content, while authenticated requests and queued sends wait for a valid session.
+
+Sending first commits an outbox entry and then starts the request. Queued messages resume when connectivity returns. A lost response or interrupted in-flight send stays **Delivery unconfirmed** until the user checks the conversation and chooses Retry. Retries preserve the original idempotency key and are restricted to six days because the server retains keys for seven days. Pagination cursors are used for history backfill; they are not a deletion/change feed.
+
 ## Verification
 
 ```sh

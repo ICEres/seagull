@@ -421,6 +421,94 @@ final class LocalControlTests: XCTestCase {
         XCTAssertEqual(String(data: try Data(contentsOf: target), encoding: .utf8), "once")
     }
 
+    func testAbandonedCodexRequestIsCancelledOnRefreshAndPreserved() throws {
+        let taskID = UUID().uuidString.lowercased()
+        let request = LocalActionRequest(
+            version: LocalActionRequest.currentVersion,
+            requestID: UUID().uuidString.lowercased(),
+            gullHandle: config.agentHandle,
+            kind: .command,
+            createdAt: ISO8601DateFormatter().string(from: Date()),
+            profileID: config.profileID,
+            codexTaskID: taskID,
+            codexTaskFolder: root.path,
+            codexTaskDigest: String(repeating: "a", count: 64),
+            connectionRevision: config.connectionRevision,
+            executable: "/usr/bin/true",
+            arguments: [],
+            workingDirectory: root.path
+        )
+        try writeRequest(request)
+
+        store.refresh()
+
+        XCTAssertTrue(store.pendingRequests.isEmpty)
+        XCTAssertEqual(store.recentResults.first?.requestID, request.id)
+        XCTAssertEqual(store.recentResults.first?.status, .cancelled)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.requestsDirectory.appendingPathComponent("\(request.id).json").path))
+    }
+
+    func testLegacyCodexRequestsAreQuarantinedOnceAndFutureV1RemainsUsable() throws {
+        let first = request(kind: .command, executable: "/usr/bin/true", workingDirectory: root.path)
+        try writeRequest(first)
+
+        store.quarantineLegacyPendingRequests()
+        store.refresh()
+
+        XCTAssertTrue(store.pendingRequests.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.requestsDirectory.appendingPathComponent("\(first.id).json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.requestsDirectory.appendingPathComponent("\(first.id).legacy").path))
+
+        let second = request(kind: .command, executable: "/usr/bin/true", workingDirectory: root.path)
+        try writeRequest(second)
+        store.refresh()
+        XCTAssertEqual(store.pendingRequests.map(\.id), [second.id])
+    }
+
+    func testPublishedCodexRequestIsCancelledAfterRestartBeforeApproval() throws {
+        let taskID = UUID().uuidString.lowercased()
+        let prepared = try store.prepareCodexAction(
+            arguments: ["kind": "command", "executable": "/usr/bin/true", "arguments": [], "working_directory": root.path],
+            workingFolder: root,
+            taskID: taskID,
+            profileID: config.profileID,
+            connectionRevision: config.connectionRevision,
+            taskDigest: String(repeating: "b", count: 64)
+        )
+        try store.publishCodexAction(prepared)
+
+        let restarted = LocalControlStore(config: config, defaults: defaults)
+        restarted.enabled = true
+        restarted.addFolder(root)
+        restarted.refresh()
+
+        XCTAssertTrue(restarted.pendingRequests.isEmpty)
+        XCTAssertEqual(restarted.recentResults.first?.requestID, prepared.request.id)
+        XCTAssertEqual(restarted.recentResults.first?.status, .cancelled)
+    }
+
+    func testSameHandleReconnectCancelsStaleCodexRequest() throws {
+        let taskID = UUID().uuidString.lowercased()
+        let oldRevision = config.connectionRevision
+        let prepared = try store.prepareCodexAction(
+            arguments: ["kind": "command", "executable": "/usr/bin/true", "arguments": [], "working_directory": root.path],
+            workingFolder: root,
+            taskID: taskID,
+            profileID: config.profileID,
+            connectionRevision: oldRevision,
+            taskDigest: String(repeating: "c", count: 64)
+        )
+        try store.publishCodexAction(prepared)
+
+        config.token = "reconnected-token"
+        XCTAssertNotEqual(config.connectionRevision, oldRevision)
+        store.refresh()
+
+        XCTAssertTrue(store.pendingRequests.isEmpty)
+        XCTAssertEqual(store.recentResults.first?.requestID, prepared.request.id)
+        XCTAssertEqual(store.recentResults.first?.status, .cancelled)
+    }
+
     private func request(
         requestID: String = UUID().uuidString,
         kind: LocalActionKind,

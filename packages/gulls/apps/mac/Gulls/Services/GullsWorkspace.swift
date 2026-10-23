@@ -13,6 +13,7 @@ final class GullsWorkspace {
     private let localControlDefaults: UserDefaults
     private(set) var inboxes: [String: InboxStore] = [:]
     private(set) var localControls: [String: LocalControlStore] = [:]
+    private(set) var codexTasks: [String: CodexTaskStore] = [:]
     private(set) var selectionRevision = 0
     private(set) var runtimeError: String?
     @ObservationIgnored var onOpenWorkspace: (() -> Void)?
@@ -61,6 +62,7 @@ final class GullsWorkspace {
                 control.enabled = false
                 control.stop()
             }
+            codexTasks.removeValue(forKey: id)?.suspendExecution()
             appliedRevisions.removeValue(forKey: id)
         }
         for config in connections.profiles where inboxes[config.profileID] == nil {
@@ -68,6 +70,9 @@ final class GullsWorkspace {
         }
         for config in connections.profiles where localControls[config.profileID] == nil {
             localControls[config.profileID] = LocalControlStore(config: config, defaults: localControlDefaults)
+        }
+        for config in connections.profiles where codexTasks[config.profileID] == nil {
+            codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID])
         }
         routeNotifications()
     }
@@ -93,6 +98,8 @@ final class GullsWorkspace {
                 || appliedRevisions[config.profileID].map({ $0 != revision }) == true {
                 inboxes[config.profileID]?.suspendMonitoring()
                 localControls[config.profileID]?.stop()
+                codexTasks[config.profileID]?.suspendExecution()
+                codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID])
                 inboxes[config.profileID] = makeInbox(config)
                 routeNotifications()
             }
@@ -172,10 +179,13 @@ final class GullsWorkspace {
         // sends an empty configuration if all profiles were removed asleep.
         for store in inboxes.values { store.suspendMonitoring() }
         for control in localControls.values { control.stop(forTermination: forTermination) }
+        for tasks in codexTasks.values { tasks.suspendExecution() }
+        CodexExecutionCoordinator.shared.shutdown()
     }
 
     func refreshLocalActions() {
         for control in localControls.values { control.refresh() }
+        for tasks in codexTasks.values { tasks.refresh() }
     }
 
     func updateBadge() {
@@ -190,7 +200,7 @@ final class GullsWorkspace {
     func selectDelivery(profileID: String, deliveryID: String) -> Bool {
         guard let store = inboxes[profileID],
               store.isCurrent,
-              store.items.contains(where: { $0.id == deliveryID }) else { return false }
+              store.mergedItems.contains(where: { $0.id == deliveryID }) else { return false }
         guard connections.select(profileID: profileID) != nil else { return false }
         store.selectedDeliveryID = deliveryID
         selectionRevision += 1
@@ -203,8 +213,15 @@ final class GullsWorkspace {
         guard acceptingRuntimeEvents,
               let store = inboxes[event.profileID], store.isCurrent,
               event.revision == store.connectionRevision else { return }
-        store.receiveRuntimeSnapshot(event.inbox?.items, status: event.status.rawValue,
-                                     error: event.error, checkedAt: event.checkedAt.flatMap(GullsDates.parse))
+        store.receiveRuntimeSnapshot(
+            event.inbox?.items,
+            status: event.status.rawValue,
+            error: event.error,
+            checkedAt: event.checkedAt.flatMap(GullsDates.parse),
+            historyTotal: event.inbox?.historyTotal,
+            historySyncComplete: event.inbox?.historySyncComplete,
+            historyGeneration: event.inbox?.historyGeneration
+        )
     }
 
     private func makeInbox(_ config: GullsConfig) -> InboxStore {
@@ -239,7 +256,7 @@ final class GullsWorkspace {
 
     private func inbox(containing deliveryID: String) -> InboxStore? {
         inboxes.values.first {
-            $0.isCurrent && $0.items.contains { $0.id == deliveryID }
+            $0.isCurrent && $0.mergedItems.contains { $0.id == deliveryID }
         }
     }
 
@@ -250,7 +267,7 @@ final class GullsWorkspace {
                 profileID: config.profileID,
                 handle: config.agentHandle,
                 displayName: config.displayName.isEmpty ? nil : config.displayName,
-                items: store.isCurrent ? store.items : []
+                items: store.isCurrent ? store.mergedItems : []
             )
         }
     }

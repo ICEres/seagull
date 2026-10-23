@@ -25,7 +25,9 @@ struct AIUsageSettingsView: View {
                         Label(refreshMessage, systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.red)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                            .layoutPriority(1)
                     }
                     Spacer()
                     Button {

@@ -17,13 +17,19 @@ enum LocalActionResultStatus: String, Codable, CaseIterable {
 /// A request created for one owned Gull. The request is data until the owner
 /// explicitly approves it in the Mac app.
 struct LocalActionRequest: Codable, Equatable, Identifiable {
-    static let currentVersion = 1
+    static let legacyVersion = 1
+    static let currentVersion = 2
 
     let version: Int
     let requestID: String
     let gullHandle: String
     let kind: LocalActionKind
     let createdAt: String
+    let profileID: String?
+    let codexTaskID: String?
+    let codexTaskFolder: String?
+    let codexTaskDigest: String?
+    let connectionRevision: String?
     let executable: String?
     let arguments: [String]?
     let workingDirectory: String?
@@ -47,6 +53,11 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
         case gullHandle = "gull_handle"
         case kind
         case createdAt = "created_at"
+        case profileID = "profile_id"
+        case codexTaskID = "codex_task_id"
+        case codexTaskFolder = "codex_task_folder"
+        case codexTaskDigest = "codex_task_digest"
+        case connectionRevision = "connection_revision"
         case executable
         case arguments
         case workingDirectory = "working_directory"
@@ -55,11 +66,16 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
     }
 
     init(
-        version: Int = currentVersion,
+        version: Int = legacyVersion,
         requestID: String,
         gullHandle: String,
         kind: LocalActionKind,
         createdAt: String,
+        profileID: String? = nil,
+        codexTaskID: String? = nil,
+        codexTaskFolder: String? = nil,
+        codexTaskDigest: String? = nil,
+        connectionRevision: String? = nil,
         executable: String? = nil,
         arguments: [String]? = nil,
         workingDirectory: String? = nil,
@@ -77,6 +93,11 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
         self.gullHandle = gullHandle
         self.kind = kind
         self.createdAt = createdAt
+        self.profileID = profileID
+        self.codexTaskID = codexTaskID
+        self.codexTaskFolder = codexTaskFolder
+        self.codexTaskDigest = codexTaskDigest
+        self.connectionRevision = connectionRevision
         self.executable = executable
         self.arguments = arguments
         self.workingDirectory = workingDirectory
@@ -98,7 +119,7 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
         let kind = try container.decode(LocalActionKind.self, forKey: .kind)
         let createdAt = try container.decode(String.self, forKey: .createdAt)
 
-        guard version == Self.currentVersion else {
+        guard version == Self.legacyVersion || version == Self.currentVersion else {
             throw LocalActionModelError.invalidRequest("unsupported request version")
         }
         guard UUID(uuidString: requestID) != nil else {
@@ -110,6 +131,21 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
         guard GullsDates.parse(createdAt) != nil else {
             throw LocalActionModelError.invalidRequest("created_at must be ISO 8601")
         }
+        let profileID = try container.decodeIfPresent(String.self, forKey: .profileID)
+        let codexTaskID = try container.decodeIfPresent(String.self, forKey: .codexTaskID)
+        let codexTaskFolder = try container.decodeIfPresent(String.self, forKey: .codexTaskFolder)
+        let codexTaskDigest = try container.decodeIfPresent(String.self, forKey: .codexTaskDigest)
+        let connectionRevision = try container.decodeIfPresent(String.self, forKey: .connectionRevision)
+        if version == Self.currentVersion {
+            guard let profileID, !profileID.isEmpty,
+                  let codexTaskID, UUID(uuidString: codexTaskID) != nil,
+                  let codexTaskFolder, codexTaskFolder.hasPrefix("/"),
+                  let codexTaskDigest, codexTaskDigest.count == 64,
+                  codexTaskDigest.allSatisfy({ $0.isHexDigit }),
+                  let connectionRevision, !connectionRevision.isEmpty else {
+                throw LocalActionModelError.invalidRequest("Codex request provenance is incomplete")
+            }
+        }
 
         self.init(
             version: version,
@@ -117,6 +153,11 @@ struct LocalActionRequest: Codable, Equatable, Identifiable {
             gullHandle: gullHandle,
             kind: kind,
             createdAt: createdAt,
+            profileID: profileID,
+            codexTaskID: codexTaskID,
+            codexTaskFolder: codexTaskFolder,
+            codexTaskDigest: codexTaskDigest,
+            connectionRevision: connectionRevision,
             executable: try container.decodeIfPresent(String.self, forKey: .executable),
             arguments: try container.decodeIfPresent([String].self, forKey: .arguments),
             workingDirectory: try container.decodeIfPresent(String.self, forKey: .workingDirectory),

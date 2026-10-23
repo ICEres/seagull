@@ -5,7 +5,6 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingSettings = false
     @State private var selectedTab: WorkspaceTab = .overview
-    @State private var isPrepared = false
 
     private enum WorkspaceTab: String, Hashable {
         case overview, messages, gulls
@@ -13,7 +12,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if !isPrepared || store.isRestoring {
+            if !store.hasPrepared {
                 VStack(spacing: 20) {
                     GullWing(name: .classic)
                         .stroke(GullsTheme.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
@@ -30,14 +29,21 @@ struct RootView: View {
             }
         }
         .task {
-            guard !isPrepared else { return }
+            guard !store.hasPrepared else { return }
             await store.prepare()
-            isPrepared = true
         }
         .onChange(of: scenePhase) { _, phase in
-            guard isPrepared else { return }
+            guard store.hasPrepared else { return }
             if phase == .active {
-                Task { await store.refresh() }
+                store.syncInBackground(force: true)
+            }
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) }
+                catch { return }
+                store.syncInBackground()
             }
         }
         .onChange(of: store.isSignedIn) { _, signedIn in
@@ -51,7 +57,9 @@ struct RootView: View {
     private var workspace: some View {
         Group {
             if #available(iOS 26, *) {
-                tabs.tabBarMinimizeBehavior(.onScrollDown)
+                tabs
+                    .tabBarMinimizeBehavior(.onScrollDown)
+                    .scrollEdgeEffectStyle(.soft, for: .top)
             } else {
                 tabs
             }
@@ -95,7 +103,6 @@ struct RootView: View {
             } label: {
                 Image(systemName: "person.crop.circle")
                     .imageScale(.large)
-                    .frame(minWidth: 44, minHeight: 44)
             }
             .accessibilityLabel("Account and settings")
             .accessibilityIdentifier("account-settings")

@@ -23,6 +23,7 @@ struct MainWindow: View {
     }
 
     private enum Destination { case overview, messages, gulls }
+    private let windowControlHeight: CGFloat = 48
 
     private enum ContentColumns {
         case both, listOnly, detailOnly
@@ -38,9 +39,25 @@ struct MainWindow: View {
         var id: String { "\(profileID):\(request.id)" }
     }
 
+    private struct CodexLaunch: Identifiable {
+        let id = UUID()
+        let tasks: CodexTaskStore
+        let inbox: InboxStore
+        let item: InboxItem
+    }
+
+    private struct CodexDraft {
+        let task: CodexTask
+        let tasks: CodexTaskStore
+        let target: ReplyTarget
+    }
+
     @State private var destination = Destination.overview
     @State private var scopeProfileID: String?
     @State private var localReview: LocalReview?
+    @State private var codexLaunch: CodexLaunch?
+    @State private var pendingCodexDraft: CodexDraft?
+    @State private var codexError: String?
     @State private var replyTarget: ReplyTarget?
     @State private var replyText = ""
     @State private var draftTarget: ReplyTarget?
@@ -59,6 +76,23 @@ struct MainWindow: View {
     @State private var isRefreshingDashboard = false
     @State private var usageLoadingSessionID: UUID?
     @State private var dashboardUsageError: String?
+    @State private var directory: GullDirectoryStore
+    @State private var conversations: GullConversationStore
+    @State private var selectedDirectoryHandle: String?
+    @State private var directoryFallbackName: String?
+    @State private var selectedStartedConversationID: String?
+    @State private var isAddingGull = false
+    @State private var directoryError: String?
+    @State private var statusIssue: String?
+
+    init(store: InboxStore, workspace: GullsWorkspace? = nil, account: CloudAccountStore? = nil,
+         directory: GullDirectoryStore? = nil, conversations: GullConversationStore? = nil) {
+        self.store = store
+        self.workspace = workspace
+        self.account = account
+        _directory = State(initialValue: directory ?? GullDirectoryStore())
+        _conversations = State(initialValue: conversations ?? GullConversationStore(cli: store.cli))
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -84,6 +118,7 @@ struct MainWindow: View {
                     onMessages: { navigate(to: .messages) },
                     onGulls: { navigate(to: .gulls) }
                 )
+                .padding(.top, extendsContentUnderControls ? windowControlHeight : 0)
                 .frame(width: navigationWidth)
                 .clipped()
                 .overlay(alignment: .trailing) {
@@ -92,6 +127,7 @@ struct MainWindow: View {
                 if destination == .overview {
                     dashboard(compact: compact)
                         .frame(width: availableWidth)
+                        .clipped()
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("Dashboard")
                 } else {
@@ -116,8 +152,13 @@ struct MainWindow: View {
                         .allowsHitTesting(columns.showsDetail)
                         .accessibilityHidden(!columns.showsDetail)
                         .accessibilityElement(children: .contain)
-                        .accessibilityLabel(destination == .gulls ? "Gull overview" : "Conversation detail")
+                        .accessibilityLabel(destination == .gulls ? "Gull profile" : "Conversation detail")
                 }
+            }
+            .padding(.top, extendsContentUnderControls ? 0 : windowControlHeight)
+            .environment(\.gullsWindowControlInset, extendsContentUnderControls ? windowControlHeight : 0)
+            .overlay(alignment: .top) {
+                windowControls
             }
             .onChange(of: compact, initial: true) { _, compact in
                 if compact {
@@ -127,17 +168,15 @@ struct MainWindow: View {
                 usesCompactLayout = compact
             }
         }
-        .background(GullsStyle.canvas)
-        .navigationTitle("Gulls")
+        .ignoresSafeArea(.container, edges: .top)
+        .gullsWindowBackground()
         .tint(GullsStyle.accent)
-        .toolbarBackground(.hidden, for: .windowToolbar)
-        .gullsWindowChrome()
-        .toolbar(id: "gulls-main") {
-            if #available(macOS 26.0, *) {
-                mainToolbar.sharedBackgroundVisibility(.hidden)
-            } else {
-                mainToolbar
-            }
+        .gullsWindowChrome(hidesTitleBar: true)
+        .background {
+            Button("Reply", action: beginReply)
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!canActOnSelection)
+                .hidden()
         }
         .frame(minWidth: 380, minHeight: 620)
         .sheet(item: $localReview) { review in
@@ -145,10 +184,54 @@ struct MainWindow: View {
                 localReview = nil
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            if let error = store.lastError {
-                errorBar(error)
+        .sheet(item: $codexLaunch) { launch in
+            if let cli = launch.inbox.cli {
+                CodexTaskSetupView(tasks: launch.tasks, cli: cli, inbox: launch.inbox, item: launch.item)
             }
+        }
+        .confirmationDialog("Replace your unsent reply?", isPresented: Binding(
+            get: { pendingCodexDraft != nil },
+            set: { if !$0 { pendingCodexDraft = nil } }
+        ), titleVisibility: .visible, presenting: pendingCodexDraft) { draft in
+            Button("Replace with Codex draft") { applyCodexDraft(draft) }
+            Button("Cancel", role: .cancel) { pendingCodexDraft = nil }
+        } message: { _ in
+            Text("Your current reply will be replaced. The Codex draft will still need to be sent by you.")
+        }
+        .alert("Couldn’t complete the Codex action", isPresented: Binding(
+            get: { codexError != nil }, set: { if !$0 { codexError = nil } }
+        )) {
+            Button("OK", role: .cancel) { codexError = nil }
+        } message: {
+            Text(codexError ?? "")
+        }
+        .sheet(isPresented: $isAddingGull) {
+            let generation = account?.sessionID
+            AddGullView(messageAPIURL: messageAPIURL) { profile in
+                guard generation == account?.sessionID, let userID = directoryUserID else {
+                    throw SavedGullError.invalidScope
+                }
+                if !ownedGulls.contains(where: { $0.handle == profile.handle }) {
+                    try directory.save(profile, userID: userID, websiteURL: directoryWebsiteURL)
+                }
+                selectDirectoryGull(profile.handle)
+            }
+        }
+        .alert("Could not open conversation", isPresented: Binding(
+            get: { directoryError != nil }, set: { if !$0 { directoryError = nil } }
+        )) {
+            Button("OK") { directoryError = nil }
+        } message: {
+            Text(directoryError ?? "")
+        }
+        .alert(actionFailure?.title ?? "Couldn’t complete the action", isPresented: Binding(
+            get: { actionFailure != nil },
+            set: { if !$0 { dismissActionFailure() } }
+        ), presenting: actionFailure) { _ in
+            Button("Open Settings") { openSettings() }
+            Button("OK", role: .cancel) {}
+        } message: { failure in
+            Text(failure.message)
         }
         .task(id: workspace == nil ? store.config.connectionRevision : "workspace") {
             guard workspace == nil else { return }
@@ -162,6 +245,13 @@ struct MainWindow: View {
         }
         .task(id: account?.sessionID) {
             await refreshDashboardUsage()
+        }
+        .onChange(of: directoryScope, initial: true) { _, scope in
+            conversations.activate(scope: scope)
+            selectedStartedConversationID = nil
+            selectedDirectoryHandle = nil
+            directoryFallbackName = nil
+            isAddingGull = false
         }
         .onChange(of: workspace?.selectionRevision) { _, revision in
             guard let revision, revision != handledSelectionRevision else { return }
@@ -201,29 +291,73 @@ struct MainWindow: View {
         case .overview:
             EmptyView()
         case .messages:
-            ConversationsView(
-                snapshot: snapshot,
-                scopeName: scopeName,
-                onOpen: openConversation,
-                compact: usesCompactLayout || contentColumns == .both,
-                selectedGroupID: displayedItem == nil ? nil : selectedGroup?.id
-            )
+            conversationsList
         case .gulls:
             WorkspaceGullsView(
-                stores: stores,
-                selectedProfileID: scopeProfileID,
-                attentionCounts: attentionCounts,
+                ownedGulls: ownedGulls,
+                savedGulls: savedGulls,
+                selectedHandle: selectedDirectoryHandle,
                 compact: usesCompactLayout || contentColumns == .both,
-                onSelect: selectGull,
+                canSave: directoryUserID != nil,
+                onSelect: { selectDirectoryGull($0) },
+                onAdd: { isAddingGull = true },
                 onSettings: { openSettings() }
             )
         }
     }
 
+    private var conversationsList: some View {
+        ConversationsView(
+            snapshot: snapshot,
+            scopeName: scopeName,
+            onOpen: openConversation,
+            compact: usesCompactLayout || contentColumns == .both,
+            selectedGroupID: selectedMessageGroupID,
+            startedConversations: visibleStartedConversations,
+            selectedStartedConversationID: selectedStartedConversationID,
+            onOpenStarted: openStartedConversation,
+            onHistorySearch: { query, status in
+                for source in scopedStores {
+                    source.history.search(query: query, status: status)
+                }
+            },
+            historyMatchedDeliveryIDs: { profileID in
+                scopedStores.first(where: { $0.config.profileID == profileID })
+                    .map { Set($0.history.items.map(\.id)) } ?? []
+            },
+            isHistorySearchReady: { profileID, query, status in
+                scopedStores.first(where: { $0.config.profileID == profileID })?
+                    .history.hasLoaded(query: query, status: status) ?? false
+            },
+            onLoadMore: loadMoreHistory,
+            isLoadingMore: scopedStores.contains { $0.history.isLoading },
+            hasMoreHistory: scopedStores.contains { $0.history.nextCursor != nil },
+            isHistoryUnavailable: scopedStores.contains {
+                $0.config.isConfigured && $0.history.lastError != nil
+            },
+            isHistorySyncIncomplete: scopedStores.contains {
+                $0.config.isConfigured && $0.history.total != nil && !$0.history.syncComplete
+            }
+        )
+    }
+
     @ViewBuilder
     private var detailContent: some View {
         if destination == .gulls {
-            dashboard(compact: usesCompactLayout || contentColumns == .both)
+            if let handle = selectedDirectoryHandle {
+                gullProfile(handle)
+            } else {
+                ContentUnavailableView {
+                    Label("Select a Gull", systemImage: "rectangle.and.text.magnifyingglass")
+                } description: {
+                    Text("Choose one of your Gulls or a saved Gull to see its profile and conversations.")
+                }
+            }
+        } else if let conversation = selectedStartedConversation {
+            GullConversationView(store: conversations, conversationID: conversation.id, senders: conversationSenders) {
+                openGullProfile(handle: conversation.recipientHandle, name: conversation.recipientName)
+            }
+            .id("\(directoryScope ?? ""): \(conversation.id)")
         } else if let item = displayedItem {
             detailWithReply(item)
                 .gullsScrollEdges()
@@ -245,11 +379,12 @@ struct MainWindow: View {
             scopeProfileID: scopeProfileID,
             onScopeChange: { scopeProfileID = $0 },
             scopeName: scopeName,
-            accountName: account?.isSignedIn == true ? accountName : "You",
+            accountName: account?.hasWorkspace == true ? accountName : "You",
             usage: account?.aiUsage,
             usageScopeAgentID: scopedCloudAgentID,
-            isSignedIn: account?.isSignedIn == true,
+            isSignedIn: account?.hasWorkspace == true,
             usageError: dashboardUsageError,
+            historySummary: MessageHistorySummary.aggregate(scopedStores.compactMap { $0.history.summary }),
             isRefreshing: isRefreshingDashboard || usageLoadingSessionID != nil || scopedStores.contains { $0.isRefreshing },
             hasConnections: scopedStores.contains { $0.config.isConfigured },
             onRefresh: refreshDashboard,
@@ -267,17 +402,71 @@ struct MainWindow: View {
                 guard let profileID = workspace?.localControls.first(where: { $0.value === control })?.key else { return }
                 localReview = LocalReview(profileID: profileID, control: control, request: request)
             },
+            codexTasks: scopedStores.compactMap { workspace?.codexTasks[$0.config.profileID] },
+            onOpenCodexTask: { tasks, task in
+                if let deliveryID = task.request.deliveryID {
+                    openDelivery(profileID: task.request.profileID, deliveryID: deliveryID)
+                } else {
+                    do {
+                        try tasks.open(task)
+                    } catch {
+                        codexError = error.localizedDescription
+                    }
+                }
+            },
             compact: compact
         )
     }
 
     @ViewBuilder
     private func detailWithReply(_ item: InboxItem) -> some View {
+        let tasks = workspace?.codexTasks[store.config.profileID]
+        let task = tasks?.latestTask(for: item.id)
+        let target = ReplyTarget(deliveryID: item.id, profileID: store.config.profileID,
+                                 connectionRevision: store.config.connectionRevision, senderDisplay: item.senderDisplay)
         let detail = DeliveryDetailView(
             item: item,
             localGullName: localGullName,
             relatedItems: selectedGroup?.items ?? [],
             onSelectItem: { openDelivery(profileID: store.config.profileID, deliveryID: $0.id) },
+            onOpenProfile: { handle in openGullProfile(handle: handle, name: item.senderDisplay) },
+            senderProfileHandle: profileHandle(for: item),
+            onOpenCodex: tasks?.config.codexEnabled == true && store.cli != nil ? { beginCodexTask() } : nil,
+            codexTask: task,
+            onUseCodexDraft: task?.result != nil ? {
+                if let tasks, let task { useCodexDraft(CodexDraft(task: task, tasks: tasks, target: target)) }
+            } : nil,
+            onReopenCodexTask: tasks?.config.codexEnabled == true ? {
+                if let tasks, let task {
+                    do { try tasks.open(task) } catch { codexError = error.localizedDescription }
+                }
+            } : nil,
+            onContinueCodex: tasks != nil && task != nil ? { followUp in
+                if let tasks, let task {
+                    runCodexTask(task, target: target, in: tasks, followUp: followUp)
+                }
+            } : nil,
+            onStopCodex: tasks != nil && task != nil ? {
+                if let tasks, let task,
+                   let current = currentCodexTask(task, target: target, in: tasks) {
+                    Task { await tasks.stop(current) }
+                }
+            } : nil,
+            onApproveCodex: tasks != nil && task != nil ? {
+                if let tasks, let task,
+                   let current = currentCodexTask(task, target: target, in: tasks) {
+                    if let control = tasks.localControl, let approvalID = current.execution?.approvalID,
+                       let request = control.pendingRequests.first(where: { $0.id == approvalID }) {
+                        localReview = LocalReview(profileID: target.profileID, control: control, request: request)
+                    }
+                }
+            } : nil,
+            onDeclineCodex: tasks != nil && task != nil ? {
+                if let tasks, let task,
+                   let current = currentCodexTask(task, target: target, in: tasks) {
+                    tasks.decline(current)
+                }
+            } : nil,
             compact: usesCompactLayout
         )
             .id(selectedGroup?.id ?? "\(store.config.profileID):\(item.id)")
@@ -285,122 +474,142 @@ struct MainWindow: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: item.id)
         if #available(macOS 26.0, *), !reduceTransparency {
             detail
-                .safeAreaBar(edge: .bottom, spacing: 0) { replySurface }
+                .gullsSafeAreaBar(edge: .bottom, spacing: 0) { replySurface }
         } else {
             detail.safeAreaInset(edge: .bottom, spacing: 0) { replySurface }
         }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Window controls
 
     private var visibleContentColumns: ContentColumns {
         usesCompactLayout ? compactContentColumns : contentColumns
     }
 
-    // Native shortcuts complement the inline reply surface; the id-based
-    // form preserves the "Customize Toolbar…" sheet.
-    @ToolbarContentBuilder
-    private var mainToolbar: some CustomizableToolbarContent {
-        if !usesCompactLayout {
-            ToolbarItem(id: "sidebar", placement: .navigation) {
-                Button {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) {
-                        sidebarExpanded.toggle()
-                    }
-                } label: {
-                    Label(sidebarExpanded ? "Collapse Sidebar" : "Expand Sidebar", systemImage: "sidebar.left")
-                }
-                .keyboardShortcut("s", modifiers: [.command, .control])
-                .help(sidebarExpanded ? "Collapse Sidebar to Icons" : "Expand Sidebar")
-            }
-        }
+    private var extendsContentUnderControls: Bool {
+        if #available(macOS 26.0, *) { return !reduceTransparency }
+        return false
+    }
 
-        if destination != .overview {
-            ToolbarItem(id: "list-visibility", placement: .navigation) {
-                Button(action: toggleList) {
-                    Label(usesCompactLayout && !visibleContentColumns.showsList ? "Back to List" : visibleContentColumns.showsList ? "Hide List" : "Show List",
-                          systemImage: usesCompactLayout && !visibleContentColumns.showsList ? "chevron.left" : "rectangle.leadinghalf.inset.filled")
-                }
-                .keyboardShortcut("l", modifiers: [.command, .control])
-                .help(visibleContentColumns == .listOnly ? "Show details and hide the list" : visibleContentColumns.showsList ? "Hide the middle column" : "Show the middle column")
+    @ViewBuilder
+    private var windowControls: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) {
+                windowControlRow
+                    .buttonStyle(.glass)
             }
+        } else {
+            windowControlRow
+                .buttonStyle(.bordered)
         }
+    }
 
-        if destination != .overview, !usesCompactLayout {
-            ToolbarItem(id: "detail-visibility", placement: .primaryAction) {
+    private var windowControlRow: some View {
+        HStack(spacing: 8) {
+            navigationControls
+            Spacer(minLength: 16)
+            if destination != .overview, !usesCompactLayout {
                 Button(action: toggleDetail) {
                     Label(visibleContentColumns.showsDetail ? "Hide Details" : "Show Details", systemImage: "rectangle.trailinghalf.inset.filled")
                 }
                 .keyboardShortcut("d", modifiers: [.command, .control])
                 .help(visibleContentColumns == .detailOnly ? "Show the list and hide details" : visibleContentColumns.showsDetail ? "Hide the right column" : "Show the right column")
             }
+            if destination == .messages, selectedStartedConversationID == nil {
+                messageActions
+            }
+            statusMenu
+        }
+        .labelStyle(.iconOnly)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .tint(nil)
+        .padding(.leading, 88)
+        .padding(.trailing, 12)
+        .frame(height: windowControlHeight)
+    }
+
+    @ViewBuilder
+    private var navigationControls: some View {
+        if !usesCompactLayout {
+            Button {
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) {
+                    sidebarExpanded.toggle()
+                }
+            } label: {
+                Label(sidebarExpanded ? "Collapse Sidebar" : "Expand Sidebar", systemImage: "sidebar.left")
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .help(sidebarExpanded ? "Collapse Sidebar to Icons" : "Expand Sidebar")
         }
 
-        ToolbarItem(id: "reply", placement: .primaryAction) {
-            Button {
-                showDetail()
-                if replyTarget == nil {
-                    replyTarget = selectedTarget
-                }
-                replyFocused = true
-            } label: {
+        if destination != .overview {
+            Button(action: toggleList) {
+                Label(usesCompactLayout && !visibleContentColumns.showsList ? "Back to List" : visibleContentColumns.showsList ? "Hide List" : "Show List",
+                      systemImage: usesCompactLayout && !visibleContentColumns.showsList ? "chevron.left" : "rectangle.leadinghalf.inset.filled")
+            }
+            .keyboardShortcut("l", modifiers: [.command, .control])
+            .help(visibleContentColumns == .listOnly ? "Show details and hide the list" : visibleContentColumns.showsList ? "Hide the middle column" : "Show the middle column")
+        }
+    }
+
+    private var messageActions: some View {
+        Menu {
+            Button(action: beginReply) {
                 Label("Reply", systemImage: "arrowshape.turn.up.left")
             }
-            .disabled(!canActOnSelection)
-            .keyboardShortcut("r", modifiers: .command)
-            .help("Reply to the selected delivery (⌘R)")
-        }
-        .defaultCustomization(.hidden)
-
-        ToolbarItem(id: "draft-reply", placement: .primaryAction) {
             Button {
                 showDetail()
                 draftTarget = selectedTarget
             } label: {
-                Label("Draft reply", systemImage: "wand.and.stars")
+                Label { Text("Draft reply") } icon: { GullsAIIcon() }
             }
-            .disabled(!canActOnSelection)
-            .help("Generate a rule-based draft for the selected delivery")
-        }
-        .defaultCustomization(.hidden)
-
-        if destination != .overview {
-            ToolbarItem(id: "more", placement: .primaryAction) {
-                Menu {
-                    Button {
-                        runOnSelection { source, id in await source.ack(id) }
-                    } label: {
-                        Label("Acknowledge", systemImage: "checkmark")
-                    }
-                    Button {
-                        runOnSelection { source, id in _ = await source.ignore(id) }
-                    } label: {
-                        Label("Ignore", systemImage: "nosign")
-                    }
-                    Divider()
-                    Button {
-                        runOnSelection { source, id in
-                            if let result = await source.writeContextFile(for: id) {
-                                NSWorkspace.shared.activateFileViewerSelecting(
-                                    [URL(fileURLWithPath: result.contextPath)]
-                                )
-                            }
-                        }
-                    } label: {
-                        Label("Write context file", systemImage: "doc.text")
-                    }
-                } label: {
-                    Label("More", systemImage: "ellipsis")
+            if workspace?.codexTasks[store.config.profileID]?.config.codexEnabled == true {
+                Button(action: beginCodexTask) {
+                    Label { Text("Work with Codex") } icon: { GullsAIIcon() }
                 }
-                .menuIndicator(.hidden)
-                .disabled(!canActOnSelection)
-                .help("More message actions")
+                .disabled(store.cli == nil)
             }
+            Divider()
+            Button {
+                runOnSelection { source, id in await source.ack(id) }
+            } label: {
+                Label("Acknowledge", systemImage: "checkmark")
+            }
+            Button {
+                runOnSelection { source, id in _ = await source.ignore(id) }
+            } label: {
+                Label("Ignore", systemImage: "nosign")
+            }
+            Divider()
+            Button {
+                runOnSelection { source, id in
+                    if let result = await source.writeContextFile(for: id) {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: result.contextPath)]
+                        )
+                    }
+                }
+            } label: {
+                Label("Write context file", systemImage: "doc.text")
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis")
         }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .frame(width: 26, height: 26)
+        .gullsGlass(cornerRadius: 13)
+        .disabled(!canActOnSelection)
+        .accessibilityLabel("More")
+        .help("More message actions")
+    }
 
-        ToolbarItem(id: "status", placement: .primaryAction) {
-            statusMenu
-        }
+    private func beginReply() {
+        showDetail()
+        if replyTarget == nil { replyTarget = selectedTarget }
+        replyFocused = true
     }
 
     // One status item for transport health and monitoring controls.
@@ -408,6 +617,9 @@ struct MainWindow: View {
         Menu {
             Text(localGullName)
             Text(streamStatusText)
+            if let error = store.lastError {
+                Button("Show Issue…") { statusIssue = error }
+            }
             if store.runtimeManaged { Text("Local AI worker: Not configured") }
             if let lastRefresh = store.lastRefresh {
                 Text("Last checked \(lastRefresh.formatted(date: .omitted, time: .standard))")
@@ -431,12 +643,32 @@ struct MainWindow: View {
             Label("Status", systemImage: statusSymbol)
                 .foregroundStyle(statusColor)
         }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.borderless)
         .menuIndicator(.hidden)
-        .help(streamStatusText)
+        .frame(width: 26, height: 26)
+        .gullsGlass(cornerRadius: 13)
+        .help(store.lastError == nil ? streamStatusText : "\(localGullName) needs attention. Click for details.")
+        .accessibilityLabel(store.lastError == nil ? "Status" : "Status, needs attention")
+        .alert("\(localGullName) needs attention", isPresented: Binding(
+            get: { statusIssue != nil }, set: { if !$0 { statusIssue = nil } }
+        ), presenting: statusIssue) { _ in
+            if store.runtimeManaged, ["unavailable", "reconnecting"].contains(store.runtimeStatus) {
+                Button("Retry Connection") {
+                    let source = store
+                    Task { await source.refresh() }
+                }
+            }
+            Button("Open Settings") { openSettings() }
+            Button("OK", role: .cancel) {}
+        } message: { issue in
+            Text(issue)
+        }
     }
 
     private var statusSymbol: String {
         if store.isRefreshing { return "arrow.triangle.2.circlepath" }
+        if store.lastError != nil { return "exclamationmark.circle" }
         if store.runtimeManaged {
             switch store.runtimeStatus {
             case "connected": return "circle.fill"
@@ -453,6 +685,7 @@ struct MainWindow: View {
     }
 
     private var statusColor: Color {
+        if store.lastError != nil { return .orange }
         if store.runtimeManaged {
             guard store.monitoringEnabled else { return .secondary }
             switch store.runtimeStatus {
@@ -492,22 +725,92 @@ struct MainWindow: View {
 
     private func navigate(to destination: Destination) {
         self.destination = destination
-        if destination == .gulls {
-            let selected = stores.first { $0.config.profileID == store.config.profileID && $0.config.isConfigured }
-                ?? stores.first { $0.config.isConfigured }
-            scopeProfileID = selected?.config.profileID
-            if let scopeProfileID { workspace?.connections.select(profileID: scopeProfileID) }
-        } else {
-            scopeProfileID = nil
+        scopeProfileID = nil
+        if destination == .gulls, selectedDirectoryHandle == nil {
+            selectedDirectoryHandle = ownedGulls.first?.handle ?? savedGulls.first?.handle
         }
         if destination != .overview { showList() }
     }
 
-    private func selectGull(_ profileID: String) {
-        guard stores.contains(where: { $0.config.profileID == profileID }) else { return }
-        workspace?.connections.select(profileID: profileID)
-        scopeProfileID = profileID
+    private func selectDirectoryGull(_ handle: String) {
+        guard let canonical = SavedGull.canonicalHandle(handle) else { return }
+        selectedDirectoryHandle = canonical
+        directoryFallbackName = nil
+        if let profileID = ownedGulls.first(where: { $0.handle == canonical })?.profileID {
+            workspace?.connections.select(profileID: profileID)
+        }
         showDetail()
+    }
+
+    private func openGullProfile(handle: String, name: String?) {
+        guard let canonical = SavedGull.canonicalHandle(handle) else { return }
+        destination = .gulls
+        scopeProfileID = nil
+        selectDirectoryGull(canonical)
+        directoryFallbackName = name == handle ? nil : name
+    }
+
+    private func openStartedConversation(_ conversation: GullConversation) {
+        guard visibleStartedConversations.contains(where: { $0.id == conversation.id }) else { return }
+        selectedStartedConversationID = conversation.id
+        destination = .messages
+        scopeProfileID = nil
+        showDetail()
+    }
+
+    private func startConversation(to handle: String, name: String?, agentID: String?, sender: GullConversationSender) {
+        guard let scope = directoryScope,
+              conversationSenders.contains(where: { $0 == sender }) else { return }
+        do {
+            let conversation = try conversations.start(recipientHandle: handle, recipientName: name,
+                                                       recipientAgentID: agentID, sender: sender, scope: scope)
+            openStartedConversation(conversation)
+        } catch { directoryError = error.localizedDescription }
+    }
+
+    private func gullProfile(_ handle: String) -> some View {
+        let owned = ownedGulls.first { $0.handle == handle }
+        let agentID = savedGulls.first { $0.handle == handle }?.agentID
+        let groups = owned.map { owned in
+            allSnapshot.allGroups.filter { $0.profileID == owned.profileID }
+        } ?? allRelationships.relationships.filter { relationship in
+            relationship.counterpartHandle.flatMap(SavedGull.canonicalHandle) == handle
+                || agentID.map { relationship.counterpartID == "agent:\($0)" } == true
+        }.flatMap(\.groups).sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+        let started = visibleStartedConversations.filter {
+            owned == nil ? $0.recipientHandle == handle : $0.senderHandle == handle
+        }
+
+        return GullProfileView(
+            handle: handle, owned: owned, fallbackName: directoryFallbackName,
+            directory: directory, userID: directoryUserID, websiteURL: directoryWebsiteURL,
+            messageAPIURL: messageAPIURL, groups: groups, startedConversations: started,
+            senders: conversationSenders, compact: usesCompactLayout || contentColumns == .both,
+            onOpen: openConversation, onOpenStarted: openStartedConversation,
+            onStart: { sender, name, agentID in
+                startConversation(to: handle, name: name, agentID: agentID, sender: sender)
+            },
+            onMessages: {
+                scopeProfileID = owned?.profileID
+                selectedStartedConversationID = nil
+                destination = .messages
+                showList()
+            },
+            onSettings: { openSettings() }
+        )
+        .id("\(account?.sessionID.uuidString ?? ""): \(handle)")
+    }
+
+    private func profileHandle(for item: InboxItem) -> String? {
+        if let handle = item.message?.senderHandle.flatMap(SavedGull.canonicalHandle) { return handle }
+        guard let agentID = firstNonEmpty(item.message?.senderAgentId, item.delivery.senderAgentId) else { return nil }
+        if let saved = savedGulls.first(where: { $0.agentID == agentID }) { return saved.handle }
+        if let handle = account?.ownedGulls.first(where: { $0.agentID == agentID })?.handle {
+            return SavedGull.canonicalHandle(handle)
+        }
+        return allRelationships.relationships.first {
+            $0.counterpartID == "agent:\(agentID)" && $0.counterpartHandle != nil
+        }?.counterpartHandle.flatMap(SavedGull.canonicalHandle) ?? SavedGull.canonicalHandle(agentID)
     }
 
     private func selectRelationship(_ relationship: DashboardRelationship) {
@@ -643,8 +946,95 @@ struct MainWindow: View {
         return workspace.connections.profiles.compactMap { workspace.inboxes[$0.profileID] }
     }
 
+    private var directoryUserID: String? {
+        account?.hasWorkspace == true ? account?.userID : nil
+    }
+
+    private var directoryWebsiteURL: String { account?.websiteURL ?? "" }
+
+    private var directoryScope: String? {
+        guard let userID = directoryUserID,
+              let website = SharedCloudSessionFile.normalizedWebsite(directoryWebsiteURL) else { return nil }
+        return "\(website)\n\(userID)"
+    }
+
+    private var messageAPIURL: String? {
+        firstNonEmpty(account?.runtime?.messageAPIURL, stores.first(where: { $0.config.isConfigured })?.config.apiURL)
+    }
+
+    private var savedGulls: [SavedGull] {
+        guard let userID = directoryUserID else { return [] }
+        let ownedHandles = Set(ownedGulls.map(\.handle))
+        return directory.records(for: userID, websiteURL: directoryWebsiteURL)
+            .filter { !ownedHandles.contains($0.handle) }
+    }
+
+    private var ownedGulls: [WorkspaceOwnedGull] {
+        var values: [String: WorkspaceOwnedGull] = [:]
+        for cloud in account?.hasWorkspace == true ? account?.ownedGulls ?? [] : [] {
+            guard let handle = SavedGull.canonicalHandle(cloud.handle) else { continue }
+            values[handle] = WorkspaceOwnedGull(
+                handle: handle, displayName: firstNonEmpty(cloud.displayName) ?? SavedGull.defaultDisplayName(for: handle),
+                status: "Not connected to this Mac", profileID: nil, bio: cloud.bio, capabilities: cloud.capabilities
+            )
+        }
+        for source in stores where source.config.isConfigured {
+            guard let handle = SavedGull.canonicalHandle(source.config.agentHandle) else { continue }
+            let cloud = values[handle]
+            values[handle] = WorkspaceOwnedGull(
+                handle: handle,
+                displayName: firstNonEmpty(source.config.displayName, cloud?.displayName, source.agent?.displayName)
+                    ?? SavedGull.defaultDisplayName(for: handle),
+                status: source.isCurrent ? source.monitoringStatusText : "Connection changed",
+                profileID: source.config.profileID, bio: cloud?.bio, capabilities: cloud?.capabilities ?? []
+            )
+        }
+        return values.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
+    private var conversationSenders: [GullConversationSender] {
+        stores.filter { $0.config.isConfigured && $0.isCurrent && $0.cli != nil }.map { source in
+            GullConversationSender(
+                id: source.config.profileID,
+                displayName: firstNonEmpty(source.config.displayName, source.agent?.displayName)
+                    ?? SavedGull.defaultDisplayName(for: source.config.agentHandle),
+                handle: source.config.agentHandle,
+                agentID: firstNonEmpty(source.agent?.agentId,
+                                      account?.ownedGulls.first(where: { $0.handle == source.config.agentHandle })?.agentID),
+                connectionRevision: source.config.connectionRevision,
+                environment: source.config.cliEnvironment()
+            )
+        }
+    }
+
+    private var visibleStartedConversations: [GullConversation] {
+        guard let directoryScope, conversations.activeScope == directoryScope else { return [] }
+        return conversations.conversations.filter { scopeProfileID == nil || $0.senderProfileID == scopeProfileID }
+    }
+
+    private var selectedStartedConversation: GullConversation? {
+        visibleStartedConversations.first { $0.id == selectedStartedConversationID }
+    }
+
+    private var selectedMessageGroupID: String? {
+        if let conversation = selectedStartedConversation {
+            guard let threadID = conversation.threadID else { return nil }
+            return snapshot.allGroups.first { $0.profileID == conversation.senderProfileID && $0.threadID == threadID }?.id
+        }
+        return displayedItem == nil ? nil : selectedGroup?.id
+    }
+
     private var scopedStores: [InboxStore] {
         stores.filter { scopeProfileID == nil || $0.config.profileID == scopeProfileID }
+    }
+
+    private func loadMoreHistory() {
+        let targets = scopedStores
+        Task {
+            for source in targets {
+                await source.history.loadMore()
+            }
+        }
     }
 
     private var dashboardProfiles: [DashboardProfileInput] {
@@ -653,7 +1043,7 @@ struct MainWindow: View {
                 profileID: $0.config.profileID,
                 handle: $0.config.agentHandle,
                 displayName: firstNonEmpty($0.config.displayName, $0.agent?.displayName),
-                items: $0.isCurrent ? $0.items : []
+                items: $0.isCurrent ? $0.mergedItems : []
             )
         }
     }
@@ -694,14 +1084,6 @@ struct MainWindow: View {
         )
     }
 
-    private var attentionCounts: [String: Int] {
-        var counts = Dictionary(grouping: allSnapshot.needsAttention, by: \.profileID).mapValues(\.count)
-        for (profileID, control) in workspace?.localControls ?? [:] {
-            counts[profileID, default: 0] += control.pendingRequests.count
-        }
-        return counts
-    }
-
     private var scopedLocalControls: [LocalControlStore] {
         guard let workspace else { return [] }
         return workspace.connections.profiles
@@ -734,10 +1116,17 @@ struct MainWindow: View {
     }
 
     private var canActOnSelection: Bool {
-        destination == .messages && displayedItem != nil && !isBusy && draftTarget == nil
+        destination == .messages && selectedStartedConversationID == nil && displayedItem != nil && !isBusy && draftTarget == nil
     }
 
     private func openConversation(_ group: DashboardConversationGroup) {
+        if let threadID = group.threadID, let started = visibleStartedConversations.first(where: { conversation in
+            conversation.threadID == threadID && conversation.senderProfileID == group.profileID
+                && conversationSenders.contains { $0.id == group.profileID && $0.connectionRevision == conversation.connectionRevision }
+        }) {
+            openStartedConversation(started)
+            return
+        }
         openDelivery(profileID: group.profileID, deliveryID: group.primaryItem.id)
     }
 
@@ -747,7 +1136,7 @@ struct MainWindow: View {
             handledSelectionRevision = workspace.selectionRevision
         } else {
             guard store.config.profileID == profileID, store.isCurrent,
-                  store.items.contains(where: { $0.id == deliveryID }) else { return }
+                  store.mergedItems.contains(where: { $0.id == deliveryID }) else { return }
             store.selectedDeliveryID = deliveryID
         }
         handledDeliveryID = deliveryID
@@ -755,13 +1144,14 @@ struct MainWindow: View {
     }
 
     private func showSelectedDelivery(profileID: String? = nil) {
+        selectedStartedConversationID = nil
         destination = .messages
         if scopeProfileID != nil { scopeProfileID = profileID ?? store.config.profileID }
         showDetail()
     }
 
     private func ensureSelection() {
-        guard destination != .gulls, displayedItem == nil else { return }
+        guard destination != .gulls, selectedStartedConversation == nil, displayedItem == nil else { return }
         let group = snapshot.allGroups.first { $0.profileID == store.config.profileID }
             ?? snapshot.allGroups.first
         if let group {
@@ -780,6 +1170,66 @@ struct MainWindow: View {
         guard let source, source.isCurrent,
               source.config.connectionRevision == target.connectionRevision else { return nil }
         return source
+    }
+
+    private func beginCodexTask() {
+        guard canActOnSelection, let target = selectedTarget, let source = source(for: target),
+              let item = source.mergedItems.first(where: { $0.id == target.deliveryID }), source.cli != nil,
+              let tasks = workspace?.codexTasks[target.profileID], tasks.config.codexEnabled else { return }
+        codexLaunch = CodexLaunch(tasks: tasks, inbox: source, item: item)
+    }
+
+    private func currentCodexTask(_ task: CodexTask, target: ReplyTarget, in tasks: CodexTaskStore) -> CodexTask? {
+        guard source(for: target) != nil,
+              tasks.config.profileID == target.profileID,
+              tasks.config.connectionRevision == target.connectionRevision,
+              let current = tasks.tasks.first(where: { $0.id == task.id }),
+              current.request == task.request else { return nil }
+        return current
+    }
+
+    private func runCodexTask(_ task: CodexTask, target: ReplyTarget, in tasks: CodexTaskStore,
+                              followUp: String? = nil) {
+        guard let current = currentCodexTask(task, target: target, in: tasks) else {
+            codexError = "This Codex task is no longer attached to the current message. Open the message again."
+            return
+        }
+        Task {
+            do {
+                try await tasks.run(current, followUp: followUp)
+            } catch {
+                codexError = error.localizedDescription
+            }
+        }
+    }
+
+    private func useCodexDraft(_ draft: CodexDraft) {
+        guard !isBusy else { return }
+        if draftTarget != nil || !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pendingCodexDraft = draft
+        } else {
+            applyCodexDraft(draft)
+        }
+    }
+
+    private func applyCodexDraft(_ draft: CodexDraft) {
+        guard !isBusy else { return }
+        do {
+            guard let source = source(for: draft.target),
+                  source.mergedItems.contains(where: { $0.id == draft.target.deliveryID }),
+                  draft.tasks.config.profileID == draft.target.profileID,
+                  draft.tasks.config.connectionRevision == draft.target.connectionRevision else {
+                throw CodexTaskStore.Failure("This Gull’s connection changed. Open the original message again.")
+            }
+            let content = try draft.tasks.draft(for: draft.task, deliveryID: draft.target.deliveryID)
+            replyTarget = draft.target
+            replyText = content
+            draftTarget = nil
+            pendingCodexDraft = nil
+            openDelivery(profileID: draft.target.profileID, deliveryID: draft.target.deliveryID)
+            showDetail()
+            replyFocused = true
+        } catch { codexError = error.localizedDescription }
     }
 
     private func runOnSelection(_ action: @escaping (InboxStore, String) async -> Void) {
@@ -903,15 +1353,15 @@ struct MainWindow: View {
                 Button {
                     draftTarget = target
                 } label: {
-                    Label("Draft reply", systemImage: "wand.and.stars")
+                    Label { Text("Draft reply") } icon: { GullsAIIcon() }
                         .labelStyle(.iconOnly)
                         .font(.system(size: 17))
                         .frame(width: 32, height: 32)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
                 .disabled(isBusy || !available)
+                .accessibilityLabel("Draft reply")
                 .help("Draft a reply using this Gull’s rules")
                 if replyTarget != nil {
                     Button {
@@ -980,35 +1430,14 @@ struct MainWindow: View {
         return firstNonEmpty(source.config.displayName, source.agent?.displayName, source.config.agentHandle) ?? "your Gull"
     }
 
-    private func errorBar(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text(message)
-                .font(.callout)
-                .textSelection(.enabled)
-                .lineLimit(2)
-            Spacer()
-            if store.runtimeManaged, ["unavailable", "reconnecting"].contains(store.runtimeStatus) {
-                Button("Retry connection") {
-                    let source = store
-                    Task { await source.refresh() }
-                }
-                .controlSize(.small)
-                .disabled(store.isRefreshing)
-            }
-            Button("Settings…") { openSettings() }
-                .controlSize(.small)
-            Button {
-                store.lastError = nil
-            } label: {
-                Label("Dismiss error", systemImage: "xmark")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.plain)
+    private var actionFailure: InboxStore.ActionFailure? {
+        stores.compactMap(\.actionFailure).first
+    }
+
+    private func dismissActionFailure() {
+        guard let id = actionFailure?.id else { return }
+        for source in stores where source.actionFailure?.id == id {
+            source.actionFailure = nil
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(GullsStyle.canvas)
     }
 }

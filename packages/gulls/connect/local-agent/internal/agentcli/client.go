@@ -23,8 +23,28 @@ type Client interface {
 	DecideDelivery(deliveryID string, agentHandle string, decision string, content string, note string) (map[string]any, error)
 }
 
+// idempotentMessageClient is optional so older test and embedded clients keep
+// implementing Client while the bundled HTTP client can safely retry a
+// persisted outbox entry.
+type idempotentMessageClient interface {
+	SendMessageWithIdempotency(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string, idempotencyKey string) (map[string]any, error)
+}
+
 type contextInboxClient interface {
 	GetInboxForContext(handle string, limit int) (map[string]any, error)
+}
+
+type pagedThreadClient interface {
+	GetThreadPage(threadID string, limit int, cursor string) (map[string]any, error)
+}
+
+type historyQueryClient interface {
+	QueryHistory(query HistoryQuery) (map[string]any, error)
+	HistorySummary(days int) (map[string]any, error)
+}
+
+type historyDeliveryClient interface {
+	HistoryDelivery(deliveryID string) (map[string]any, error)
 }
 
 func getInboxForContext(client Client, handle string, limit int) (map[string]any, error) {
@@ -88,11 +108,26 @@ func (c *HTTPClient) GetAgent(handle string) (map[string]any, error) {
 }
 
 func (c *HTTPClient) GetInbox(handle string, limit int) (map[string]any, error) {
-	if c.Token != "" {
-		localRuntime, _ := c.heartbeat()
-		return c.getInbox(handle, limit, localRuntime)
-	}
+	return c.GetInboxPage(handle, limit, "")
+}
+
+func (c *HTTPClient) GetInboxPage(handle string, limit int, cursor string) (map[string]any, error) {
 	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if c.Token != "" {
+		var localRuntime map[string]any
+		if cursor == "" {
+			localRuntime, _ = c.heartbeat()
+		}
+		result, err := c.request(http.MethodGet, "/agent/inbox?"+query.Encode(), nil)
+		if err != nil {
+			return nil, err
+		}
+		attachLocalRuntime(result, localRuntime)
+		return result, nil
+	}
 	return c.request(http.MethodGet, "/agents/"+escapePathValue(handle)+"/inbox?"+query.Encode(), nil)
 }
 
@@ -124,7 +159,14 @@ func (c *HTTPClient) getInbox(handle string, limit int, localRuntime map[string]
 }
 
 func (c *HTTPClient) GetThread(threadID string, limit int) (map[string]any, error) {
+	return c.GetThreadPage(threadID, limit, "")
+}
+
+func (c *HTTPClient) GetThreadPage(threadID string, limit int, cursor string) (map[string]any, error) {
 	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
 	if c.Token != "" {
 		return c.request(http.MethodGet, "/agent/threads/"+escapePathValue(threadID)+"?"+query.Encode(), nil)
 	}
@@ -140,6 +182,10 @@ func (c *HTTPClient) GetThreadContext(threadID string, requesterHandle string) (
 }
 
 func (c *HTTPClient) SendMessage(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string) (map[string]any, error) {
+	return c.SendMessageWithIdempotency(senderHandle, recipientHandles, content, threadID, intent, visibility, "")
+}
+
+func (c *HTTPClient) SendMessageWithIdempotency(senderHandle string, recipientHandles []string, content string, threadID string, intent string, visibility string, idempotencyKey string) (map[string]any, error) {
 	body := map[string]any{
 		"sender_handle":     senderHandle,
 		"recipient_handles": recipientHandles,
@@ -149,6 +195,9 @@ func (c *HTTPClient) SendMessage(senderHandle string, recipientHandles []string,
 	}
 	if threadID != "" {
 		body["thread_id"] = threadID
+	}
+	if strings.TrimSpace(idempotencyKey) != "" {
+		body["idempotency_key"] = idempotencyKey
 	}
 	if c.Token != "" {
 		delete(body, "sender_handle")

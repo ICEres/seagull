@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 from datetime import datetime
 from typing import Protocol
 
@@ -31,7 +33,65 @@ from message_hub.domain.models import (
 from message_hub.storage.pagination import CursorPage
 
 
+class AtomicCommitConflict(RuntimeError):
+    """The transaction lost a concurrent idempotency or thread race."""
+
+
+class IdempotencyKeyConflict(RuntimeError):
+    """A live key was reused with a different normalized request."""
+
+
+class IdempotencyRecoveryConflict(RuntimeError):
+    """A live idempotency record cannot be safely replayed."""
+
+
+class SendTooLargeError(RuntimeError):
+    """A message/task transaction exceeds DynamoDB transaction limits."""
+
+
+MAX_DYNAMODB_ITEM_BYTES = 400 * 1024
+MAX_DYNAMODB_TRANSACTION_BYTES = 4 * 1024 * 1024
+
+
+def validate_transaction_limits(items: tuple[object, ...], action_count: int) -> None:
+    """Apply DynamoDB's transaction/action and item/aggregate bounds locally."""
+    if action_count > 100:
+        raise SendTooLargeError("atomic transaction exceeds DynamoDB's 100 action limit")
+
+    def normalize(value: object) -> object:
+        if dataclasses.is_dataclass(value):
+            return normalize(dataclasses.asdict(value))
+        if isinstance(value, dict):
+            return {str(key): normalize(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list, set, frozenset)):
+            return [normalize(item) for item in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    total = 0
+    for item in items:
+        size = len(json.dumps(normalize(item), separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        if size > MAX_DYNAMODB_ITEM_BYTES:
+            raise SendTooLargeError(f"DynamoDB item exceeds {MAX_DYNAMODB_ITEM_BYTES} bytes")
+        total += size
+    if total > MAX_DYNAMODB_TRANSACTION_BYTES:
+        raise SendTooLargeError(f"DynamoDB transaction exceeds {MAX_DYNAMODB_TRANSACTION_BYTES} bytes")
+
+
 class MessageHubRepository(Protocol):
+    def commit_message_send(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        sender_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        """Atomically commit a message, thread, deliveries, and idempotency key."""
+
     def add_agent(self, agent: Agent) -> None:
         """Persist a new agent."""
 
@@ -137,6 +197,9 @@ class MessageHubRepository(Protocol):
     def list_deliveries_by_message(self, message_id: str) -> tuple[Delivery, ...]:
         """Return all deliveries for a message."""
 
+    def list_deliveries_by_ids(self, delivery_ids: tuple[str, ...]) -> tuple[Delivery, ...]:
+        """Strongly read a committed delivery set by primary keys."""
+
     def update_delivery(self, delivery: Delivery) -> None:
         """Replace a delivery row."""
 
@@ -149,6 +212,16 @@ class MessageHubRepository(Protocol):
     def get_idempotent_message_id(self, sender_agent_id: str, idempotency_key: str) -> str | None:
         """Return the message already created for this sender/key pair."""
 
+    def get_idempotency_record(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, str | None, int | None] | None:
+        """Return (resource_id, fingerprint, expiry) for a live key."""
+
+    def get_idempotency_delivery_ids(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, ...]:
+        """Return delivery IDs committed with a live idempotency record."""
+
     def put_idempotency_key(
         self,
         sender_agent_id: str,
@@ -156,6 +229,7 @@ class MessageHubRepository(Protocol):
         message_id: str,
         *,
         expires_at: datetime | None = None,
+        request_fingerprint: str | None = None,
     ) -> None:
         """Persist an idempotency key for duplicate-send protection."""
 
@@ -167,6 +241,19 @@ class MessageHubRepository(Protocol):
 
     def put_task(self, task: TaskRecord) -> None:
         """Persist a delegated task record."""
+
+    def commit_task_creation(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        task: TaskRecord,
+        requester_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        """Atomically commit a task request message, delivery, task, and key."""
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         """Return a delegated task by ID."""
@@ -299,6 +386,7 @@ class MessageHubRepository(Protocol):
         task_id: str,
         *,
         expires_at: datetime | None = None,
+        request_fingerprint: str | None = None,
     ) -> None:
         """Persist an idempotency key for duplicate task creation protection."""
 

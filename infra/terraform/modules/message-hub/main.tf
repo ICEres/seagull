@@ -163,6 +163,8 @@ resource "aws_dynamodb_table" "deliveries" {
   billing_mode                = "PAY_PER_REQUEST"
   hash_key                    = "delivery_id"
   deletion_protection_enabled = var.deletion_protection_enabled
+  stream_enabled              = true
+  stream_view_type            = "NEW_AND_OLD_IMAGES"
 
   attribute {
     name = "delivery_id"

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -69,9 +70,16 @@ from message_hub.domain.models import (
     ToolGrant,
 )
 from message_hub.storage.pagination import CursorPage, cursor_after, decode_cursor
+from message_hub.storage.repository import (
+    AtomicCommitConflict,
+    IdempotencyRecoveryConflict,
+    SendTooLargeError,
+)
 
 MESSAGE_IDEMPOTENCY_TTL_SECONDS = 604800
 TASK_IDEMPOTENCY_KEY_PREFIX = "task:"
+MAX_DYNAMODB_ITEM_BYTES = 400 * 1024
+MAX_DYNAMODB_TRANSACTION_BYTES = 4 * 1024 * 1024
 # Reserved sender_agent_id partition in the idempotency table for guest-send
 # rate counters; real agent ids are always ``agent_<hex>`` so this can never
 # collide with an idempotency row.
@@ -379,6 +387,7 @@ def thread_to_item(thread: ThreadRecord) -> dict[str, Any]:
             "summary_ref": thread.summary_ref,
             "created_at": to_iso(thread.created_at),
             "updated_at": to_iso(thread.updated_at),
+            "revision": thread.revision,
         }
     )
 
@@ -396,6 +405,7 @@ def thread_from_item(item: dict[str, Any]) -> ThreadRecord:
         summary_ref=item.get("summary_ref"),
         created_at=_opt_parse_iso(item.get("created_at")) or datetime.now(timezone.utc),
         updated_at=_opt_parse_iso(item.get("updated_at")) or datetime.now(timezone.utc),
+        revision=_int(item.get("revision")),
     )
 
 
@@ -1222,8 +1232,70 @@ class DynamoDbMessageHubRepository:
     def put_message(self, message: Message) -> None:
         self._messages.put_item(Item=message_to_item(message))
 
+    def commit_message_send(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        sender_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        actions: list[dict[str, Any]] = [
+            {
+                "Put": {
+                    "TableName": self._messages.name,
+                    "Item": message_to_item(message),
+                    "ConditionExpression": "attribute_not_exists(message_id)",
+                }
+            }
+        ]
+        thread_put: dict[str, Any] = {
+            "TableName": self._threads.name,
+            "Item": thread_to_item(thread),
+        }
+        if thread.revision == 0:
+            thread_put["ConditionExpression"] = "attribute_not_exists(thread_id)"
+        elif thread.revision == 1:
+            thread_put["ConditionExpression"] = "attribute_not_exists(revision) OR revision = :expected_revision"
+            thread_put["ExpressionAttributeValues"] = {":expected_revision": 0}
+        else:
+            thread_put["ConditionExpression"] = "revision = :expected_revision"
+            thread_put["ExpressionAttributeValues"] = {":expected_revision": thread.revision - 1}
+        actions.append({"Put": thread_put})
+        for delivery in deliveries:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._deliveries.name,
+                        "Item": delivery_to_item(delivery),
+                        "ConditionExpression": "attribute_not_exists(delivery_id)",
+                    }
+                }
+            )
+        if idempotency_key is not None:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._idempotency.name,
+                        "Item": self._idempotency_item(
+                            sender_agent_id,
+                            idempotency_key,
+                            message_id=message.message_id,
+                            delivery_ids=tuple(delivery.delivery_id for delivery in deliveries),
+                            request_fingerprint=request_fingerprint,
+                        ),
+                        "ConditionExpression": "attribute_not_exists(sender_agent_id) OR expires_at <= :now",
+                        "ExpressionAttributeValues": {":now": int(time.time())},
+                    }
+                }
+            )
+        self._transact_write(actions)
+        return True
+
     def get_message(self, message_id: str) -> Message | None:
-        item = self._messages.get_item(Key={"message_id": message_id}).get("Item")
+        item = self._messages.get_item(Key={"message_id": message_id}, ConsistentRead=True).get("Item")
         return None if item is None else message_from_item(item)
 
     def list_thread_messages(
@@ -1456,7 +1528,7 @@ class DynamoDbMessageHubRepository:
         self._threads.put_item(Item=thread_to_item(thread))
 
     def get_thread(self, thread_id: str) -> ThreadRecord | None:
-        item = self._threads.get_item(Key={"thread_id": thread_id}).get("Item")
+        item = self._threads.get_item(Key={"thread_id": thread_id}, ConsistentRead=True).get("Item")
         return None if item is None else thread_from_item(item)
 
     # -- deliveries
@@ -1465,7 +1537,7 @@ class DynamoDbMessageHubRepository:
         self._deliveries.put_item(Item=delivery_to_item(delivery))
 
     def get_delivery(self, delivery_id: str) -> Delivery | None:
-        item = self._deliveries.get_item(Key={"delivery_id": delivery_id}).get("Item")
+        item = self._deliveries.get_item(Key={"delivery_id": delivery_id}, ConsistentRead=True).get("Item")
         return None if item is None else delivery_from_item(item)
 
     def list_deliveries_by_recipient(
@@ -1543,6 +1615,19 @@ class DynamoDbMessageHubRepository:
         )
         return tuple(delivery_from_item(item) for item in items)
 
+    def list_deliveries_by_ids(self, delivery_ids: tuple[str, ...]) -> tuple[Delivery, ...]:
+        deliveries: list[Delivery] = []
+        for delivery_id in delivery_ids:
+            item = self._deliveries.get_item(
+                Key={"delivery_id": delivery_id}, ConsistentRead=True
+            ).get("Item")
+            if item is None:
+                raise IdempotencyRecoveryConflict(
+                    f"idempotency record references missing delivery: {delivery_id}"
+                )
+            deliveries.append(delivery_from_item(item))
+        return tuple(deliveries)
+
     def update_delivery(self, delivery: Delivery) -> None:
         self.put_delivery(delivery)
 
@@ -1576,7 +1661,11 @@ class DynamoDbMessageHubRepository:
         if expires_at is not None and int(expires_at) <= int(time.time()):
             return None
         message_id = item.get("message_id")
-        return None if message_id is None else str(message_id)
+        if message_id is None:
+            if sender_agent_id == GUEST_RATE_SENDER_KEY:
+                return None
+            raise IdempotencyRecoveryConflict("message idempotency record has no message_id")
+        return str(message_id)
 
     def put_idempotency_key(
         self,
@@ -1585,21 +1674,55 @@ class DynamoDbMessageHubRepository:
         message_id: str,
         *,
         expires_at: datetime | None = None,
+        request_fingerprint: str | None = None,
     ) -> None:
         epoch = (
             int(expires_at.timestamp())
             if expires_at is not None
             else int(time.time()) + MESSAGE_IDEMPOTENCY_TTL_SECONDS
         )
-        self._idempotency.put_item(
-            Item={
-                "sender_agent_id": sender_agent_id,
-                "idempotency_key": idempotency_key,
-                "message_id": message_id,
-                "created_at": to_iso(datetime.now(timezone.utc)),
-                "expires_at": epoch,
-            }
+        item = self._idempotency_item(
+            sender_agent_id,
+            idempotency_key,
+            message_id=message_id,
+            request_fingerprint=request_fingerprint,
         )
+        item["expires_at"] = epoch
+        self._idempotency.put_item(Item=item)
+
+    def get_idempotency_record(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, str | None, int | None] | None:
+        stored_key = f"{TASK_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}" if task else idempotency_key
+        item = self._idempotency.get_item(
+            Key={"sender_agent_id": sender_agent_id, "idempotency_key": stored_key},
+            ConsistentRead=True,
+        ).get("Item")
+        if item is None:
+            return None
+        expires_at = item.get("expires_at")
+        if expires_at is not None and int(expires_at) <= int(time.time()):
+            return None
+        resource_id = item.get("task_id" if task else "message_id")
+        if resource_id is None:
+            raise IdempotencyRecoveryConflict("idempotency record has no resource id")
+        fingerprint = item.get("request_fingerprint")
+        return str(resource_id), None if fingerprint is None else str(fingerprint), None if expires_at is None else int(expires_at)
+
+    def get_idempotency_delivery_ids(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, ...]:
+        stored_key = f"{TASK_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}" if task else idempotency_key
+        item = self._idempotency.get_item(
+            Key={"sender_agent_id": sender_agent_id, "idempotency_key": stored_key},
+            ConsistentRead=True,
+        ).get("Item")
+        if item is None:
+            return ()
+        expires_at = item.get("expires_at")
+        if expires_at is not None and int(expires_at) <= int(time.time()):
+            return ()
+        return tuple(str(value) for value in (item.get("delivery_ids") or ()))
 
     # -- thread summaries
 
@@ -1623,9 +1746,148 @@ class DynamoDbMessageHubRepository:
         table = self._require(self._tasks, "tasks")
         table.put_item(Item=task_to_item(task))
 
+    def commit_task_creation(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        task: TaskRecord,
+        requester_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        if self._tasks is None:
+            raise RepositoryTableNotConfiguredError("tasks")
+        actions: list[dict[str, Any]] = [
+            {
+                "Put": {
+                    "TableName": self._messages.name,
+                    "Item": message_to_item(message),
+                    "ConditionExpression": "attribute_not_exists(message_id)",
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._threads.name,
+                    "Item": thread_to_item(thread),
+                    "ConditionExpression": (
+                        "attribute_not_exists(thread_id)"
+                        if thread.revision == 0
+                        else (
+                            "attribute_not_exists(revision) OR revision = :expected_revision"
+                            if thread.revision == 1
+                            else "revision = :expected_revision"
+                        )
+                    ),
+                    **(
+                        {}
+                        if thread.revision == 0
+                        else {"ExpressionAttributeValues": {":expected_revision": thread.revision - 1}}
+                    ),
+                }
+            },
+            *[
+                {
+                    "Put": {
+                        "TableName": self._deliveries.name,
+                        "Item": delivery_to_item(delivery),
+                        "ConditionExpression": "attribute_not_exists(delivery_id)",
+                    }
+                }
+                for delivery in deliveries
+            ],
+            {
+                "Put": {
+                    "TableName": self._tasks.name,
+                    "Item": task_to_item(task),
+                    "ConditionExpression": "attribute_not_exists(task_id)",
+                }
+            },
+        ]
+        if idempotency_key is not None:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": self._idempotency.name,
+                        "Item": self._idempotency_item(
+                            requester_agent_id,
+                            f"{TASK_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}",
+                            task_id=task.task_id,
+                            delivery_ids=tuple(delivery.delivery_id for delivery in deliveries),
+                            request_fingerprint=request_fingerprint,
+                        ),
+                        "ConditionExpression": "attribute_not_exists(sender_agent_id) OR expires_at <= :now",
+                        "ExpressionAttributeValues": {":now": int(time.time())},
+                    }
+                }
+            )
+        self._transact_write(actions)
+        return True
+
+    def _transact_write(self, actions: list[dict[str, Any]]) -> None:
+        if len(actions) > 100:
+            raise SendTooLargeError("atomic message transaction exceeds DynamoDB's 100 action limit")
+        from boto3.dynamodb.types import TypeSerializer
+
+        serializer = TypeSerializer()
+        total_bytes = 0
+        for action in actions:
+            for operation in action.values():
+                item = operation.get("Item") if isinstance(operation, dict) else None
+                if item is None:
+                    continue
+                encoded = json.dumps(
+                    serializer.serialize(item), separators=(",", ":"), ensure_ascii=False
+                ).encode("utf-8")
+                item_bytes = len(encoded)
+                if item_bytes > MAX_DYNAMODB_ITEM_BYTES:
+                    raise SendTooLargeError(
+                        f"DynamoDB item exceeds {MAX_DYNAMODB_ITEM_BYTES} bytes"
+                    )
+                total_bytes += item_bytes
+        if total_bytes > MAX_DYNAMODB_TRANSACTION_BYTES:
+            raise SendTooLargeError(
+                f"DynamoDB transaction exceeds {MAX_DYNAMODB_TRANSACTION_BYTES} bytes"
+            )
+        client = self._messages.meta.client
+        try:
+            client.transact_write_items(TransactItems=actions)
+        except Exception as exc:
+            error_code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if error_code in {"TransactionCanceledException", "TransactionConflictException"}:
+                raise AtomicCommitConflict("DynamoDB transaction condition failed") from exc
+            raise
+
+    @staticmethod
+    def _idempotency_item(
+        sender_agent_id: str,
+        idempotency_key: str,
+        *,
+        message_id: str | None = None,
+        task_id: str | None = None,
+        request_fingerprint: str | None = None,
+        delivery_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "sender_agent_id": sender_agent_id,
+            "idempotency_key": idempotency_key,
+            "created_at": to_iso(datetime.now(timezone.utc)),
+            "expires_at": int(time.time()) + MESSAGE_IDEMPOTENCY_TTL_SECONDS,
+        }
+        if message_id is not None:
+            item["message_id"] = message_id
+        if task_id is not None:
+            item["task_id"] = task_id
+        if request_fingerprint is not None:
+            item["request_fingerprint"] = request_fingerprint
+        if delivery_ids:
+            item["delivery_ids"] = list(delivery_ids)
+        return item
+
     def get_task(self, task_id: str) -> TaskRecord | None:
         table = self._require(self._tasks, "tasks")
-        item = table.get_item(Key={"task_id": task_id}).get("Item")
+        item = table.get_item(Key={"task_id": task_id}, ConsistentRead=True).get("Item")
         return None if item is None else task_from_item(item)
 
     def update_task(self, task: TaskRecord) -> None:
@@ -1929,21 +2191,21 @@ class DynamoDbMessageHubRepository:
         task_id: str,
         *,
         expires_at: datetime | None = None,
+        request_fingerprint: str | None = None,
     ) -> None:
         epoch = (
             int(expires_at.timestamp())
             if expires_at is not None
             else int(time.time()) + MESSAGE_IDEMPOTENCY_TTL_SECONDS
         )
-        self._idempotency.put_item(
-            Item={
-                "sender_agent_id": requester_agent_id,
-                "idempotency_key": f"{TASK_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}",
-                "task_id": task_id,
-                "created_at": to_iso(datetime.now(timezone.utc)),
-                "expires_at": epoch,
-            }
+        item = self._idempotency_item(
+            requester_agent_id,
+            f"{TASK_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}",
+            task_id=task_id,
+            request_fingerprint=request_fingerprint,
         )
+        item["expires_at"] = epoch
+        self._idempotency.put_item(Item=item)
 
     # --- Feed -----------------------------------------------------------------
     # Feed tables follow the same optional-provisioning rule as the task tables:

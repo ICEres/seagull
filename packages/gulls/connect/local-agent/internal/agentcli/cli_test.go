@@ -141,6 +141,8 @@ func testEnv(tmp string) []string {
 		"SEAGULL_AGENT_HANDLE=@worker:gulls.ai",
 		"SEAGULL_CONNECTOR_TOKEN=secret-token",
 		"SEAGULL_AGENT_CONTEXT_DIR=" + tmp,
+		"SEAGULL_AGENT_ENV_FILE=" + filepath.Join(tmp, "missing-env"),
+		"SEAGULL_RUNTIME_SOCKET=" + filepath.Join(tmp, "missing-runtime.sock"),
 	}
 }
 
@@ -706,6 +708,64 @@ func TestHTTPClientUsesMessageHubPathsAndBearerToken(t *testing.T) {
 	}
 }
 
+func TestHTTPClientSendsIdempotencyKey(t *testing.T) {
+	var body map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK,
+			Header: http.Header{"content-type": []string{"application/json"}},
+			Body:   io.NopCloser(strings.NewReader(`{"message_id":"m-1","thread_id":"t-1"}`))}, nil
+	})
+	client := NewHTTPClient("https://api.example.test", "secret-token")
+	client.Timeout = 0
+	client.Client = &http.Client{Transport: transport}
+	if _, err := client.SendMessageWithIdempotency("@worker:gulls.ai", []string{"@alice:gulls.ai"}, "hello", "t-1", "message", "direct", "outbox-123"); err != nil {
+		t.Fatal(err)
+	}
+	if body["idempotency_key"] != "outbox-123" {
+		t.Fatalf("idempotency_key = %#v", body["idempotency_key"])
+	}
+}
+
+type rejectedPostClient struct {
+	*fakeClient
+	err error
+}
+
+func (c *rejectedPostClient) SendMessage(string, []string, string, string, string, string) (map[string]any, error) {
+	return nil, c.err
+}
+
+func TestPostDistinguishesDefinitiveRejectionFromUncertainOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code int
+	}{
+		{"validation", &statusError{code: 400, message: "invalid content"}, 3},
+		{"authorization", &statusError{code: 403, message: "not allowed"}, 3},
+		{"size", &statusError{code: 413, message: "send_too_large"}, 3},
+		{"conflict", &statusError{code: 409, message: "recovery conflict"}, 1},
+		{"server failure", &statusError{code: 500, message: "lost response"}, 1},
+		{"transport failure", errors.New("400: text from an uncertain transport"), 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			client := &rejectedPostClient{fakeClient: newFakeClient(), err: test.err}
+			code := Main([]string{"--json", "post", "--to", "@alice:gulls.ai", "hello"},
+				&stdout, &stderr, testEnv(t.TempDir()), client)
+			if code != test.code {
+				t.Fatalf("exit = %d, want %d: %s", code, test.code, stderr.String())
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.err.Error()) {
+				t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestHTTPClientUsesScopedAgentPathsWithRuntimeToken(t *testing.T) {
 	paths := []string{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -737,6 +797,9 @@ func TestHTTPClientUsesScopedAgentPathsWithRuntimeToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.SendMessage("@worker:gulls.ai", []string{"@alice:gulls.ai"}, "hello", "thread_1", "message", "direct"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SendMessageWithIdempotency("@worker:gulls.ai", []string{"@alice:gulls.ai"}, "hello", "thread_1", "message", "direct", "outbox-123"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.DecideDelivery("delivery_1", "@worker:gulls.ai", "reply", "done", "note"); err != nil {

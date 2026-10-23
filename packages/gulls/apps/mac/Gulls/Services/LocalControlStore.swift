@@ -36,6 +36,9 @@ final class LocalControlStore {
     private var loadedConnectionRevision: String
     private var runningExecution: LocalProcessExecution?
     private var activeRequestID: String?
+    private var codexScopes: [String: (root: URL, digest: String, revision: String, taskID: String, taskDigest: String, profileID: String)] = [:]
+    private(set) var codexMigrationReady = true
+    private var cancelledCodexActions: Set<String> = []
 
     private let keys: Keys
 
@@ -85,6 +88,7 @@ final class LocalControlStore {
         }
         error = nil
         recoverClaims()
+        recoverAbandonedCodexRequests()
 
         var loaded: [LocalActionRequest] = []
         var problems: [String] = error.map { [$0] } ?? []
@@ -118,7 +122,9 @@ final class LocalControlStore {
                 problems.append("\(url.lastPathComponent): request is not valid for this Gull")
                 continue
             }
-            guard !resultIDs.contains(request.requestID), !claimedIDs.contains(request.requestID) else { continue }
+            guard !resultIDs.contains(request.requestID), !claimedIDs.contains(request.requestID),
+                  !cancelledCodexActions.contains(request.requestID) else { continue }
+            guard !isLegacyQuarantined(request) else { continue }
 
             var reviewed = request
             captureReviewMetadata(&reviewed)
@@ -134,6 +140,7 @@ final class LocalControlStore {
 
     func approve(_ request: LocalActionRequest) async {
         guard !isRunning else { return }
+        guard !cancelledCodexActions.contains(request.id) else { return }
         guard config.connectionRevision == loadedConnectionRevision else {
             error = "This request belongs to an older local connection. Refresh before reviewing it."
             refresh()
@@ -154,6 +161,36 @@ final class LocalControlStore {
               request.reviewedRequestDigest == fresh.canonicalDigest else {
             await finish(request: request, status: .rejected, error: "The reviewed request changed. Review it again.")
             return
+        }
+        if fresh.version == LocalActionRequest.currentVersion {
+            guard fresh.profileID == config.profileID,
+                  fresh.connectionRevision == config.connectionRevision,
+                  let taskID = fresh.codexTaskID,
+                  let profileID = fresh.profileID,
+                  let taskDigest = fresh.codexTaskDigest,
+                  let revision = fresh.connectionRevision,
+                  let folder = fresh.codexTaskFolder,
+                  let root = canonicalDirectory(URL(fileURLWithPath: folder)),
+                  isInsideAllowedFolder(root),
+                  let scope = codexScopes[fresh.id],
+                  scope.taskID == taskID,
+                  scope.taskDigest == taskDigest,
+                  scope.profileID == profileID,
+                  scope.revision == revision,
+                  scope.root == root,
+                  scope.digest == fresh.canonicalDigest,
+                  action(fresh, isInside: root) else {
+                await finish(request: request, status: .rejected, error: "The Codex operation is no longer attached to its live task.")
+                return
+            }
+        }
+        if let scope = codexScopes[request.id] {
+            guard scope.revision == config.connectionRevision,
+                  scope.digest == fresh.canonicalDigest,
+                  action(fresh, isInside: scope.root) else {
+                await finish(request: request, status: .rejected, error: "The Codex operation changed or is outside its task folder.")
+                return
+            }
         }
 
         var reviewedRequest = fresh
@@ -221,6 +258,128 @@ final class LocalControlStore {
 
     func stop(forTermination: Bool = false) {
         runningExecution?.terminate(reason: .cancelled, immediately: forTermination)
+    }
+
+    struct PreparedCodexAction {
+        let request: LocalActionRequest
+        let data: Data
+        let root: URL
+        let digest: String
+    }
+
+    /// Builds a Codex request without publishing it. The coordinator persists
+    /// the approval association before calling publishCodexAction.
+    func prepareCodexAction(arguments: [String: Any], workingFolder: URL,
+                            taskID: String, profileID: String,
+                            connectionRevision: String, taskDigest: String) throws -> PreparedCodexAction {
+        guard enabled, config.isConfigured,
+              let kindName = arguments["kind"] as? String, let kind = LocalActionKind(rawValue: kindName),
+              Set(arguments.keys).isSubset(of: ["kind", "executable", "arguments", "working_directory", "path", "content"]) else {
+            throw CodexTaskStore.Failure("Enable local control and choose an allowed task folder before requesting operations.")
+        }
+        let root = workingFolder.standardizedFileURL.resolvingSymlinksInPath()
+        guard checkedDirectoryURL(root.path) != nil else {
+            throw CodexTaskStore.Failure("Add this task folder to the Gull's allowed folders in This Mac settings first.")
+        }
+        guard UUID(uuidString: taskID) != nil,
+              profileID == config.profileID,
+              connectionRevision == config.connectionRevision,
+              taskDigest.count == 64,
+              taskDigest.allSatisfy({ $0.isHexDigit }) else {
+            throw CodexTaskStore.Failure("The Codex task connection changed before the operation was queued.")
+        }
+        // Wrong value types and extra fields must not disappear during decoding.
+        let data = try JSONSerialization.data(withJSONObject: arguments)
+        guard data.count <= Self.maximumRequestBytes else { throw CodexTaskStore.Failure("The operation is too large.") }
+        var object = arguments
+        object["version"] = LocalActionRequest.currentVersion
+        object["request_id"] = UUID().uuidString.lowercased()
+        object["gull_handle"] = config.agentHandle
+        object["created_at"] = Self.timestamp()
+        object["profile_id"] = profileID
+        object["codex_task_id"] = taskID
+        object["codex_task_folder"] = root.path
+        object["codex_task_digest"] = taskDigest
+        object["connection_revision"] = connectionRevision
+        let encoded = try JSONSerialization.data(withJSONObject: object)
+        let request = try JSONDecoder().decode(LocalActionRequest.self, from: encoded)
+        guard request.kind == kind, isValidShape(request), action(request, isInside: root),
+              encoded.count <= Self.maximumRequestBytes else {
+            throw CodexTaskStore.Failure("The operation must use absolute paths inside this task's selected folder.")
+        }
+        guard let digest = request.canonicalDigest else {
+            throw CodexTaskStore.Failure("The operation could not be canonicalized safely.")
+        }
+        return PreparedCodexAction(request: request, data: encoded, root: root, digest: digest)
+    }
+
+    /// Atomically publishes a request that has already been associated with a
+    /// persisted Codex approval.
+    func publishCodexAction(_ prepared: PreparedCodexAction) throws {
+        let request = prepared.request
+        guard request.version == LocalActionRequest.currentVersion,
+              request.profileID == config.profileID,
+              request.connectionRevision == config.connectionRevision,
+              let taskID = request.codexTaskID,
+              let profileID = request.profileID,
+              let revision = request.connectionRevision else {
+            throw CodexTaskStore.Failure("The Codex operation belongs to an older connection.")
+        }
+        try createDirectories(actionsDirectory: actionsDirectory)
+        let temporary = requestsDirectory.appendingPathComponent(".\(request.id).tmp-\(UUID().uuidString)")
+        let destination = requestURL(request.id)
+        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CodexTaskStore.Failure("Could not queue the local operation.") }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: prepared.data)
+            try handle.synchronize()
+            try handle.close()
+            // A hard link publishes the fully written file atomically and
+            // refuses to replace a request with the same ID.
+            guard Darwin.link(temporary.path, destination.path) == 0 else {
+                throw CodexTaskStore.Failure("Could not publish the local operation.")
+            }
+            try? fileManager.removeItem(at: temporary)
+            codexScopes[request.id] = (prepared.root, prepared.digest, revision, taskID, request.codexTaskDigest!, profileID)
+            refresh()
+        } catch {
+            try? handle.close()
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    /// Cancels exactly one Codex request, including one restored after a crash.
+    /// The captured directory prevents a reconnect from cancelling a new Gull's operation.
+    func cancelCodexAction(id: String, actionsDirectory origin: URL) {
+        guard UUID(uuidString: id) != nil else { return }
+        cancelledCodexActions.insert(id)
+        pendingRequests.removeAll { $0.id == id }
+        codexScopes.removeValue(forKey: id)
+        if activeRequestID == id { runningExecution?.terminate(reason: .cancelled) }
+        let requestFile = origin.appendingPathComponent("requests/\(id).json")
+        let resultFile = origin.appendingPathComponent("results/\(id).json")
+        guard !fileManager.fileExists(atPath: resultFile.path),
+              let data = try? Data(contentsOf: requestFile),
+              let request = try? JSONDecoder().decode(LocalActionRequest.self, from: data), request.id == id else { return }
+        let result = LocalActionResult(requestID: id, gullHandle: request.gullHandle, status: .cancelled,
+                                       completedAt: Self.timestamp(), error: "The Codex task stopped. This operation was not replayed.")
+        do {
+            try JSONEncoder().encode(result).write(to: resultFile, options: [.atomic])
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: resultFile.path)
+        } catch {
+            // A renamed request cannot reappear in the approval queue after a restart.
+            try? fileManager.moveItem(at: requestFile, to: requestFile.appendingPathExtension("cancelled"))
+            self.error = "Could not save the cancelled Codex operation: \(error.localizedDescription)"
+        }
+    }
+
+    private func action(_ request: LocalActionRequest, isInside root: URL) -> Bool {
+        guard let raw = request.kind == .command ? request.workingDirectory : request.path,
+              raw.hasPrefix("/"), !raw.contains("\0") else { return false }
+        let target = URL(fileURLWithPath: raw).standardizedFileURL.resolvingSymlinksInPath()
+        return target.path == root.path || target.path.hasPrefix(root.path == "/" ? "/" : root.path + "/")
     }
 
     private func finish(
@@ -411,6 +570,72 @@ final class LocalControlStore {
             } catch {
                 self.error = "Could not recover interrupted local action: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func recoverAbandonedCodexRequests() {
+        guard let files = try? fileManager.contentsOfDirectory(at: requestsDirectory, includingPropertiesForKeys: nil) else { return }
+        for url in files where url.pathExtension == "json" {
+            guard let id = requestID(from: url), !fileManager.fileExists(atPath: resultURL(id).path),
+                  let request = readRequest(id), request.version == LocalActionRequest.currentVersion else { continue }
+            let isCurrent = request.profileID == config.profileID
+                && request.gullHandle == config.agentHandle
+                && request.connectionRevision == config.connectionRevision
+                && codexScopes[id] != nil
+            guard !isCurrent else { continue }
+            writeCancelledResult(for: request, reason: "The Codex task stopped before this operation was approved. It was not replayed.")
+        }
+    }
+
+    /// Quarantine the legacy Codex requests once per local context. The files
+    /// remain in place so older CLI status queries and results remain readable;
+    /// a marker keeps them out of the Mac approval queue after migration.
+    @discardableResult
+    func quarantineLegacyPendingRequests() -> Bool {
+        let marker = actionsDirectory.appendingPathComponent("codex-v2-migration.marker")
+        guard !fileManager.fileExists(atPath: marker.path) else {
+            codexMigrationReady = true
+            return true
+        }
+        do {
+            try createDirectories(actionsDirectory: actionsDirectory)
+            let urls = requestFiles()
+            for url in urls {
+                guard let id = requestID(from: url), let request = readRequest(id), request.version == LocalActionRequest.legacyVersion else { continue }
+                try Data().write(to: legacyQuarantineURL(id), options: [.atomic])
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: legacyQuarantineURL(id).path)
+            }
+            try Data("v2\n".utf8).write(to: marker, options: [.atomic])
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+            codexMigrationReady = true
+            return true
+        } catch {
+            self.error = "Could not finish the Codex local-action migration: \(error.localizedDescription)"
+            codexMigrationReady = false
+            return false
+        }
+    }
+
+    private func isLegacyQuarantined(_ request: LocalActionRequest) -> Bool {
+        request.version == LocalActionRequest.legacyVersion
+            && fileManager.fileExists(atPath: legacyQuarantineURL(request.id).path)
+    }
+
+    private func legacyQuarantineURL(_ id: String) -> URL {
+        requestsDirectory.appendingPathComponent("\(id).legacy")
+    }
+
+    private func writeCancelledResult(for request: LocalActionRequest, reason: String) {
+        let destination = resultURL(request.id)
+        guard !fileManager.fileExists(atPath: destination.path) else { return }
+        let result = LocalActionResult(requestID: request.id, gullHandle: request.gullHandle,
+                                       status: .cancelled, completedAt: Self.timestamp(), error: reason)
+        do {
+            try createDirectories(actionsDirectory: actionsDirectory)
+            try JSONEncoder().encode(result).write(to: destination, options: [.atomic])
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        } catch {
+            self.error = "Could not recover abandoned Codex operation: \(error.localizedDescription)"
         }
     }
 

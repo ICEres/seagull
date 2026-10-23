@@ -65,6 +65,10 @@ final class GullsCLITests: XCTestCase {
                     continue
                 fi
             fi
+            if [ "$operation" = "command" ] && [ "\(behavior)" = "reject-post" ]; then
+                printf '{"version":1,"id":"%s","exit_code":3,"stdout":"","stderr":"413: send_too_large"}\\n' "$id"
+                continue
+            fi
             if [ "$operation" = "command" ] && { [ "\(behavior)" = "crash" ] || [ "\(behavior)" = "restore-config-error" ]; }; then
                 if [ "\(behavior)" = "restore-config-error" ]; then
                     touch "\(restoreMarker)"
@@ -74,6 +78,77 @@ final class GullsCLITests: XCTestCase {
             printf '{"version":1,"id":"%s","exit_code":0,"stdout":"{}","stderr":""}\\n' "$id"
         done
         """, runtimeSocketURL: tmp.appendingPathComponent("runtime.sock"))
+    }
+
+    func testPostPreservesFlagTerminatorAndLiteralMessage() async throws {
+        let argsFile = tmp.appendingPathComponent("post-args")
+        let cli = try makeFakeBinary(script: """
+        if [ "$1" = "--json" ]; then shift; fi
+        if [ "$1" = "post" ]; then
+            printf '<%s>\\n' "$@" > "\(argsFile.path)"
+            printf '{\"message_id\":\"message-1\",\"thread_id\":\"thread-1\"}'
+            exit 0
+        fi
+        exit 2
+        """)
+
+        let content = "-draft\nsecond line"
+        let result = try await cli.post(to: "@atlas:gulls.ai", content: content,
+                                        threadID: "thread-0", environment: makeEnvironment())
+        XCTAssertEqual(result.messageID, "message-1")
+        XCTAssertEqual(result.threadID, "thread-1")
+        let invocation = try String(contentsOf: argsFile, encoding: .utf8)
+        XCTAssertTrue(invocation.contains("<post>"))
+        XCTAssertTrue(invocation.contains("<--to>"))
+        XCTAssertTrue(invocation.contains("<@atlas:gulls.ai>"))
+        XCTAssertTrue(invocation.contains("<--thread-id>"))
+        XCTAssertTrue(invocation.contains("<thread-0>"))
+        XCTAssertTrue(invocation.contains("<-->"))
+        XCTAssertTrue(invocation.contains("<-draft\nsecond line>"))
+    }
+
+    func testThreadWrapperUsesBoundedLimitAndDecodesMessages() async throws {
+        let argsFile = tmp.appendingPathComponent("thread-args")
+        let cli = try makeFakeBinary(script: """
+        if [ "$1" = "--json" ]; then shift; fi
+        printf '<%s>\\n' "$@" > "\(argsFile.path)"
+        printf '{\"thread_id\":\"thread-7\",\"messages\":[{\"message_id\":\"m-1\",\"thread_id\":\"thread-7\",\"sender_handle\":\"@atlas:gulls.ai\",\"content_inline\":\"hello\",\"created_at\":\"2026-10-19T00:00:00Z\"}]}'
+        """)
+
+        let result = try await cli.thread(id: "thread-7", limit: 1000, environment: makeEnvironment())
+        XCTAssertEqual(result.threadID, "thread-7")
+        XCTAssertEqual(result.messages.first?.contentInline, "hello")
+        let invocation = try String(contentsOf: argsFile, encoding: .utf8)
+        XCTAssertTrue(invocation.contains("<thread>"))
+        XCTAssertTrue(invocation.contains("<--limit>"))
+        XCTAssertTrue(invocation.contains("<100>"))
+        XCTAssertTrue(invocation.contains("<thread-7>"))
+    }
+
+    func testHistoryWrapperPassesOpaquePagingAndFilters() async throws {
+        let argsFile = tmp.appendingPathComponent("history-args")
+        let cli = try makeFakeBinary(script: """
+        if [ "$1" = "--json" ]; then shift; fi
+        printf '<%s>\\n' "$@" > "\(argsFile.path)"
+        printf '{"items":[],"next_cursor":"next","total":4,"sync_complete":false}'
+        """)
+
+        let result = try await cli.history(limit: 500, cursor: "opaque token", query: "alice notes",
+                                           status: "replied", threadID: "thread-7",
+                                           environment: makeEnvironment())
+        XCTAssertEqual(result.nextCursor, "next")
+        let invocation = try String(contentsOf: argsFile, encoding: .utf8)
+        XCTAssertTrue(invocation.contains("<history>"))
+        XCTAssertTrue(invocation.contains("<--limit>"))
+        XCTAssertTrue(invocation.contains("<100>"))
+        XCTAssertTrue(invocation.contains("<--cursor>"))
+        XCTAssertTrue(invocation.contains("<opaque token>"))
+        XCTAssertTrue(invocation.contains("<--query>"))
+        XCTAssertTrue(invocation.contains("<alice notes>"))
+        XCTAssertTrue(invocation.contains("<--status>"))
+        XCTAssertTrue(invocation.contains("<replied>"))
+        XCTAssertTrue(invocation.contains("<--thread-id>"))
+        XCTAssertTrue(invocation.contains("<thread-7>"))
     }
 
     func testRuntimeRoutesRegisteredProfileCommandsThroughPersistentChild() async throws {
@@ -88,6 +163,30 @@ final class GullsCLITests: XCTestCase {
         routedEnvironment.connectionRevision = profile.revision
         let data = try await cli.run(["inbox"], environment: routedEnvironment)
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "{}")
+    }
+
+    func testPostDefinitiveRejectionIsTypedForOneShotAndRuntime() async throws {
+        let oneShot = try makeFakeBinary(script: "printf '413: send_too_large' >&2\nexit 3")
+        do {
+            _ = try await oneShot.post(to: "@atlas:gulls.ai", content: "hello", environment: makeEnvironment())
+            XCTFail("expected definitive rejection")
+        } catch GullsCLI.Failure.rejected(let message) {
+            XCTAssertTrue(message.contains("send_too_large"))
+        }
+
+        let runtime = try makeRuntimeFixture("reject-post")
+        let profile = makeRuntimeProfile(environment: makeEnvironment())
+        try await runtime.configureRuntime([profile])
+        defer { Task { await runtime.stopRuntime() } }
+        var environment = makeEnvironment()
+        environment.profileID = profile.id
+        environment.connectionRevision = profile.revision
+        do {
+            _ = try await runtime.post(to: "@atlas:gulls.ai", content: "hello", environment: environment)
+            XCTFail("expected definitive rejection from runtime")
+        } catch GullsCLI.Failure.rejected(let message) {
+            XCTAssertTrue(message.contains("send_too_large"))
+        }
     }
 
     func testRuntimeCrashFailsPendingCommandWithoutOneShotFallback() async throws {
@@ -269,15 +368,12 @@ final class GullsCLITests: XCTestCase {
         let versionData = try await cli.run(["version"], environment: routed)
         XCTAssertEqual(try JSONDecoder().decode(VersionInfo.self, from: versionData).program, "gulls")
 
-        do {
-            _ = try await cli.run(["inbox", "--limit", "1"], environment: routed)
-            XCTFail("expected missing-cache inbox error")
-        } catch let failure as GullsCLI.Failure {
-            guard case .runtime = failure else {
-                XCTFail("unexpected inbox failure: \(failure)")
-                return
-            }
-        }
+        // A newly configured durable history profile now exposes an empty
+        // cached inbox before the first network sync. This is the intended
+        // v1 runtime interoperability behavior, not a missing-cache error.
+        let inboxData = try await cli.run(["inbox", "--limit", "1"], environment: routed)
+        let inbox = try JSONDecoder().decode(InboxResponse.self, from: inboxData)
+        XCTAssertTrue(inbox.items.isEmpty)
 
         do {
             _ = try await cli.run(["not-a-real-command"], environment: routed)
@@ -501,7 +597,8 @@ final class GullsCLITests: XCTestCase {
         let argumentsFile = tmp.appendingPathComponent("login-arguments")
         let sessionFile = tmp.appendingPathComponent("account.json")
         let cli = try makeFakeBinary(script: """
-        printf '%s\\n' "$@" > "\(argumentsFile.path)"
+        printf '%s\\n' "$@" > "\(argumentsFile.path).tmp"
+        mv "\(argumentsFile.path).tmp" "\(argumentsFile.path)"
         sleep 30
         """)
 

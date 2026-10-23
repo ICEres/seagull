@@ -81,14 +81,18 @@ struct ServerSettingsView: View {
                         total: server.serverLedger.reduce(0) { $0 + max($1.creditDelta, 0) },
                         usedLabel: "allocated to users"
                     )
-                } else {
+                } else if account.isAdmin {
                     CloudSettingsRow("Server allowance", detail: "Available credits") {
                         Text("Unavailable").font(.caption)
                     }
                 }
             } else {
-                if account.isAdmin { ProgressView("Loading server status…") }
-                else { Text("Server controls require an administrator account.").foregroundStyle(.secondary) }
+                ProgressView("Loading server status…")
+            }
+            if !account.isAdmin {
+                Text("Server administration requires an administrator account.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
         }
     }

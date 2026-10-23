@@ -39,9 +39,8 @@ struct DraftReplyView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "wand.and.stars")
+            GullsAIIcon()
                 .font(.callout)
-                .foregroundStyle(GullsStyle.accent)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Review reply")

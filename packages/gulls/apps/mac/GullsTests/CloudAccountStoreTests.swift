@@ -70,6 +70,38 @@ final class CloudAccountStoreTests: XCTestCase {
         XCTAssertFalse(defaults.dictionaryRepresentation().values.contains { String(describing: $0).contains("sk-test-secret") })
     }
 
+    func testNonAdminServerRefreshOnlyReadsServiceHealth() async throws {
+        let defaults = try temporaryDefaults()
+        var requests: [(host: String, path: String)] = []
+        let session = makeSession { request in
+            let host = request.url?.host ?? ""
+            let path = request.url?.path ?? ""
+            requests.append((host, path))
+            if path == "/config.js" {
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test","messageApiUrl":"https://hub.example.test","aiProviderApiUrl":"https://ai.example.test"};"#)
+            }
+            if path == "/health" {
+                return CloudAccountURLProtocol.json(200, #"{"ok":true,"app":"test"}"#)
+            }
+            XCTFail("Non-admin server refresh requested \(host)\(path)")
+            return CloudAccountURLProtocol.json(404, #"{"message":"unexpected route"}"#)
+        }
+        let store = CloudAccountStore(defaults: defaults, session: session)
+        store.websiteURL = "https://web.example.test"
+        await store.loadConfiguration()
+        store.setTestSession(accessToken: jwt(sub: "member"), userID: "member", admin: false)
+
+        await store.refreshServer()
+
+        XCTAssertNil(store.error)
+        XCTAssertEqual(Set(requests.dropFirst().map { "\($0.host)\($0.path)" }), [
+            "api.example.test/health",
+            "hub.example.test/health",
+            "ai.example.test/health",
+        ])
+        XCTAssertEqual(store.serverSnapshot?.health.keys.sorted(), ["message", "provider", "social"])
+    }
+
     func testLogoutWinsAgainstAnInFlightGullRefresh() async throws {
         let defaults = try temporaryDefaults()
         let started = expectation(description: "profiles request started")
@@ -378,6 +410,244 @@ final class CloudAccountStoreTests: XCTestCase {
         XCTAssertFalse(store.isSignedIn)
     }
 
+    func testCachedRuntimeSurvivesTransientConfigurationFailure() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let token = jwt(sub: "owner")
+        let initialSession = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test"};"#)
+            case "/profiles":
+                return CloudAccountURLProtocol.json(200, #"{"items":[{"agent_id":"g-1","owner_user_id":"owner","handle":"@test:gulls.ai","display_name":"Test Gull","capabilities":[],"relationship_posture":"needs_approval","approval_required_for":[],"allowed_use_terms":[],"protocols":[],"status":"active"}]}"#)
+            default:
+                return CloudAccountURLProtocol.json(404, #"{"message":"unexpected route"}"#)
+            }
+        }
+        let original = CloudAccountStore(defaults: defaults, session: initialSession, sharedSessionURL: file.url)
+        original.websiteURL = "https://web.example.test"
+        await original.loadConfiguration()
+        original.setTestSession(accessToken: token, userID: "owner", admin: false)
+        let originalRefreshSucceeded = await original.refreshGulls()
+        XCTAssertTrue(originalRefreshSucceeded)
+        try file.write(sharedSession(token: token, websiteURL: original.websiteURL))
+
+        let restoredSession = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(503, #"{"message":"temporarily unavailable"}"#)
+            case "/me":
+                return CloudAccountURLProtocol.json(200, #"{"identity":{"user_id":"owner","provider":"cognito","subject":"subject","email":"owner@example.test"}}"#)
+            default:
+                return CloudAccountURLProtocol.json(404, #"{"message":"offline"}"#)
+            }
+        }
+        let restored = CloudAccountStore(defaults: defaults, session: restoredSession, sharedSessionURL: file.url)
+        restored.websiteURL = original.websiteURL
+        await restored.synchronizeSharedSession()
+
+        XCTAssertTrue(restored.isSignedIn)
+        XCTAssertEqual(restored.runtime?.socialAPIURL, "https://api.example.test")
+        XCTAssertEqual(restored.ownedGulls.first?.agentID, "g-1")
+    }
+
+    func testCachedWorkspaceIsIsolatedByAccount() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let oldToken = jwt(sub: "old-owner")
+        let initialSession = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test"};"#)
+            case "/profiles":
+                return CloudAccountURLProtocol.json(200, #"{"items":[{"agent_id":"old-gull","owner_user_id":"old-owner","handle":"@old:gulls.ai","display_name":"Old Gull","capabilities":[],"relationship_posture":"needs_approval","approval_required_for":[],"allowed_use_terms":[],"protocols":[],"status":"active"}]}"#)
+            default:
+                return CloudAccountURLProtocol.json(404, #"{"message":"unexpected route"}"#)
+            }
+        }
+        let original = CloudAccountStore(defaults: defaults, session: initialSession, sharedSessionURL: file.url)
+        original.websiteURL = "https://web.example.test"
+        await original.loadConfiguration()
+        original.setTestSession(accessToken: oldToken, userID: "old-owner", admin: false)
+        let originalRefreshSucceeded = await original.refreshGulls()
+        XCTAssertTrue(originalRefreshSucceeded)
+
+        let newToken = jwt(sub: "new-owner")
+        try file.write(sharedSession(token: newToken, websiteURL: original.websiteURL))
+        let started = expectation(description: "new identity lookup started")
+        let release = DispatchSemaphore(value: 0)
+        let session = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test"};"#)
+            case "/me":
+                started.fulfill()
+                release.wait()
+                return CloudAccountURLProtocol.json(200, #"{"identity":{"user_id":"new-owner","provider":"cognito","subject":"new-subject"}}"#)
+            default:
+                return CloudAccountURLProtocol.json(404, #"{"message":"unexpected route"}"#)
+            }
+        }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        restored.websiteURL = original.websiteURL
+        let restore = Task { await restored.synchronizeSharedSession() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertNil(restored.account)
+        XCTAssertTrue(restored.ownedGulls.isEmpty)
+        release.signal()
+        await restore.value
+        XCTAssertEqual(restored.userID, "new-owner")
+    }
+
+    func testExplicitSignOutPurgesCachedWorkspace() async throws {
+        let defaults = try temporaryDefaults()
+        let token = jwt(sub: "owner")
+        let session = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test"};"#)
+            case "/profiles":
+                return CloudAccountURLProtocol.json(200, #"{"items":[{"agent_id":"g-1","owner_user_id":"owner","handle":"@test:gulls.ai","display_name":"Test Gull","capabilities":[],"relationship_posture":"needs_approval","approval_required_for":[],"allowed_use_terms":[],"protocols":[],"status":"active"}]}"#)
+            default:
+                return CloudAccountURLProtocol.json(404, #"{"message":"unexpected route"}"#)
+            }
+        }
+        let store = CloudAccountStore(defaults: defaults, session: session)
+        store.websiteURL = "https://web.example.test"
+        await store.loadConfiguration()
+        store.setTestSession(accessToken: token, userID: "owner", admin: false)
+        let refreshSucceeded = await store.refreshGulls()
+        XCTAssertTrue(refreshSucceeded)
+        XCTAssertTrue(defaults.dictionaryRepresentation().keys.contains { $0.hasPrefix("cloudAccountCache.v2.") })
+
+        store.signOut()
+
+        XCTAssertFalse(defaults.dictionaryRepresentation().keys.contains { $0.hasPrefix("cloudAccountCache.v2.") })
+    }
+
+    func testExpiredSharedSessionKeepsCachedWorkspaceWithoutCloudRequests() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let token = jwt(sub: "owner")
+        let seeded = try await seedCachedWorkspace(defaults: defaults, file: file, token: token)
+        try file.write(SharedCloudSession(version: 1, websiteURL: seeded.websiteURL, accessToken: token, expiresAt: 1))
+        let session = makeSession { _ in
+            XCTFail("Expired sessions must only read the local workspace")
+            return CloudAccountURLProtocol.json(503, "{}")
+        }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        await restored.synchronizeSharedSession()
+        await restored.synchronizeSharedSession()
+
+        XCTAssertFalse(restored.isSignedIn)
+        XCTAssertTrue(restored.hasWorkspace)
+        XCTAssertEqual(restored.userID, "owner")
+        XCTAssertEqual(restored.ownedGulls.first?.agentID, "g-1")
+        XCTAssertNil(restored.socialClient)
+        XCTAssertNil(restored.providerClient)
+    }
+
+    func testTokenRotationRestoresCacheBeforeStalledIdentityLookup() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let originalToken = jwt(sub: "owner")
+        let seeded = try await seedCachedWorkspace(defaults: defaults, file: file, token: originalToken)
+        let rotatedToken = jwt(sub: "owner", groups: ["member"])
+        try file.write(sharedSession(token: rotatedToken, websiteURL: seeded.websiteURL))
+        let started = expectation(description: "rotated identity lookup started")
+        let release = DispatchSemaphore(value: 0)
+        let session = makeSession { request in
+            XCTAssertEqual(request.url?.path, "/me")
+            started.fulfill()
+            release.wait()
+            return CloudAccountURLProtocol.json(503, "{}")
+        }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        let restoring = Task { await restored.synchronizeSharedSession() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(restored.hasWorkspace)
+        XCTAssertEqual(restored.ownedGulls.first?.agentID, "g-1")
+        release.signal()
+        await restoring.value
+        XCTAssertTrue(restored.hasWorkspace)
+        XCTAssertFalse(defaults.dictionaryRepresentation().keys.contains { $0.contains(originalToken) || $0.contains(rotatedToken) })
+    }
+
+    func testRejectedSharedSessionPurgesPreviouslyCachedWorkspace() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let token = jwt(sub: "owner")
+        let seeded = try await seedCachedWorkspace(defaults: defaults, file: file, token: token)
+        try file.write(sharedSession(token: token, websiteURL: seeded.websiteURL))
+        let session = makeSession { _ in CloudAccountURLProtocol.json(401, #"{"message":"Unauthorized"}"#) }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        await restored.synchronizeSharedSession()
+
+        XCTAssertFalse(restored.hasWorkspace)
+        XCTAssertTrue(restored.ownedGulls.isEmpty)
+        XCTAssertNil(try file.read(for: restored.websiteURL))
+        XCTAssertFalse(defaults.dictionaryRepresentation().keys.contains { $0.hasPrefix("cloudAccountCache.v2.") })
+    }
+
+    func testSwitchingSharedAccountDuringTemporaryFailureHidesPreviousWorkspace() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let token = jwt(sub: "owner")
+        let seeded = try await seedCachedWorkspace(defaults: defaults, file: file, token: token)
+        try file.write(sharedSession(token: token, websiteURL: seeded.websiteURL))
+        let otherToken = jwt(sub: "other-owner")
+        let session = makeSession { request in
+            if request.url?.path == "/me", request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)" {
+                return CloudAccountURLProtocol.json(200, #"{"identity":{"user_id":"owner","provider":"cognito","subject":"owner"}}"#)
+            }
+            return CloudAccountURLProtocol.json(503, "{}")
+        }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        await restored.synchronizeSharedSession()
+        XCTAssertTrue(restored.hasWorkspace)
+        try file.write(sharedSession(token: otherToken, websiteURL: seeded.websiteURL))
+        await restored.synchronizeSharedSession()
+
+        XCTAssertFalse(restored.hasWorkspace)
+        XCTAssertNil(restored.account)
+        XCTAssertTrue(restored.ownedGulls.isEmpty)
+    }
+
+    func testDifferentWebsiteCannotReadCachedWorkspace() async throws {
+        let defaults = try temporaryDefaults()
+        let file = try temporarySharedFile()
+        let token = jwt(sub: "owner")
+        _ = try await seedCachedWorkspace(defaults: defaults, file: file, token: token)
+        let session = makeSession { _ in CloudAccountURLProtocol.json(503, "{}") }
+        let restored = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        restored.websiteURL = "https://other.example.test"
+        try file.write(sharedSession(token: token, websiteURL: restored.websiteURL))
+        await restored.synchronizeSharedSession()
+
+        XCTAssertFalse(restored.hasWorkspace)
+        XCTAssertTrue(restored.ownedGulls.isEmpty)
+    }
+
+    private func seedCachedWorkspace(defaults: UserDefaults, file: SharedCloudSessionFile, token: String) async throws -> CloudAccountStore {
+        let session = makeSession { request in
+            switch request.url?.path {
+            case "/config.js":
+                return CloudAccountURLProtocol.json(200, #"window.SEAGULL_CONFIG = {"socialApiUrl":"https://api.example.test"};"#)
+            case "/profiles":
+                return CloudAccountURLProtocol.json(200, #"{"items":[{"agent_id":"g-1","owner_user_id":"owner","handle":"@test:gulls.ai","display_name":"Test Gull","capabilities":[],"relationship_posture":"open","approval_required_for":[],"allowed_use_terms":[],"protocols":[],"status":"active"}]}"#)
+            default:
+                return CloudAccountURLProtocol.json(503, "{}")
+            }
+        }
+        let store = CloudAccountStore(defaults: defaults, session: session, sharedSessionURL: file.url)
+        store.websiteURL = "https://web.example.test"
+        await store.loadConfiguration()
+        store.setTestSession(accessToken: token, userID: "owner", admin: false)
+        let refreshed = await store.refreshGulls()
+        XCTAssertTrue(refreshed)
+        return store
+    }
+
     func testCancellingBrowserSignInDuringVerificationDoesNotPublishSharedSession() async throws {
         let file = try temporarySharedFile()
         let source = file.url.deletingLastPathComponent().appendingPathComponent("browser-session.json")
@@ -416,8 +686,8 @@ final class CloudAccountStoreTests: XCTestCase {
         return SharedCloudSessionFile(url: directory.appendingPathComponent("account.json"))
     }
 
-    private func sharedSession(token: String) -> SharedCloudSession {
-        SharedCloudSession(version: 1, websiteURL: "https://sea.gulls.ai", accessToken: token,
+    private func sharedSession(token: String, websiteURL: String = "https://sea.gulls.ai") -> SharedCloudSession {
+        SharedCloudSession(version: 1, websiteURL: websiteURL, accessToken: token,
                            expiresAt: Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
     }
 

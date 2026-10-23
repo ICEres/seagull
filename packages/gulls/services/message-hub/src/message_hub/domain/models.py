@@ -330,6 +330,9 @@ class ThreadRecord:
     summary_ref: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    # Monotonically increasing revision used by atomic message commits. Legacy
+    # rows decode as zero and are advanced on their first transactional update.
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +402,7 @@ class SendMessageResult:
     message: Message
     thread: ThreadRecord
     deliveries: tuple[Delivery, ...]
+    replayed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

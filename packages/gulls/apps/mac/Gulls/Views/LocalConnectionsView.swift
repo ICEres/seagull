@@ -2,12 +2,13 @@ import AppKit
 import SwiftUI
 
 struct LocalConnectionsView: View {
+    static let pairingAnchor = "localGullPairing"
+
     @Bindable var workspace: GullsWorkspace
     @Bindable var account: CloudAccountStore
     @Binding var pairingGull: CloudGull?
     @State private var selectedGullID = ""
-    @State private var editingProfileID: String?
-    @State private var controlProfileID: String?
+    @State private var selectedProfileID: String?
     @State private var disconnectingProfile: GullsConfig?
     @State private var removingProfile: GullsConfig?
     @State private var isBusy = false
@@ -16,13 +17,40 @@ struct LocalConnectionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            settingsContent
+            connectionsSection
+            if let config = selectedConfig {
+                if config.isConfigured, let tasks = workspace.codexTasks[config.profileID] {
+                    CodexCapabilitySettingsView(tasks: tasks, cli: workspace.cli)
+                        .id(config.profileID)
+                }
+                if config.isConfigured, let control = workspace.localControls[config.profileID] {
+                    LocalControlView(control: control)
+                        .id(config.profileID)
+                }
+                CloudSettingsSection("Connection settings", detail: "Connection and credentials for \(connectionName(config)).") {
+                    ConnectionSettingsView(config: config, cli: workspace.cli)
+                        .id(config.profileID)
+                    if config.profileID != GullsConfig.defaultProfileID {
+                        Button("Remove from this Mac", role: .destructive) { removingProfile = config }
+                            .disabled(isBusy)
+                    }
+                }
+            }
+            pairingSection
+                .id(Self.pairingAnchor)
             if let status { CloudSettingsStatus(message: status, isError: statusIsError) }
+            Text("Monitoring continues with windows closed. Quit Gulls stops this Mac. Monitoring and AI replies are configured separately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
         .padding(.top, 24)
         .padding(.bottom, 24)
+        .onAppear {
+            if selectedProfileID == nil { selectedProfileID = workspace.connections.selectedProfileID }
+        }
         .task(id: account.sessionID) {
             if account.isSignedIn { await account.refreshGulls() }
             selectRequestedGull()
@@ -52,153 +80,77 @@ struct LocalConnectionsView: View {
         }
     }
 
+    private var selectedConfig: GullsConfig? {
+        workspace.connections.profiles.first { $0.profileID == selectedProfileID }
+            ?? workspace.connections.profiles.first { $0.profileID == workspace.connections.selectedProfileID }
+            ?? workspace.connections.profiles.first
+    }
+
+    private var connectionsSection: some View {
+        CloudSettingsSection("Gulls on this Mac", detail: "Select a Gull to adjust its settings below. Each Gull has its own connection and Mac permissions.") {
+            HStack {
+                Spacer()
+                Button("Add manually", systemImage: "plus") {
+                    let config = workspace.connections.add()
+                    workspace.synchronizeProfiles()
+                    selectedProfileID = config.profileID
+                }
+                .buttonStyle(.borderless)
+                .disabled(isBusy)
+            }
+            if workspace.connections.profiles.isEmpty {
+                Text("No local connections yet. Pair an owned Gull or add a connection manually.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(workspace.connections.profiles, id: \.profileID) { config in
+                connectionRow(config)
+            }
+        }
+    }
+
     @ViewBuilder
-    private var settingsContent: some View {
-        if let editingProfileID,
-           let config = workspace.connections.profiles.first(where: { $0.profileID == editingProfileID }) {
-            detailHeader
-            CloudSettingsSection("Connection details", detail: "Advanced settings for \(connectionName(config)). Preferences save automatically. Update credentials separately.") {
-                ConnectionSettingsView(config: config, cli: workspace.cli)
-                    .id(config.profileID)
-                if config.profileID != GullsConfig.defaultProfileID {
-                    Button("Remove from this Mac", role: .destructive) { removingProfile = config }
-                        .disabled(isBusy)
+    private var pairingSection: some View {
+        if account.isSignedIn {
+            CloudSettingsSection("Connect an owned Gull", detail: "Pairing connects it to this Mac and switches its replies to Local automatically. It replaces the previous local connection for that Gull.") {
+                Picker("Gull", selection: $selectedGullID) {
+                    Text("Choose a Gull").tag("")
+                    ForEach(account.ownedGulls) { gull in
+                        Text(gull.displayName ?? gull.handle).tag(gull.id)
+                    }
+                }
+                HStack(spacing: 12) {
+                    Button("Connect to this Mac") { Task { await connectSelectedGull() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selectedGullID.isEmpty || isBusy)
+                    if isBusy { ProgressView().controlSize(.small) }
                 }
             }
-        } else if let controlProfileID,
-                  let control = workspace.localControls[controlProfileID],
-                  workspace.connections.profiles.contains(where: { $0.profileID == controlProfileID }) {
-            detailHeader
-            LocalControlView(control: control)
         } else {
-            listContent
-        }
-    }
-
-    private var listContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            CloudSettingsSection("Gulls on this Mac", detail: "Each Gull has its own inbox, credentials, and monitoring switch.") {
-                HStack {
-                    Spacer()
-                    Button("Add manually", systemImage: "plus") {
-                        let config = workspace.connections.add()
-                        workspace.synchronizeProfiles()
-                        editingProfileID = config.profileID
-                        controlProfileID = nil
+            CloudSettingsSection("Connect an owned Gull", detail: "Sign in with your browser to choose which Gulls run on this Mac.") {
+                if account.isBrowserSignInPending {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Waiting for your browser…").font(.callout).foregroundStyle(.secondary)
+                        Button("Cancel") { account.cancelBrowserSignIn() }
                     }
-                    .buttonStyle(.borderless)
-                    .disabled(isBusy)
+                } else {
+                    Button("Sign in with browser") { account.startBrowserSignIn() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!account.canStartBrowserSignIn)
                 }
-                if workspace.connections.profiles.isEmpty {
-                    Text("No local connections yet. Pair an owned Gull or add a connection manually.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(workspace.connections.profiles, id: \.profileID) { config in
-                    connectionRow(config)
-                }
+                if let error = account.error { CloudSettingsStatus(message: error, isError: true) }
             }
-
-            if account.isSignedIn {
-                CloudSettingsSection("Connect an owned Gull", detail: "Pairing connects it to this Mac and switches its replies to Local automatically. It replaces the previous local connection for that Gull.") {
-                    Picker("Gull", selection: $selectedGullID) {
-                        Text("Choose a Gull").tag("")
-                        ForEach(account.ownedGulls) { gull in
-                            Text(gull.displayName ?? gull.handle).tag(gull.id)
-                        }
-                    }
-                    HStack(spacing: 12) {
-                        Button("Connect to this Mac") { Task { await connectSelectedGull() } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(selectedGullID.isEmpty || isBusy)
-                        if isBusy { ProgressView().controlSize(.small) }
-                    }
-                }
-            } else {
-                CloudSettingsSection("Connect an owned Gull", detail: "Sign in with your browser to choose which Gulls run on this Mac.") {
-                    if account.isBrowserSignInPending {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("Waiting for your browser…").font(.callout).foregroundStyle(.secondary)
-                            Button("Cancel") { account.cancelBrowserSignIn() }
-                        }
-                    } else {
-                        Button("Sign in with browser") { account.startBrowserSignIn() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!account.canStartBrowserSignIn)
-                    }
-                    if let error = account.error { CloudSettingsStatus(message: error, isError: true) }
-                }
-            }
-
-            Text("Monitoring continues with windows closed. Quit Gulls stops this Mac. Monitoring and AI replies are configured separately.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var detailHeader: some View {
-        HStack {
-            Button("Back to This Mac", systemImage: "chevron.left") {
-                editingProfileID = nil
-                controlProfileID = nil
-            }
-            .buttonStyle(.borderless)
-            Spacer()
         }
     }
 
     private func connectionRow(_ config: GullsConfig) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 10) {
-                Button {
-                    workspace.connections.select(profileID: config.profileID)
-                } label: {
-                    HStack(spacing: 10) {
-                        WingAvatar(identity: config.agentHandle.isEmpty ? config.profileID : config.agentHandle, size: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(connectionName(config)).font(.subheadline.weight(.medium))
-                            Text(config.isConfigured ? config.agentHandle : "Needs connection")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Show this Gull’s inbox")
-                Spacer(minLength: 8)
-                if workspace.connections.selectedProfileID == config.profileID {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(GullsStyle.accent)
-                        .help("Currently selected inbox")
-                }
-                Text(config.isLocallyPaired ? "Paired" : config.isConfigured ? "Configured" : "Not connected")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(config.isLocallyPaired || config.isConfigured ? Color.secondary : .orange)
-                if config.isConfigured {
-                    HStack(spacing: 6) {
-                        Text("Monitor")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Toggle("Monitor inbox", isOn: Binding(
-                            get: { config.monitoringEnabled },
-                            set: { workspace.setMonitoring($0, profileID: config.profileID) }
-                        ))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .help(config.monitoringEnabled ? "Pause inbox monitoring" : "Resume inbox monitoring")
-                        .disabled(isBusy)
-                    }
-                }
-                Button("Connection details", systemImage: "slider.horizontal.3") {
-                    editingProfileID = config.profileID
-                    controlProfileID = nil
-                }
-                .buttonStyle(.borderless)
+            ViewThatFits(in: .horizontal) {
+                regularConnectionHeader(config)
+                compactConnectionHeader(config)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             if let store = workspace.inboxes[config.profileID], config.isConfigured {
                 HStack(spacing: 12) {
                     Label(monitoringStatus(store),
@@ -223,36 +175,102 @@ struct LocalConnectionsView: View {
                 }
             }
             if config.isConfigured, let control = workspace.localControls[config.profileID] {
-                Button {
-                    controlProfileID = config.profileID
-                    editingProfileID = nil
-                } label: {
-                    HStack(spacing: 8) {
-                        Label("Commands & files", systemImage: "terminal")
-                        if !control.pendingRequests.isEmpty {
-                            Text("\(control.pendingRequests.count) pending")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
+                if !control.pendingRequests.isEmpty {
+                    Label("\(control.pendingRequests.count) awaiting approval", systemImage: "terminal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.subheadline)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.primary)
             }
         }
-        .padding(.vertical, 5)
+        .padding(10)
+        .background(selectedConfig?.profileID == config.profileID ? GullsStyle.field : .clear,
+                    in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func regularConnectionHeader(_ config: GullsConfig) -> some View {
+        HStack(spacing: 10) {
+            connectionIdentityButton(config)
+            Spacer(minLength: 8)
+            connectionStatus(config)
+            if config.isConfigured { monitoringToggle(config) }
+        }
+    }
+
+    private func compactConnectionHeader(_ config: GullsConfig) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                connectionIdentityButton(config)
+                Spacer(minLength: 6)
+                connectionStatus(config)
+            }
+            HStack(spacing: 10) {
+                if config.isConfigured { monitoringToggle(config) }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func connectionIdentityButton(_ config: GullsConfig) -> some View {
+        Button {
+            selectedProfileID = config.profileID
+        } label: {
+            HStack(spacing: 10) {
+                WingAvatar(identity: config.agentHandle.isEmpty ? config.profileID : config.agentHandle, size: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(connectionName(config))
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(config.isConfigured ? config.agentHandle : "Needs connection")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings for \(connectionName(config))")
+        .accessibilityAddTraits(selectedConfig?.profileID == config.profileID ? .isSelected : [])
+        .disabled(isBusy)
+        .help("Adjust this Gull’s settings below")
+    }
+
+    private func connectionStatus(_ config: GullsConfig) -> some View {
+        HStack(spacing: 6) {
+            if selectedConfig?.profileID == config.profileID {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(GullsStyle.accent)
+                    .help("Selected for settings")
+            }
+            Text(config.isLocallyPaired ? "Paired" : config.isConfigured ? "Configured" : "Not connected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(config.isLocallyPaired || config.isConfigured ? Color.secondary : .orange)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private func monitoringToggle(_ config: GullsConfig) -> some View {
+        HStack(spacing: 6) {
+            Text("Monitor")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+            Toggle("Monitor inbox", isOn: Binding(
+                get: { config.monitoringEnabled },
+                set: { workspace.setMonitoring($0, profileID: config.profileID) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .help(config.monitoringEnabled ? "Pause inbox monitoring" : "Resume inbox monitoring")
+            .disabled(isBusy)
+        }
     }
 
     private func selectRequestedGull() {
         if let pairingGull {
             selectedGullID = pairingGull.id
-            editingProfileID = nil
-            controlProfileID = nil
         }
     }
 
@@ -315,6 +333,7 @@ struct LocalConnectionsView: View {
         guard let config = pairedConfig else { return }
         workspace.synchronizeProfiles()
         workspace.connections.select(profileID: config.profileID)
+        selectedProfileID = config.profileID
         pairingGull = nil
         if sessionID == account.sessionID, account.isSignedIn {
             do {
@@ -368,7 +387,9 @@ struct LocalConnectionsView: View {
         workspace.localControls[config.profileID]?.stop()
         workspace.connections.remove(profileID: config.profileID)
         workspace.synchronizeProfiles()
-        editingProfileID = nil
+        if selectedProfileID == config.profileID {
+            selectedProfileID = workspace.connections.selectedProfileID
+        }
         status = "Saved connection removed."
         statusIsError = false
     }

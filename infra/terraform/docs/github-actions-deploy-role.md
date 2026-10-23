@@ -97,12 +97,13 @@ The deploy role needs permissions for the remote Terraform backend and for every
 AWS resource family managed by the dev stack. Keep the role policy aligned with
 the Terraform modules when adding resource types.
 
-At minimum, the S3 bucket statements must include both Terraform-managed dev
+At minimum, the S3 bucket statements must include all Terraform-managed dev
 buckets:
 
 ```text
 arn:aws:s3:::seagull-dev-web-<account-id>-<region>
 arn:aws:s3:::seagull-dev-msg-payloads-<account-id>-<region>
+arn:aws:s3:::seagull-dev-delivery-failures-<account-id>-<region>
 ```
 
 The matching object statement must include:
@@ -110,6 +111,7 @@ The matching object statement must include:
 ```text
 arn:aws:s3:::seagull-dev-web-<account-id>-<region>/*
 arn:aws:s3:::seagull-dev-msg-payloads-<account-id>-<region>/*
+arn:aws:s3:::seagull-dev-delivery-failures-<account-id>-<region>/*
 ```
 
 When adding another Terraform-managed S3 bucket, update both the bucket-level

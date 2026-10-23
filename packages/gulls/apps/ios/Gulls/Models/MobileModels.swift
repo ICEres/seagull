@@ -1,6 +1,6 @@
 import Foundation
 
-struct MobileInboxItem: Decodable, Equatable, Identifiable {
+struct MobileInboxItem: Codable, Equatable, Identifiable {
     var delivery: MobileDelivery
     var message: MobileMessage?
     var currentMessage: MobileCurrentMessage?
@@ -9,7 +9,7 @@ struct MobileInboxItem: Decodable, Equatable, Identifiable {
     var content: String { currentMessage?.contentInline ?? message?.contentInline ?? "" }
 }
 
-struct MobileDelivery: Decodable, Equatable {
+struct MobileDelivery: Codable, Equatable {
     var deliveryID: String
     var messageID: String?
     var threadID: String?
@@ -21,7 +21,7 @@ struct MobileDelivery: Decodable, Equatable {
     var updatedAt: String?
 }
 
-struct MobileMessage: Decodable, Equatable {
+struct MobileMessage: Codable, Equatable {
     var messageID: String?
     var threadID: String?
     var senderAgentID: String?
@@ -39,7 +39,7 @@ struct MobileMessage: Decodable, Equatable {
     }
 }
 
-struct MobileCurrentMessage: Decodable, Equatable {
+struct MobileCurrentMessage: Codable, Equatable {
     var contentInline: String?
 }
 
@@ -62,6 +62,20 @@ struct MobileSendResponse: Decodable, Equatable {
 struct MobileSentResponse: Decodable {
     var messages: [MobileMessage]
     var truncated: Bool?
+}
+
+/// An approved outbound message remains on disk until the server acknowledges it.
+struct MobilePendingMessage: Codable, Equatable, Identifiable {
+    enum State: String, Codable { case queued, sending, failed, unconfirmed }
+    let id: String
+    let sender: CloudGull
+    let recipientHandle: String
+    let content: String
+    let threadID: String?
+    let createdAt: Date
+    var state: State
+
+    var conversationID: String { threadID ?? "pending:\(id)" }
 }
 
 enum MobileDates {

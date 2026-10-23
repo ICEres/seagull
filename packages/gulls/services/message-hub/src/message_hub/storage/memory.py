@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import RLock
 
 from message_hub.domain.models import (
@@ -32,6 +32,12 @@ from message_hub.domain.models import (
     utc_now,
 )
 from message_hub.storage.pagination import CursorPage, cursor_after, decode_cursor
+from message_hub.storage.repository import (
+    AtomicCommitConflict,
+    IdempotencyKeyConflict,
+    IdempotencyRecoveryConflict,
+    validate_transaction_limits,
+)
 
 
 class InMemoryMessageHubRepository:
@@ -64,7 +70,7 @@ class InMemoryMessageHubRepository:
         self._delivery_ids_by_message: dict[str, list[str]] = defaultdict(list)
         self._routing_rules_by_id: dict[str, RoutingRule] = {}
         self._routing_rule_ids: list[str] = []
-        self._idempotency: dict[tuple[str, str], tuple[str, datetime | None]] = {}
+        self._idempotency: dict[tuple[str, str], tuple[str, datetime | None, str | None, tuple[str, ...]]] = {}
         self._summaries_by_thread: dict[str, list[ThreadSummary]] = defaultdict(list)
         self._tasks_by_id: dict[str, TaskRecord] = {}
         self._task_ids_by_thread: dict[str, list[str]] = defaultdict(list)
@@ -85,7 +91,7 @@ class InMemoryMessageHubRepository:
         self._tool_requests_by_id: dict[str, TaskToolRequest] = {}
         self._tool_request_ids_by_task: dict[str, list[str]] = defaultdict(list)
         self._task_results_by_task: dict[str, list[TaskResultRecord]] = defaultdict(list)
-        self._task_idempotency: dict[tuple[str, str], tuple[str, datetime | None]] = {}
+        self._task_idempotency: dict[tuple[str, str], tuple[str, datetime | None, str | None, tuple[str, ...]]] = {}
         # (scope_key, window_start_epoch) -> (count, ttl_epoch)
         self._guest_send_counts: dict[tuple[str, int], tuple[int, int]] = {}
 
@@ -179,6 +185,62 @@ class InMemoryMessageHubRepository:
             self._message_ids_by_sender[message.sender_agent_id].append(message.message_id)
             if message.content_ref is not None:
                 self._message_ids_by_content_ref[message.content_ref].append(message.message_id)
+
+    def commit_message_send(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        sender_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        with self._lock:
+            validate_transaction_limits(
+                (message, thread, *deliveries),
+                2 + len(deliveries) + (1 if idempotency_key else 0),
+            )
+            key = (sender_agent_id, idempotency_key) if idempotency_key else None
+            if key is not None:
+                existing = self._live_idempotency(self._idempotency, key)
+                if existing is not None:
+                    resource_id, _, fingerprint = existing[:3]
+                    if fingerprint is not None and fingerprint != request_fingerprint:
+                        raise IdempotencyKeyConflict("idempotency key reused with a different request")
+                    return False
+
+            current = self._threads_by_id.get(thread.thread_id)
+            expected_revision = thread.revision - 1
+            if current is None:
+                if expected_revision != -1:
+                    raise AtomicCommitConflict("thread was created concurrently")
+            elif current.revision != expected_revision:
+                raise AtomicCommitConflict("thread was updated concurrently")
+            if message.message_id in self._messages_by_id or any(
+                delivery.delivery_id in self._deliveries_by_id for delivery in deliveries
+            ):
+                raise AtomicCommitConflict("resource id already exists")
+
+            self._messages_by_id[message.message_id] = message
+            self._message_ids_by_thread[message.thread_id].append(message.message_id)
+            self._message_ids_by_sender[message.sender_agent_id].append(message.message_id)
+            if message.content_ref is not None:
+                self._message_ids_by_content_ref[message.content_ref].append(message.message_id)
+            self._threads_by_id[thread.thread_id] = thread
+            for delivery in deliveries:
+                self._deliveries_by_id[delivery.delivery_id] = delivery
+                self._delivery_ids_by_recipient[delivery.recipient_agent_id].append(delivery.delivery_id)
+                self._delivery_ids_by_sender[delivery.sender_agent_id].append(delivery.delivery_id)
+                self._delivery_ids_by_message[delivery.message_id].append(delivery.delivery_id)
+            if key is not None:
+                self._idempotency[key] = (
+                    message.message_id,
+                    utc_now() + timedelta(days=7),
+                    request_fingerprint,
+                    tuple(delivery.delivery_id for delivery in deliveries),
+                )
+            return True
 
     def get_message(self, message_id: str) -> Message | None:
         with self._lock:
@@ -350,6 +412,15 @@ class InMemoryMessageHubRepository:
     def list_deliveries_by_message(self, message_id: str) -> tuple[Delivery, ...]:
         return self._list_deliveries(self._delivery_ids_by_message.get(message_id, []), None)
 
+    def list_deliveries_by_ids(self, delivery_ids: tuple[str, ...]) -> tuple[Delivery, ...]:
+        with self._lock:
+            missing = [delivery_id for delivery_id in delivery_ids if delivery_id not in self._deliveries_by_id]
+            if missing:
+                raise IdempotencyRecoveryConflict(
+                    f"idempotency record references missing deliveries: {', '.join(missing)}"
+                )
+            return tuple(self._deliveries_by_id[delivery_id] for delivery_id in delivery_ids)
+
     def update_delivery(self, delivery: Delivery) -> None:
         with self._lock:
             if delivery.delivery_id not in self._deliveries_by_id:
@@ -377,7 +448,7 @@ class InMemoryMessageHubRepository:
             if value is None:
                 return None
 
-            message_id, expires_at = value
+            message_id, expires_at = value[:2]
             if expires_at is not None and expires_at <= utc_now():
                 del self._idempotency[key]
                 return None
@@ -393,7 +464,30 @@ class InMemoryMessageHubRepository:
         expires_at: datetime | None = None,
     ) -> None:
         with self._lock:
-            self._idempotency[(sender_agent_id, idempotency_key)] = (message_id, expires_at)
+            self._idempotency[(sender_agent_id, idempotency_key)] = (message_id, expires_at, None, ())
+
+    def get_idempotency_record(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, str | None, int | None] | None:
+        store = self._task_idempotency if task else self._idempotency
+        with self._lock:
+            value = self._live_idempotency(store, (sender_agent_id, idempotency_key))
+            if value is None:
+                return None
+            resource_id, expires, fingerprint = value[:3]
+            if not resource_id:
+                raise IdempotencyRecoveryConflict("idempotency record has no resource id")
+            return resource_id, fingerprint, None if expires is None else int(expires.timestamp())
+
+    def get_idempotency_delivery_ids(
+        self, sender_agent_id: str, idempotency_key: str, *, task: bool = False
+    ) -> tuple[str, ...]:
+        store = self._task_idempotency if task else self._idempotency
+        with self._lock:
+            value = self._live_idempotency(store, (sender_agent_id, idempotency_key))
+            if value is None:
+                return ()
+            return tuple(value[3]) if len(value) > 3 else ()
 
     def put_thread_summary(self, summary: ThreadSummary) -> None:
         with self._lock:
@@ -700,7 +794,7 @@ class InMemoryMessageHubRepository:
             if value is None:
                 return None
 
-            task_id, expires_at = value
+            task_id, expires_at = value[:2]
             if expires_at is not None and expires_at <= utc_now():
                 del self._task_idempotency[key]
                 return None
@@ -716,7 +810,73 @@ class InMemoryMessageHubRepository:
         expires_at: datetime | None = None,
     ) -> None:
         with self._lock:
-            self._task_idempotency[(requester_agent_id, idempotency_key)] = (task_id, expires_at)
+            self._task_idempotency[(requester_agent_id, idempotency_key)] = (task_id, expires_at, None, ())
+
+    def commit_task_creation(
+        self,
+        *,
+        message: Message,
+        thread: ThreadRecord,
+        deliveries: tuple[Delivery, ...],
+        task: TaskRecord,
+        requester_agent_id: str,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> bool:
+        with self._lock:
+            validate_transaction_limits(
+                (message, thread, *deliveries, task),
+                3 + len(deliveries) + (1 if idempotency_key else 0),
+            )
+            key = (requester_agent_id, idempotency_key) if idempotency_key else None
+            if key is not None:
+                existing = self._live_idempotency(self._task_idempotency, key)
+                if existing is not None:
+                    _, _, fingerprint = existing[:3]
+                    if fingerprint is not None and fingerprint != request_fingerprint:
+                        raise IdempotencyKeyConflict("idempotency key reused with a different request")
+                    return False
+            current = self._threads_by_id.get(thread.thread_id)
+            message_already_committed = message.message_id in self._messages_by_id
+            if not message_already_committed and ((current is None and thread.revision != 0) or (
+                current is not None and current.revision != thread.revision - 1
+            )):
+                raise AtomicCommitConflict("thread was updated concurrently")
+            if task.task_id in self._tasks_by_id:
+                raise AtomicCommitConflict("resource id already exists")
+            if message_already_committed:
+                raise AtomicCommitConflict("task notification message already exists")
+            self._messages_by_id[message.message_id] = message
+            self._message_ids_by_thread[message.thread_id].append(message.message_id)
+            self._message_ids_by_sender[message.sender_agent_id].append(message.message_id)
+            self._threads_by_id[thread.thread_id] = thread
+            for delivery in deliveries:
+                self._deliveries_by_id[delivery.delivery_id] = delivery
+                self._delivery_ids_by_recipient[delivery.recipient_agent_id].append(delivery.delivery_id)
+                self._delivery_ids_by_sender[delivery.sender_agent_id].append(delivery.delivery_id)
+                self._delivery_ids_by_message[delivery.message_id].append(delivery.delivery_id)
+            self._tasks_by_id[task.task_id] = task
+            self._task_ids_by_thread[task.thread_id].append(task.task_id)
+            if key is not None:
+                self._task_idempotency[key] = (
+                    task.task_id,
+                    utc_now() + timedelta(days=7),
+                    request_fingerprint,
+                    tuple(delivery.delivery_id for delivery in deliveries),
+                )
+            return True
+
+    @staticmethod
+    def _live_idempotency(store, key):
+        value = store.get(key)
+        if value is None:
+            return None
+        if len(value) == 2:
+            value = (*value, None)
+        if value[1] is not None and value[1] <= utc_now():
+            del store[key]
+            return None
+        return value
 
     def _list_deliveries(self, delivery_ids: list[str], limit: int | None) -> tuple[Delivery, ...]:
         with self._lock:

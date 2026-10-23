@@ -36,10 +36,10 @@ struct LocalControlView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Local control")
-                    .font(.title2.weight(.semibold))
+                Text("Commands & files")
+                    .font(.headline)
                 Text("Allow \(control.config.displayName.isEmpty ? control.config.agentHandle : control.config.displayName) to request actions on this Mac.")
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)

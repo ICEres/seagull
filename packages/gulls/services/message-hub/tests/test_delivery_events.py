@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import count
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 from message_hub.api import ApiError, LocalMessageHubApi
 from message_hub.domain import (
@@ -204,6 +205,160 @@ class DeliveryEventTest(TestCase):
 
 
 class AgentWorkerTest(TestCase):
+    def test_worker_uses_consistent_reads_for_delivery_dependencies(self) -> None:
+        worker = load_agent_worker()
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "trigger_mode": "manual"}},
+        )
+
+        worker.handle_delivery_event(
+            {"data": {"delivery_id": "delivery_1"}},
+            tables=tables,
+            http_post=lambda url, body, headers: 204,
+            signing_secret="test-secret",
+        )
+
+        self.assertEqual(1, tables.deliveries.consistent_reads)
+        self.assertEqual(1, tables.messages.consistent_reads)
+        self.assertEqual(1, tables.agents.consistent_reads)
+
+    def test_missing_webhook_url_uses_owned_failure_path(self) -> None:
+        worker = load_agent_worker()
+        tables = FakeTables(
+            deliveries={
+                "delivery_1": {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "trigger_status": "dispatching",
+                    "trigger_lease_until": 9999999999,
+                }
+            },
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "trigger_mode": "webhook"}},
+        )
+
+        with patch.object(worker, "fail_delivery_owned") as fail, patch.object(worker, "mark_delivery_failure") as direct:
+            worker.handle_delivery_event(
+                {"data": {"delivery_id": "delivery_1"}},
+                tables=tables,
+                http_post=lambda url, body, headers: 204,
+                signing_secret="test-secret",
+            )
+
+        fail.assert_called_once_with(tables.deliveries, "delivery_1", "recipient has no webhook_url")
+        direct.assert_not_called()
+
+    def test_missing_webhook_url_does_not_overwrite_active_owner(self) -> None:
+        worker = load_agent_worker()
+
+        class ConditionalFailure(Exception):
+            response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+
+        class BusyLeaseTable:
+            def __init__(self) -> None:
+                self.item = {
+                    "delivery_id": "delivery_1",
+                    "message_id": "message_1",
+                    "recipient_agent_id": "agent_2",
+                    "status": "delivered",
+                    "trigger_status": "dispatching",
+                    "trigger_lease_until": 9999999999,
+                    "retry_count": 4,
+                }
+
+            def get_item(self, *, Key: dict[str, str], ConsistentRead: bool = False) -> dict[str, object]:
+                return {"Item": self.item}
+
+            def update_item(self, **kwargs: object) -> None:
+                raise ConditionalFailure()
+
+        tables = FakeTables(
+            messages={"message_1": {"message_id": "message_1"}},
+            agents={"agent_2": {"agent_id": "agent_2", "trigger_mode": "webhook"}},
+        )
+        tables.deliveries = BusyLeaseTable()
+
+        with self.assertRaises(worker.RetryableDispatchError):
+            worker.handle_delivery_event(
+                {"data": {"delivery_id": "delivery_1"}},
+                tables=tables,
+                http_post=lambda url, body, headers: 204,
+                signing_secret="test-secret",
+            )
+
+        self.assertEqual("dispatching", tables.deliveries.item["trigger_status"])
+        self.assertEqual(4, tables.deliveries.item["retry_count"])
+
+    def test_handler_retries_failed_record_and_unprocessed_suffix(self) -> None:
+        worker = load_agent_worker()
+        calls: list[str] = []
+        records = [
+            {"messageId": "message-1", "body": "{}"},
+            {"messageId": "message-2", "body": "{}"},
+        ]
+
+        def handle(payload: object, **kwargs: object) -> None:
+            calls.append(kwargs["tables"].marker)
+            raise worker.RetryableDispatchError("retry")
+
+        class Tables:
+            marker = "called"
+
+        with patch.object(worker, "dynamodb_tables", return_value=Tables()), patch.object(worker, "handle_delivery_event", side_effect=handle):
+            result = worker.handler({"Records": records}, None)
+
+        self.assertEqual(["called"], calls)
+        self.assertEqual(
+            [{"itemIdentifier": "message-1"}, {"itemIdentifier": "message-2"}],
+            result["batchItemFailures"],
+        )
+
+    def test_expired_lease_is_reclaimed_after_claim_race(self) -> None:
+        worker = load_agent_worker()
+
+        class ConditionalFailure(Exception):
+            response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+
+        class ExpiredLeaseTable:
+            def __init__(self) -> None:
+                self.item = {
+                    "delivery_id": "delivery_1",
+                    "status": "delivered",
+                    "trigger_status": "dispatching",
+                    "trigger_lease_until": 0,
+                }
+                self.attempts = 0
+
+            def update_item(self, **kwargs: object) -> None:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise ConditionalFailure()
+                values = kwargs["ExpressionAttributeValues"]
+                self.item["trigger_status"] = values[":dispatching"]
+                self.item["trigger_lease_token"] = values[":token"]
+                self.item["trigger_lease_until"] = values[":lease_until"]
+
+            def get_item(self, *, Key: dict[str, str], ConsistentRead: bool = False) -> dict[str, object]:
+                return {"Item": self.item}
+
+        table = ExpiredLeaseTable()
+        token = worker.claim_delivery(table, "delivery_1")
+
+        self.assertIsInstance(token, str)
+        self.assertEqual(2, table.attempts)
+        self.assertEqual(token, table.item["trigger_lease_token"])
+
     def test_worker_skips_missing_acked_and_already_sent_deliveries(self) -> None:
         worker = load_agent_worker()
         calls: list[tuple[str, bytes, dict[str, str]]] = []
@@ -616,8 +771,11 @@ class FakeTable:
     def __init__(self, items: dict[str, dict[str, object]], key_name: str) -> None:
         self.items = items
         self.key_name = key_name
+        self.consistent_reads = 0
 
-    def get_item(self, *, Key: dict[str, str]) -> dict[str, dict[str, object]]:
+    def get_item(self, *, Key: dict[str, str], ConsistentRead: bool = False) -> dict[str, dict[str, object]]:
+        if ConsistentRead:
+            self.consistent_reads += 1
         item = self.items.get(Key[self.key_name])
         return {} if item is None else {"Item": item}
 

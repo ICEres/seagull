@@ -9,6 +9,8 @@ import json
 import os
 import socket
 import ssl
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -83,8 +85,9 @@ class VettedWebhookEndpoint:
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     failures = []
     tables = dynamodb_tables()
+    records = list(event.get("Records", []))
 
-    for record in event.get("Records", []):
+    for index, record in enumerate(records):
         try:
             payload = json.loads(record.get("body") or "{}")
             handle_delivery_event(
@@ -97,10 +100,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
         except RetryableDispatchError as exc:
             print(json.dumps({"level": "warning", "message": str(exc), "record": record.get("messageId")}))
-            failures.append({"itemIdentifier": record.get("messageId")})
+            failures.extend(
+                {"itemIdentifier": pending.get("messageId")}
+                for pending in records[index:]
+                if pending.get("messageId")
+            )
+            break
         except Exception as exc:
             print(json.dumps({"level": "error", "message": str(exc), "record": record.get("messageId")}))
-            failures.append({"itemIdentifier": record.get("messageId")})
+            failures.extend(
+                {"itemIdentifier": pending.get("messageId")}
+                for pending in records[index:]
+                if pending.get("messageId")
+            )
+            break
 
     return {"batchItemFailures": failures}
 
@@ -131,13 +144,13 @@ def handle_delivery_event(
     message_id = delivery.get("message_id") or data.get("message_id")
     recipient_agent_id = delivery.get("recipient_agent_id") or data.get("recipient_agent_id")
     if not isinstance(message_id, str) or not isinstance(recipient_agent_id, str):
-        mark_delivery_failure(tables.deliveries, delivery_id, "delivery is missing message or recipient")
+        fail_delivery_owned(tables.deliveries, delivery_id, "delivery is missing message or recipient")
         return
 
     message = get_item(tables.messages, {"message_id": message_id})
     recipient = get_item(tables.agents, {"agent_id": recipient_agent_id})
     if message is None or recipient is None:
-        mark_delivery_failure(tables.deliveries, delivery_id, "message or recipient no longer exists")
+        fail_delivery_owned(tables.deliveries, delivery_id, "message or recipient no longer exists")
         return
 
     # WebSocket push first (best-effort wake-up to any live router
@@ -164,17 +177,17 @@ def handle_delivery_event(
 
     webhook_url = recipient.get("webhook_url")
     if not isinstance(webhook_url, str) or not webhook_url:
-        mark_delivery_failure(tables.deliveries, delivery_id, "recipient has no webhook_url")
+        fail_delivery_owned(tables.deliveries, delivery_id, "recipient has no webhook_url")
         return
     try:
         endpoint = validate_webhook_url(webhook_url, resolve_host=resolve_host)
     except ValueError as exc:
-        mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
+        fail_delivery_owned(tables.deliveries, delivery_id, str(exc))
         return
     try:
         signing_secret = require_webhook_signing_secret(signing_secret)
     except ValueError as exc:
-        mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
+        fail_delivery_owned(tables.deliveries, delivery_id, str(exc))
         return
 
     body = json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -185,18 +198,22 @@ def handle_delivery_event(
         "X-Seagull-Signature": sign_webhook_body(body, signing_secret),
     }
 
+    lease_token = claim_delivery(tables.deliveries, delivery_id)
+    if lease_token is None:
+        return
+
     try:
         status_code = http_post(endpoint, body, headers)
     except Exception as exc:
-        mark_delivery_failure(tables.deliveries, delivery_id, str(exc))
+        mark_delivery_failure(tables.deliveries, delivery_id, str(exc), lease_token=lease_token)
         raise RetryableDispatchError(f"webhook dispatch failed for {delivery_id}: {exc}") from exc
 
     if status_code < 200 or status_code >= 300:
         message = f"webhook returned HTTP {status_code}"
-        mark_delivery_failure(tables.deliveries, delivery_id, message)
+        mark_delivery_failure(tables.deliveries, delivery_id, message, lease_token=lease_token)
         raise RetryableDispatchError(f"webhook dispatch failed for {delivery_id}: {message}")
 
-    mark_delivery_sent(tables.deliveries, delivery_id)
+    mark_delivery_sent(tables.deliveries, delivery_id, lease_token=lease_token)
 
 
 def push_delivery_to_connections(
@@ -307,40 +324,106 @@ class VettedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._ssl_context.wrap_socket(sock, server_hostname=self.host)
 
 
-def mark_delivery_sent(table: Any, delivery_id: str) -> None:
+def claim_delivery(table: Any, delivery_id: str, *, lease_seconds: int = 60) -> str | None:
+    """Claim webhook completion ownership; an expired claim remains retryable."""
+    # A conditional failure can race with a lease that expires between the
+    # failed write and the consistent read. Retry the ownership write once in
+    # that case; returning success without a lease would drop the SQS record.
+    for attempt in range(2):
+        token = uuid.uuid4().hex
+        now = int(time.time())
+        try:
+            table.update_item(
+                Key={"delivery_id": delivery_id},
+                UpdateExpression=(
+                    "SET trigger_status = :dispatching, trigger_lease_token = :token, "
+                    "trigger_lease_until = :lease_until, updated_at = :updated_at"
+                ),
+                ConditionExpression=(
+                    "#status = :delivered AND "
+                    "(attribute_not_exists(trigger_status) OR trigger_status <> :sent) AND "
+                    "(attribute_not_exists(trigger_lease_until) OR trigger_lease_until <= :now)"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":dispatching": "dispatching",
+                    ":sent": "sent",
+                    ":delivered": "delivered",
+                    ":token": token,
+                    ":lease_until": now + lease_seconds,
+                    ":now": now,
+                    ":updated_at": now_iso(),
+                },
+            )
+        except Exception as exc:
+            if exception_code(exc) not in {"ConditionalCheckFailedException", "TransactionCanceledException"}:
+                raise
+            current = get_item(table, {"delivery_id": delivery_id})
+            if current is None or current.get("status") != "delivered":
+                return None
+            if current.get("trigger_status") in {"sent", "acked"}:
+                return None
+            lease_until = current.get("trigger_lease_until")
+            if isinstance(lease_until, (int, float)) and lease_until > now:
+                raise RetryableDispatchError(f"delivery {delivery_id} is leased by another worker")
+            if attempt == 0:
+                continue
+            raise RetryableDispatchError(f"delivery {delivery_id} lease claim raced with another worker") from exc
+        return token
+    return None
+
+
+def fail_delivery_owned(table: Any, delivery_id: str, error_message: str) -> None:
+    """Record a terminal dispatch error only after acquiring the delivery lease."""
+    lease_token = claim_delivery(table, delivery_id)
+    if lease_token is not None:
+        mark_delivery_failure(table, delivery_id, error_message, lease_token=lease_token)
+
+
+def mark_delivery_sent(table: Any, delivery_id: str, *, lease_token: str | None = None) -> None:
     now = now_iso()
-    table.update_item(
-        Key={"delivery_id": delivery_id},
-        UpdateExpression=(
+    kwargs: dict[str, Any] = {
+        "Key": {"delivery_id": delivery_id},
+        "UpdateExpression": (
             "SET trigger_status = :status, last_triggered_at = :triggered_at, updated_at = :updated_at "
-            "REMOVE last_error"
+            "REMOVE last_error, trigger_lease_token, trigger_lease_until"
         ),
-        ExpressionAttributeValues={
+        "ExpressionAttributeValues": {
             ":status": "sent",
             ":triggered_at": now,
             ":updated_at": now,
         },
-    )
+    }
+    if lease_token is not None:
+        kwargs["ConditionExpression"] = "trigger_lease_token = :lease_token"
+        kwargs["ExpressionAttributeValues"][":lease_token"] = lease_token
+    table.update_item(**kwargs)
 
 
-def mark_delivery_failure(table: Any, delivery_id: str, error_message: str) -> None:
-    table.update_item(
-        Key={"delivery_id": delivery_id},
-        UpdateExpression=(
+def mark_delivery_failure(
+    table: Any, delivery_id: str, error_message: str, *, lease_token: str | None = None
+) -> None:
+    kwargs: dict[str, Any] = {
+        "Key": {"delivery_id": delivery_id},
+        "UpdateExpression": (
             "SET trigger_status = :status, last_error = :error, updated_at = :updated_at "
-            "ADD retry_count :one"
+            "ADD retry_count :one REMOVE trigger_lease_token, trigger_lease_until"
         ),
-        ExpressionAttributeValues={
+        "ExpressionAttributeValues": {
             ":status": "failed",
             ":error": error_message[:500],
             ":updated_at": now_iso(),
             ":one": 1,
         },
-    )
+    }
+    if lease_token is not None:
+        kwargs["ConditionExpression"] = "trigger_lease_token = :lease_token"
+        kwargs["ExpressionAttributeValues"][":lease_token"] = lease_token
+    table.update_item(**kwargs)
 
 
 def get_item(table: Any, key: dict[str, str]) -> dict[str, Any] | None:
-    return table.get_item(Key=key).get("Item")
+    return table.get_item(Key=key, ConsistentRead=True).get("Item")
 
 
 def sign_webhook_body(body: bytes, secret: str) -> str:

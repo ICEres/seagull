@@ -89,6 +89,44 @@ final class InboxStoreNotificationTests: XCTestCase {
         )
     }
 
+    private func makeFailingStore() throws -> InboxStore {
+        let binary = tmp.appendingPathComponent("failing-gulls")
+        let script = """
+        #!/bin/bash
+        printf 'fixture failure' >&2
+        exit 1
+        """
+        try script.write(to: binary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+
+        let config = GullsConfig(defaults: defaults, tokenStore: MemoryTokenStore())
+        config.apiURL = "http://localhost:1"
+        config.agentHandle = "@test:gulls.ai"
+        config.contextDir = tmp.appendingPathComponent("context").path
+
+        return InboxStore(
+            cli: GullsCLI(executableURL: binary),
+            config: config,
+            notifier: RecordingNotifier(),
+            notifiedStore: NotifiedSetStore(url: tmp.appendingPathComponent("failing-notified.json"))
+        )
+    }
+
+    func testUserActionFailureIsAlertableButBackgroundRefreshFailureIsNot() async throws {
+        let actionStore = try makeFailingStore()
+        await actionStore.ack("delivery-1")
+
+        XCTAssertEqual(actionStore.actionFailure?.title, "Couldn’t acknowledge message")
+        XCTAssertEqual(actionStore.actionFailure?.message, "fixture failure")
+        XCTAssertEqual(actionStore.lastError, "fixture failure")
+
+        let refreshStore = try makeFailingStore()
+        await refreshStore.refresh()
+
+        XCTAssertNil(refreshStore.actionFailure)
+        XCTAssertEqual(refreshStore.lastError, "fixture failure")
+    }
+
     func testSuspendingDuringRefreshDiscardsStaleItemsAndNotifications() async throws {
         let notifier = RecordingNotifier()
         let notifiedFile = tmp.appendingPathComponent("notified.json")

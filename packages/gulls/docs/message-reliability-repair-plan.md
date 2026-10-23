@@ -2,9 +2,9 @@
 
 Date: 2026-10-23
 
-Status: Implemented and locally verified; staged cloud rollout remains pending.
+Status: Implemented and verified; cloud deployment completed on 2026-10-23 with dual publication enabled. Native distribution remains pending.
 
-Baseline: `03881e0` plus the current uncommitted Mac, iOS, and local runtime changes.
+Baseline: `03881e0`. Implementation release: `57a4448`, including the earlier Mac, iOS, and local runtime changes.
 
 Repair the six issues identified in the recent review: split conversations on rapid sends, non-atomic server idempotency, missing iOS history, rewound Mac pagination, discarded Mac history, and orphaned Codex operations. Preserve immediate local feedback and background synchronization. Implement the server consistency contract first, then complete the client and recovery changes against that contract.
 
@@ -12,7 +12,7 @@ This plan defines implementation and release gates. Product changes, installatio
 
 ## Implementation result
 
-All six repairs are implemented in the current working tree. Existing uncommitted work was preserved.
+All six repairs are implemented and committed in the release. Earlier native app and runtime work was preserved.
 
 - Mac sends use a durable per-conversation queue. A retry keeps the exact originally dispatched request, including an absent thread ID. Uncertain acknowledgments block successors until reviewed; definite HTTP rejections remain distinguishable through CLI/runtime exit code 3.
 - Message and task creation atomically commit their complete resource set and idempotency record. Replay reconstructs deliveries through the committed IDs with consistent reads; incomplete legacy records return a retryable recovery conflict. Thread revisions preserve counts, participants, and the maximum timestamp/ID head. Transaction action, item, and aggregate size limits are checked before writes and map to HTTP 413.
@@ -31,13 +31,17 @@ All six repairs are implemented in the current working tree. Existing uncommitte
 | Builds | Native test builds, both Go CLI entry points, and message hub Lambda package build passed. The stream publisher has its own Terraform archive entry point. |
 | Infrastructure | Terraform format checks and local validation passed. Existing DynamoDB argument deprecation warnings remain. |
 | Diff hygiene | `git diff --check` passed. |
+| Cloud release | [CI Deploy 39898363385](https://github.com/ICEres/seagull/actions/runs/39898363385) passed all jobs, auth configuration checks, and isolated smoke tests. Terraform applied 18 additions and 6 updates with 0 destroyed resources. |
+| Live recovery infrastructure | Deliveries table and publisher are active; stream mapping is enabled with `LastProcessingResult=OK`. Failure archive encryption, versioning, public access block, publisher IAM, and log retention are verified. Publisher alarms are `OK`; queue backlog is zero. |
+| Public endpoints | Website HTTPS, public `config.js`, and the message API health endpoint are reachable. |
 
 Backend regressions include 100 identical concurrent requests, same/different task keys, changed-input conflicts, delayed delivery indexes, missing replay resources, legacy revisions, expired live keys, the 97/98 keyed-recipient action boundary, item/aggregate byte limits, stream failure ordering, lease races, and recovery checkpoints. Mac/iOS regression fixtures use temporary storage and mocked transport; Codex command/file tests operate on temporary fixtures.
 
 ### Remaining release checks and limits
 
-- No production messages, real OTP requests, cloud deployment, Terraform plan/apply, or device installation were performed for this repair. The backend transaction suite uses the real boto3 transaction API against moto, not a live AWS service or DynamoDB Local process.
-- The native scrolling/reading-position acceptance session and real AWS stream handoff/failure-destination smoke tests remain release gates. Automated store tests establish message and cursor correctness, not visual scroll behavior.
+- CI deployed the cloud changes and ran isolated smoke fixtures. No real-user messages, real OTP requests, or device installation were performed for this release. The backend transaction suite uses the real boto3 transaction API against moto, not a live AWS service or DynamoDB Local process.
+- The native scrolling/reading-position acceptance session, deliberate failure-destination exercise, and stream-only handoff checks remain pending before client distribution or disabling direct publication. Automated store tests establish message and cursor correctness, not visual scroll behavior.
+- Direct publication remains enabled alongside the healthy stream mapping. The encrypted, versioned failure archive is private and currently empty; no live failure was injected to test archival recovery.
 - The Mac warm cache holds the newest 500 confirmed messages plus pending outbox entries. An active session retains all explicitly loaded pages. After restart, older omitted pages require network backfill; this change does not guarantee a complete offline thread archive in runtime SQLite.
 - External webhooks remain at least once. A receiver should deduplicate by the stable event/delivery ID. SQS FIFO deduplication and worker leases cannot guarantee exactly once across an external receiver accepting a request immediately before a worker crash.
 - S3 failure payloads remain retained until reconciled. Recovery defaults to dry-run, validates checkpoint source/target/window, and reports unresolved or incomplete work as unsuccessful. CloudWatch alarms are visible in the console; notification destinations are not configured by this change.
@@ -365,7 +369,7 @@ Use a local stub or isolated test environment:
 
 ### Deployment order and rollback
 
-1. Ship compatible worker claims, review-status preparation, publisher resources, failure storage, and stream configuration first. Keep the publisher disabled until its readiness checks pass.
+1. Ship compatible worker claims, review-status preparation, publisher resources, failure storage, and stream configuration first, while retaining direct publication during readiness checks.
 2. Enable the stream mapping at `LATEST` while the direct callback still operates (`delivery_stream_direct_publication_disabled=false`). Verify the mapping is active and an isolated delivery reaches the queue before setting `delivery_stream_direct_publication_disabled=true`. Reconcile the bounded handoff interval. Temporary duplicate events are tolerated by the worker; never create a period where neither path can recover accepted deliveries. Exercise held-delivery release during the handoff.
 3. Verify the atomic message/task write path and replay contract, then explicitly switch to stream-only publication after the handoff checks. The default configuration supports the dual-publication migration stage. Confirm counters and isolated smoke tests before client distribution.
 4. Distribute Mac queue/history/recovery changes and iOS pagination changes. Keep caches and databases intact during upgrade.
@@ -373,7 +377,7 @@ Use a local stub or isolated test environment:
 
 Rolling back UI changes must retain the backend's atomic contract and delivery recovery infrastructure. Keep new request version checks and migration markers when rolling back Codex UI. Restoring the old backend write path would restore the duplicate-send defect; use a forward repair instead. Do not delete tables, caches, archived requests, or failed-event records as a rollback shortcut.
 
-Main pushes trigger deployment through `.github/workflows/ci-deploy.yml`; prepare and verify the backend-first sequence before a future push to main.
+Main pushes trigger deployment through `.github/workflows/ci-deploy.yml`. The workflow now rejects plans that delete or replace DynamoDB tables, S3 buckets, Cognito user pools, or SQS queues before apply.
 
 ## Completion checklist
 
@@ -386,5 +390,7 @@ Main pushes trigger deployment through `.github/workflows/ci-deploy.yml`; prepar
 - [x] Legacy records, request versions, and cache states have tested migration behavior.
 - [x] All affected automated suites and local builds pass.
 - [x] Verification observations and remaining external-delivery limitations are recorded.
+- [x] Main release deployed through CI; auth and isolated smoke checks pass.
+- [x] Live stream mapping, failure archive protection, publisher IAM/logging, alarms, and queue health are verified.
 - [ ] Native long-conversation scroll/reading-position acceptance session passes.
-- [ ] Staged AWS stream handoff, failure destination, and isolated production smoke tests pass before client distribution.
+- [ ] Stream-only handoff and deliberate failure-destination recovery checks pass before client distribution or disabling direct publication.

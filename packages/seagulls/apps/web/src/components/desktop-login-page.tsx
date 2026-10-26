@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 
 import type { AuthPageProps } from "./auth-pages";
-import { LoginPage, RegisterPage } from "./auth-pages";
+import { LoginPage } from "./auth-pages";
 import { Wing, YOUR_WING } from "@seagulls/ui";
 import {
   DESKTOP_LOGIN_PATH,
@@ -84,13 +84,11 @@ export function DesktopLoginPage({ authSession, ...authProps }: DesktopLoginPage
     if (!request || waitingForFragment) {
       return <HandoffUnavailable message={requestError ?? "Open this page from Gulls on your Mac to start a connection."} />;
     }
-    const register = new URLSearchParams(location.search).get("mode") === "register";
     const pageProps = {
       ...authProps,
-      authPath: DESKTOP_LOGIN_PATH,
       postAuthPath: DESKTOP_LOGIN_PATH,
     };
-    return register ? <RegisterPage {...pageProps} /> : <LoginPage {...pageProps} />;
+    return <LoginPage {...pageProps} />;
   }
 
   const canContinue = Boolean(request && isDesktopLoginRequestActive(request) && authSession);

@@ -41,6 +41,7 @@ export type EmailOtpChallenge =
   | {
       kind: "registration";
       email: string;
+      session?: string;
     };
 
 type CognitoAuthenticationResult = {
@@ -198,14 +199,16 @@ export async function completeEmailOtpSignIn(
   return saveCognitoAuthentication(response.AuthenticationResult);
 }
 
-export async function beginEmailOtpRegistration(
+/** Start the unified email-code flow; existing accounts use the same challenge. */
+export async function beginEmailOtpAuth(
   config: Extract<AuthConfig, { mode: "cognito" }>,
   email: string,
   fetcher: typeof fetch = fetch,
 ): Promise<EmailOtpChallenge> {
   const normalizedEmail = normalizeEmail(email);
+  let signup: { Session?: string } | undefined;
   try {
-    await cognitoRequest(
+    signup = await cognitoRequest<{ Session?: string }>(
       config,
       "SignUp",
       {
@@ -232,7 +235,11 @@ export async function beginEmailOtpRegistration(
       throw resendError;
     }
   }
-  return { kind: "registration", email: normalizedEmail };
+  return {
+    kind: "registration",
+    email: normalizedEmail,
+    ...(signup?.Session ? { session: signup.Session } : {}),
+  };
 }
 
 export async function completeEmailOtpRegistration(
@@ -248,6 +255,7 @@ export async function completeEmailOtpRegistration(
       ClientId: config.clientId,
       Username: challenge.email,
       ConfirmationCode: code.trim(),
+      ...(challenge.session ? { Session: challenge.session } : {}),
     },
     fetcher,
   );

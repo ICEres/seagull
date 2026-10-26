@@ -223,25 +223,27 @@ describe("App", () => {
 
     expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
     expect(container.querySelector('input[aria-label="Display name"]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Sign in"]')).not.toBeNull();
-    expect(container.textContent).toContain("New here? Create your flock");
+    expect(container.querySelector('button[aria-label="Continue"]')).not.toBeNull();
+    expect(container.textContent).toContain("New here? Your account is created automatically.");
+    expect(container.querySelector('a[href="/register"]')).toBeNull();
     expect(container.textContent).not.toContain("The stream");
     expect(container.querySelector('button[aria-label="Sign out"]')).toBeNull();
   });
 
-  it("renders the email-only registration design", async () => {
+  it("opens the unified email form from the legacy registration route", async () => {
     window.SEAGULL_CONFIG = { socialApiUrl: "https://api.example.test", auth: { mode: "local" } };
     mockApi({
       "/health": { ok: true, app: "social-api", storage: "memory" },
     });
 
     const container = renderApp("/register");
-    await waitForText(container, "Join the flock");
+    await waitForText(container, "Your sky is waiting");
 
-    expect(container.textContent).toContain("One email — and your gull takes wing.");
+    expect(container.textContent).toContain("Continue with your email.");
     expect(container.querySelector('input[aria-label="Email"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Create your flock"]')).not.toBeNull();
-    expect(container.textContent).toContain("Already flocked? Sign in");
+    expect(container.querySelector('button[aria-label="Continue"]')).not.toBeNull();
+    expect(container.textContent).toContain("New here? Your account is created automatically.");
+    expect(container.textContent).not.toContain("Already flocked?");
   });
 
   it("shows the first-gull call to action on an empty sky", async () => {
@@ -630,7 +632,12 @@ describe("App", () => {
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}").activeUser).toBeNull();
   });
 
-  it("signs in through the custom Cognito email-code screen", async () => {
+  it.each([
+    { account: "new", route: "/login" },
+    { account: "confirmed", route: "/login" },
+    { account: "unconfirmed", route: "/login" },
+    { account: "new", route: "/register" },
+  ])("authenticates a $account account from $route with one email code", async ({ account, route }) => {
     window.SEAGULL_CONFIG = {
       socialApiUrl: "https://api.example.test",
       auth: {
@@ -643,6 +650,14 @@ describe("App", () => {
       },
     };
     const cognitoBodies: Record<string, unknown>[] = [];
+    const cognitoOperations: string[] = [];
+    const authenticationResult = {
+      AccessToken: "email-code-access-token",
+      IdToken: "email-code-id-token",
+      RefreshToken: "email-code-refresh-token",
+      TokenType: "Bearer",
+      ExpiresIn: 3600,
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -650,21 +665,32 @@ describe("App", () => {
         if (target) {
           const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
           cognitoBodies.push(body);
+          cognitoOperations.push(target.split(".").pop() ?? "");
+          if (target.endsWith(".SignUp")) {
+            return account === "new"
+              ? jsonResponse({ UserConfirmed: false, Session: "sign_up_session_1" })
+              : jsonResponse({ __type: "UsernameExistsException", message: "User already exists" }, 400);
+          }
+          if (target.endsWith(".ResendConfirmationCode")) {
+            return account === "confirmed"
+              ? jsonResponse({ __type: "InvalidParameterException", message: "User is already confirmed." }, 400)
+              : jsonResponse({});
+          }
+          if (target.endsWith(".ConfirmSignUp")) {
+            if (account === "new" && body.Session !== "sign_up_session_1") {
+              return jsonResponse({});
+            }
+            return jsonResponse({ Session: "confirmation_session_1" });
+          }
           if (target.endsWith(".InitiateAuth")) {
-            return new Response(
-              JSON.stringify({ ChallengeName: "EMAIL_OTP", Session: "challenge_session_1" }),
-              { status: 200 },
-            );
+            return body.Session === "confirmation_session_1"
+              ? jsonResponse({ AuthenticationResult: authenticationResult })
+              : jsonResponse({ ChallengeName: "EMAIL_OTP", Session: "challenge_session_1" });
           }
           if (target.endsWith(".RespondToAuthChallenge")) {
             return new Response(
               JSON.stringify({
-                AuthenticationResult: {
-                  AccessToken: "email-code-access-token",
-                  IdToken: "email-code-id-token",
-                  TokenType: "Bearer",
-                  ExpiresIn: 3600,
-                },
+                AuthenticationResult: authenticationResult,
               }),
               { status: 200 },
             );
@@ -696,7 +722,7 @@ describe("App", () => {
       }),
     );
 
-    const container = renderApp("/login");
+    const container = renderApp(route);
     await waitForText(container, "Your sky is waiting");
 
     const emailInput = container.querySelector('input[aria-label="Email"]');
@@ -706,9 +732,9 @@ describe("App", () => {
     await act(async () => {
       setNativeValue(emailInput, "ALICE@example.com");
     });
-    const requestButton = container.querySelector('button[aria-label="Send login code"]');
+    const requestButton = container.querySelector('button[aria-label="Send code"]');
     if (!(requestButton instanceof HTMLButtonElement)) {
-      throw new Error("Send-login-code button not found.");
+      throw new Error("Send-code button not found.");
     }
     await act(async () => {
       requestButton.click();
@@ -716,6 +742,7 @@ describe("App", () => {
     await waitForText(container, "Check your inbox");
 
     expect(container.textContent).toContain("We sent a code to alice@example.com.");
+    expect(window.localStorage.getItem("seagull.web.auth.session")).toBeNull();
     const codeInput = container.querySelector('input[aria-label="Email code"]');
     if (!(codeInput instanceof HTMLInputElement)) {
       throw new Error("Email-code input not found.");
@@ -734,18 +761,36 @@ describe("App", () => {
 
     const session = JSON.parse(window.localStorage.getItem("seagull.web.auth.session") ?? "{}");
     expect(session.accessToken).toBe("email-code-access-token");
+    expect(session.refreshToken).toBe("email-code-refresh-token");
     expect(window.sessionStorage.getItem("seagull.web.auth.session")).toBeNull();
     expect(cognitoBodies[0]).toMatchObject({
-      AuthFlow: "USER_AUTH",
-      AuthParameters: {
-        USERNAME: "alice@example.com",
-        PREFERRED_CHALLENGE: "EMAIL_OTP",
-      },
+      Username: "alice@example.com",
+      UserAttributes: [{ Name: "email", Value: "alice@example.com" }],
     });
-    expect(cognitoBodies[1]).toMatchObject({
-      ChallengeName: "EMAIL_OTP",
-      ChallengeResponses: { EMAIL_OTP_CODE: "123456" },
-    });
+    if (account === "confirmed") {
+      expect(cognitoOperations).toEqual(["SignUp", "ResendConfirmationCode", "InitiateAuth", "RespondToAuthChallenge"]);
+      expect(cognitoBodies[2]).toMatchObject({
+        AuthFlow: "USER_AUTH",
+        AuthParameters: { USERNAME: "alice@example.com", PREFERRED_CHALLENGE: "EMAIL_OTP" },
+      });
+      expect(cognitoBodies[3]).toMatchObject({
+        ChallengeName: "EMAIL_OTP",
+        ChallengeResponses: { EMAIL_OTP_CODE: "123456" },
+      });
+    } else {
+      expect(cognitoOperations).toEqual(account === "new"
+        ? ["SignUp", "ConfirmSignUp", "InitiateAuth"]
+        : ["SignUp", "ResendConfirmationCode", "ConfirmSignUp", "InitiateAuth"]);
+      expect(cognitoBodies[cognitoBodies.length - 2]).toMatchObject({
+        Username: "alice@example.com",
+        ConfirmationCode: "123456",
+        ...(account === "new" ? { Session: "sign_up_session_1" } : {}),
+      });
+      expect(cognitoBodies[cognitoBodies.length - 1]).toMatchObject({
+        AuthFlow: "USER_AUTH",
+        Session: "confirmation_session_1",
+      });
+    }
     expect(JSON.stringify(cognitoBodies)).not.toContain("PASSWORD");
   });
 

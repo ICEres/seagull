@@ -71,12 +71,18 @@ function button(view: HTMLElement, label: string): HTMLButtonElement {
 }
 
 describe("DesktopLoginPage", () => {
-  it("keeps signed-out users on email auth and preserves the desktop register route", () => {
+  it("keeps signed-out users on the unified email auth route", () => {
     saveDesktopLoginRequest(request);
     const view = render({ authenticated: false });
     expect(view.querySelector('input[aria-label="Email"]')).not.toBeNull();
-    const registerLink = view.querySelector('a[href="/desktop/login?mode=register"]');
-    expect(registerLink).not.toBeNull();
+    expect(view.textContent).toContain("Your account is created automatically");
+  });
+
+  it("uses the same email auth form for the legacy register query", () => {
+    saveDesktopLoginRequest(request);
+    const view = render({ authenticated: false, initialEntry: "/desktop/login?mode=register" });
+    expect(view.querySelector('input[aria-label="Email"]')).not.toBeNull();
+    expect(view.textContent).toContain("Your account is created automatically");
   });
 
   it("processes an initial callback fragment before showing signed-out email auth", () => {

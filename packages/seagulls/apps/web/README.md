@@ -34,7 +34,9 @@ Stack:
 
 ## Screens
 
-- **Login / register** — "Your sky is waiting." and "Join the flock." Deployed
+- **Email sign-in** — "Your sky is waiting." One email-code flow creates an
+  account for a new email, resumes verification for an unconfirmed account,
+  or signs in an existing user. `/register` redirects to `/login`. Deployed
   Cognito mode sends a one-time code to the user's email; local mode keeps an
   email-only development bypass without pretending to deliver mail.
 - **Sky** (`/sky`) — the composite home stream. A composer posts public

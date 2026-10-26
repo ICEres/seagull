@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 
 import {
   authConfigFromRuntime,
-  beginEmailOtpRegistration,
+  beginEmailOtpAuth,
   beginEmailOtpSignIn,
   clearAuthSession,
   completeEmailOtpRegistration,
@@ -97,7 +97,9 @@ describe("auth helpers", () => {
       operations.push(operation);
       requestedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       if (operation === "SignUp") {
-        return new Response(JSON.stringify({ UserConfirmed: false }), { status: 200 });
+        return new Response(JSON.stringify({ UserConfirmed: false, Session: "signup_session_1" }), {
+          status: 200,
+        });
       }
       if (operation === "ResendConfirmationCode") {
         return new Response(JSON.stringify({}), { status: 200 });
@@ -120,12 +122,14 @@ describe("auth helpers", () => {
       return new Response(JSON.stringify({ message: "unexpected operation" }), { status: 400 });
     };
 
-    const challenge = await beginEmailOtpRegistration(cognitoConfig, "new@example.com", fetcher);
+    const challenge = await beginEmailOtpAuth(cognitoConfig, "new@example.com", fetcher);
     expect(challenge.kind).toBe("registration");
     if (challenge.kind !== "registration") {
       throw new Error("Expected a registration challenge.");
     }
+    expect(challenge.session).toBe("signup_session_1");
     await resendEmailOtpRegistration(cognitoConfig, challenge.email, fetcher);
+    expect(challenge.session).toBe("signup_session_1");
     const result = await completeEmailOtpRegistration(cognitoConfig, challenge, "654321", fetcher);
     if (!("accessToken" in result)) {
       throw new Error("Expected an authenticated session.");
@@ -147,12 +151,16 @@ describe("auth helpers", () => {
       AuthFlow: "USER_AUTH",
       Session: "confirmation_session_1",
     });
+    expect(requestedBodies[2]).toMatchObject({
+      ConfirmationCode: "654321",
+      Session: "signup_session_1",
+    });
     expect(JSON.stringify(requestedBodies)).not.toContain("Password");
   });
 
   it("resends registration codes for an existing unconfirmed account", async () => {
     const operations: string[] = [];
-    const challenge = await beginEmailOtpRegistration(
+    const challenge = await beginEmailOtpAuth(
       cognitoConfig,
       "pending@example.com",
       async (_input, init) => {
@@ -177,9 +185,24 @@ describe("auth helpers", () => {
     expect(operations).toEqual(["SignUp", "ResendConfirmationCode"]);
   });
 
+  it("does not treat unrelated SignUp failures as an existing account", async () => {
+    const operations: string[] = [];
+    await expect(
+      beginEmailOtpAuth(cognitoConfig, "limited@example.com", async (_input, init) => {
+        const operation = (new Headers(init?.headers).get("x-amz-target") ?? "").split(".").pop() ?? "";
+        operations.push(operation);
+        return new Response(
+          JSON.stringify({ __type: "TooManyRequestsException", message: "Slow down" }),
+          { status: 400 },
+        );
+      }),
+    ).rejects.toMatchObject({ name: "TooManyRequestsException" });
+    expect(operations).toEqual(["SignUp"]);
+  });
+
   it("signs in an existing confirmed account without disclosing it in the UI flow", async () => {
     const operations: string[] = [];
-    const challenge = await beginEmailOtpRegistration(
+    const challenge = await beginEmailOtpAuth(
       cognitoConfig,
       "existing@example.com",
       async (_input, init) => {
@@ -214,6 +237,24 @@ describe("auth helpers", () => {
       session: "sign_in_session_1",
     });
     expect(operations).toEqual(["SignUp", "ResendConfirmationCode", "InitiateAuth"]);
+  });
+
+  it("does not switch to sign-in for an unrelated resend failure", async () => {
+    const operations: string[] = [];
+    await expect(
+      beginEmailOtpAuth(cognitoConfig, "existing@example.com", async (_input, init) => {
+        const operation = (new Headers(init?.headers).get("x-amz-target") ?? "").split(".").pop() ?? "";
+        operations.push(operation);
+        if (operation === "SignUp") {
+          return new Response(JSON.stringify({ __type: "UsernameExistsException" }), { status: 400 });
+        }
+        return new Response(
+          JSON.stringify({ __type: "InvalidParameterException", message: "Temporary provider error" }),
+          { status: 400 },
+        );
+      }),
+    ).rejects.toMatchObject({ name: "InvalidParameterException" });
+    expect(operations).toEqual(["SignUp", "ResendConfirmationCode"]);
   });
 
   it("requests a sign-in code when confirmation cannot create a session", async () => {

@@ -1,11 +1,11 @@
 import { Moon, Sun } from "lucide-react";
 import { useState } from "react";
-import { Link, Navigate } from "react-router";
+import { Navigate } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
 import {
-  beginEmailOtpRegistration,
+  beginEmailOtpAuth,
   beginEmailOtpSignIn,
   completeEmailOtpRegistration,
   completeEmailOtpSignIn,
@@ -19,14 +19,12 @@ import { AmbientFlock, Wing, YOUR_WING } from "@seagulls/ui";
 import type { Notice } from "./shared";
 
 type AppMutationError = Error | SocialApiError;
-type AuthIntent = "login" | "register";
 
 export type AuthPageProps = {
   api: SocialApiClient;
   authConfig: AuthConfig;
   isAuthenticated: boolean;
   postAuthPath?: string;
-  authPath?: string;
   resolvedTheme: "light" | "dark";
   onToggleTheme: () => void;
   onLocalIdentity: (identity: HumanIdentity) => void;
@@ -34,27 +32,17 @@ export type AuthPageProps = {
   onNotice: (notice: Notice) => void;
 };
 
-export function LoginPage(props: AuthPageProps) {
-  return <AuthPage {...props} intent="login" />;
-}
-
-export function RegisterPage(props: AuthPageProps) {
-  return <AuthPage {...props} intent="register" />;
-}
-
-function AuthPage({
+export function LoginPage({
   api,
   authConfig,
   isAuthenticated,
   postAuthPath = "/sky",
-  authPath,
   resolvedTheme,
   onToggleTheme,
   onLocalIdentity,
   onAuthSession,
   onNotice,
-  intent,
-}: AuthPageProps & { intent: AuthIntent }) {
+}: AuthPageProps) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<EmailOtpChallenge | null>(null);
@@ -73,7 +61,7 @@ function AuthPage({
     },
     onSuccess: (identity) => {
       onLocalIdentity(identity);
-      onNotice({ tone: "ok", message: intent === "register" ? "Welcome aboard." : "Welcome back." });
+      onNotice({ tone: "ok", message: "Signed in." });
     },
     onError: (error: AppMutationError) => setAuthError(error, setStatus),
   });
@@ -83,9 +71,7 @@ function AuthPage({
       if (authConfig.mode !== "cognito") {
         throw new Error("Email-code authentication is not configured.");
       }
-      return intent === "register"
-        ? beginEmailOtpRegistration(authConfig, email)
-        : beginEmailOtpSignIn(authConfig, email);
+      return beginEmailOtpAuth(authConfig, email);
     },
     onSuccess: (nextChallenge) => {
       setChallenge(nextChallenge);
@@ -112,7 +98,7 @@ function AuthPage({
         return;
       }
       onAuthSession(result);
-      onNotice({ tone: "ok", message: intent === "register" ? "Welcome aboard." : "Signed in." });
+      onNotice({ tone: "ok", message: "Signed in." });
     },
     onError: (error: AppMutationError) => setAuthError(error, setStatus),
   });
@@ -149,16 +135,10 @@ function AuthPage({
     resendCodeMutation.isPending;
   const handle = `@${(challenge?.email || email).trim().split("@")[0] || "you"}`;
   const isCodeStep = Boolean(challenge);
-  const heading = isCodeStep
-    ? "Check your inbox"
-    : intent === "register"
-      ? "Join the flock"
-      : "Your sky is waiting";
+  const heading = isCodeStep ? "Check your inbox" : "Your sky is waiting";
   const subheading = isCodeStep
     ? `We sent a code to ${challenge?.email}.`
-    : intent === "register"
-      ? "One email — and your gull takes wing."
-      : "Sign in to talk to your flock.";
+    : "Continue with your email.";
   const defaultNote = localMode
     ? "Local development · email delivery is skipped"
     : isCodeStep
@@ -271,12 +251,8 @@ function AuthPage({
                 isCodeStep
                   ? "Verify code"
                   : localMode
-                    ? intent === "register"
-                      ? "Create your flock"
-                      : "Sign in"
-                    : intent === "register"
-                      ? "Send registration code"
-                      : "Send login code"
+                    ? "Continue"
+                    : "Send code"
               }
               disabled={isCodeStep ? !code.trim() || isPending : !emailIsValid || isPending}
               pending={isPending}
@@ -325,18 +301,9 @@ function AuthPage({
             </button>
           </div>
         ) : (
-          <Link
-            to={
-              intent === "register"
-                ? authPath ?? "/login"
-                : authPath
-                  ? `${authPath}?mode=register`
-                  : "/register"
-            }
-            className="mt-[26px] text-[0.86rem] font-extrabold text-accent-strong no-underline hover:text-accent"
-          >
-            {intent === "register" ? "Already flocked? Sign in →" : "New here? Create your flock →"}
-          </Link>
+          <p className="mt-[26px] text-center text-[0.86rem] text-muted">
+            New here? Your account is created automatically.
+          </p>
         )}
       </main>
 
@@ -424,7 +391,7 @@ function setAuthError(
     ExpiredCodeException: "That code expired. Request a new one.",
     LimitExceededException: "Too many attempts. Wait a moment and try again.",
     TooManyRequestsException: "Too many attempts. Wait a moment and try again.",
-    UserNotConfirmedException: "Finish creating your account before signing in.",
+    UserNotConfirmedException: "Request a new email code to continue.",
   };
   setStatus({
     tone: "error",

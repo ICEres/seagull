@@ -12,7 +12,7 @@ import {
   type ThemePreference,
 } from "@seagulls/ui";
 
-import { LoginPage, RegisterPage } from "./components/auth-pages";
+import { LoginPage } from "./components/auth-pages";
 import { DesktopLoginPage } from "./components/desktop-login-page";
 import { AiUsagePage } from "./components/ai-usage-page";
 import { ChatPage } from "./components/chat-page";
@@ -489,22 +489,7 @@ export default function App() {
               />
             }
           />
-          <Route
-            path="/register"
-            element={
-              <RegisterPage
-                api={api}
-                authConfig={authConfig}
-                isAuthenticated={isAuthenticated}
-                postAuthPath={defaultAuthenticatedPath}
-                resolvedTheme={resolvedTheme}
-                onToggleTheme={toggleTheme}
-                onLocalIdentity={(identity) => rememberUser(identity)}
-                onAuthSession={setAuthSession}
-                onNotice={setNotice}
-              />
-            }
-          />
+          <Route path="/register" element={<Navigate to="/login" replace />} />
           <Route path="/auth/callback" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

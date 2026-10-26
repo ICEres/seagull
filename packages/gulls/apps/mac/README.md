@@ -119,13 +119,22 @@ control or attach a permanent project to the Gull.
 
 Choose **Work with Codex** on an incoming message, or **New task…** in the inline
 Codex settings. Enter a goal and optionally choose a working folder, then select
-**Start in Gulls**. The Mac app connects to the installed Codex CLI's local
-stdio app-server using its existing Codex login. Output streams beside the
-original message. **Continue** resumes that task's exact Codex thread; **Stop**
-interrupts only its current turn. Multiple Gulls share one local connection
-and keep separate task sessions. An incoming message's private context and
-authenticated reply guidance are snapshotted separately from the owner's goal.
-Incoming messages cannot authorize commands, file changes, or sending a reply.
+**Hand over** for a source message, or **Start in Gulls** for a private task.
+The Mac app checks Codex readiness (CLI 0.146 or newer,
+login, protocol, and model availability) before starting embedded work. Output
+streams beside the original message. **Continue** resumes the exact Codex
+thread only when the scoped conversation, selected folder, private instructions,
+policy, and execution route are unchanged. Multiple Gull voices share one local
+runtime while keeping separate profiles and task sessions. An incoming message's private
+context and authenticated reply guidance are snapshotted separately from the
+owner's goal. Incoming messages cannot authorize commands, file changes, or
+sending a reply.
+
+Owner-started work is persisted on this Mac. Each Gull has at most one
+active turn and the local queue permits at most two active turns globally.
+Queued work is shown explicitly and remains bound to its source message. A lost
+turn acknowledgement becomes **Uncertain**; **Check status** reconciles the
+known Codex thread or turn, and the app never silently replays it.
 
 Live tasks queue commands and text-file operations through the existing
 `local-action` broker. Enable local control and add the task folder under
@@ -142,24 +151,44 @@ in that catalog before a turn can start. Codex's original configuration and
 credentials are retained. Open Codex once to load its model catalog if it is
 unavailable. Images are not supported by this live adapter.
 
-Completed output remains a draft. **Use draft** copies it to a composer bound
-to that Gull, connection, and delivery; replacing an unsent reply requires
-confirmation. The user then chooses **Send**. The Overview shows working,
-approval, and draft states. Standalone results and follow-ups appear in Codex
-settings. Closing the main window preserves a running task while the Mac app
-remains running; quitting interrupts it.
+For new message handoffs, **Send replies automatically** defaults on per Gull
+on this Mac. Change it in **My Gulls → On this Mac** or the Gull's local Codex
+settings. Codex explicitly submits public text through `gulls_reply`; Gulls
+delivers the exact text, then displays the acknowledged message as that Gull.
+With automatic delivery off, **Approve & send** publishes the reviewed text.
+Private execution output is never automatically used as a message.
+
+**Take over** revokes unsent publication before stopping work and retains the
+public text for editing. Unknown network outcomes require **Check send status**;
+the original publication key is reused for an explicitly reviewed retry. Old
+drafts and review items are not auto-sent after upgrading or enabling the setting.
+Legacy tasks keep **Use draft** and the manual composer. Standalone results and
+follow-ups appear in Codex settings. Closing the main window preserves a running
+task while the Mac app remains running; quitting interrupts it.
 
 **Open in Codex** remains an alternative handoff using Codex's own UI and
-permission controls. That handoff contains a scoped CLI prefix without a
-connector token and returns an immutable local draft via `gulls codex result`.
-**Continue in Codex** opens the recorded thread, never a guessed recent thread.
+permission controls. For a new task, the app prefills a scoped handoff without a
+connector token in a new Codex composer and also copies it. For an existing
+external task, **Copy handoff & continue in Codex** opens its exact recorded
+thread and copies the new scoped handoff for the owner to paste. The
+app never guesses a recent thread or claims that a deep link can prefill an
+existing Codex composer. External work returns private output via `gulls codex
+result`. An authorized message task submits separate public content using
+`gulls codex reply`; the Mac outbox owns publication. No credentials or arbitrary
+recipient overrides are added to the handoff.
+
+The new message-hub `reply-publications` routes are required for delegated
+delivery. Source delivery completion and message creation commit atomically.
+An older server is rejected without falling back to the legacy reply endpoint.
 
 Requests and immutable results live under the profile's private
 `codex-tasks/<task-id>` directory. Returned drafts must match the original
 request's exact SHA-256, Gull identity, and connection revision. A reconnected
 or removed profile cannot consume an old draft. Live session IDs and state are
 stored in a private `codex-tasks/sessions.sqlite3` database. After a restart,
-unfinished work is marked interrupted and requires an owner-started continuation.
+validated work that never started can leave the queue. A dispatched turn with
+an unknown outcome becomes uncertain and requires **Check status**; a turn
+interrupted before dispatch requires an owner-started continuation.
 Task artifacts stay on this Mac; the goal and supplied context are sent to the
 configured Codex model provider when the owner starts the task. This prototype
 uses the experimental [Codex app-server API](https://learn.chatgpt.com/docs/app-server)
@@ -430,6 +459,31 @@ Or open in Xcode: `xcodegen generate && open Gulls.xcodeproj`.
 
 If `xcode-select` points at the Command Line Tools, the Makefile targets
 default `DEVELOPER_DIR` to `/Applications/Xcode.app/Contents/Developer`.
+
+Install a freshly built Release App at a stable location such as
+`~/Applications/Gulls.app`, after quitting the previous instance. Keep the
+`gulls` and legacy `seagull` command aliases pointed at that App's
+`Contents/Resources/gulls`, so Codex and the Mac App use the same CLI version.
+Ad-hoc development builds may require a new macOS Keychain authorization on
+first launch; complete that in the system dialog.
+
+### Opt-in live Codex verification
+
+`CodexLiveIntegrationTests` is skipped during ordinary tests. To run it, build
+for testing and create a copy of the generated `.xctestrun` beside the original.
+In the `GullsTests` target's `EnvironmentVariables`, set
+`GULLS_CODEX_LIVE_TEST=1` and `GULLS_CODEX_LIVE_MODEL` to an exact available
+catalog ID. Run `xcodebuild -xctestrun <copy> -destination 'platform=macOS'
+-only-testing:GullsTests/CodexLiveIntegrationTests test-without-building`.
+Use the test configuration file because shell environment variables alone are
+not guaranteed to reach an App-hosted XCTest process.
+
+The test uses the real configured model provider and two low-effort turns.
+It checks conversation continuity and separate immutable local drafts with
+synthetic text. Its temporary Gull profile has no production inbox, selected
+working folder, or local control, and it never sends a Gull message. Model and
+reasoning overrides apply only to the child process; the owner's Codex
+configuration remains unchanged.
 
 ## Configuration
 

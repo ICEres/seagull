@@ -195,11 +195,15 @@ class InMemoryMessageHubRepository:
         sender_agent_id: str,
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
+        source_delivery_id: str | None = None,
+        expected_source_delivery_status: str | None = None,
+        expected_source_delivery_updated_at: datetime | None = None,
+        source_delivery: Delivery | None = None,
     ) -> bool:
         with self._lock:
             validate_transaction_limits(
                 (message, thread, *deliveries),
-                2 + len(deliveries) + (1 if idempotency_key else 0),
+                2 + len(deliveries) + (1 if idempotency_key else 0) + (1 if source_delivery else 0),
             )
             key = (sender_agent_id, idempotency_key) if idempotency_key else None
             if key is not None:
@@ -221,6 +225,16 @@ class InMemoryMessageHubRepository:
                 delivery.delivery_id in self._deliveries_by_id for delivery in deliveries
             ):
                 raise AtomicCommitConflict("resource id already exists")
+            if source_delivery is not None:
+                if source_delivery_id is not None and source_delivery.delivery_id != source_delivery_id:
+                    raise AtomicCommitConflict("source delivery id mismatch")
+                current_source = self._deliveries_by_id.get(source_delivery.delivery_id)
+                if current_source is None:
+                    raise AtomicCommitConflict("source delivery does not exist")
+                if expected_source_delivery_status is not None and current_source.status.value != expected_source_delivery_status:
+                    raise AtomicCommitConflict("source delivery was already handled")
+                if expected_source_delivery_updated_at is not None and current_source.updated_at != expected_source_delivery_updated_at:
+                    raise AtomicCommitConflict("source delivery changed concurrently")
 
             self._messages_by_id[message.message_id] = message
             self._message_ids_by_thread[message.thread_id].append(message.message_id)
@@ -233,10 +247,12 @@ class InMemoryMessageHubRepository:
                 self._delivery_ids_by_recipient[delivery.recipient_agent_id].append(delivery.delivery_id)
                 self._delivery_ids_by_sender[delivery.sender_agent_id].append(delivery.delivery_id)
                 self._delivery_ids_by_message[delivery.message_id].append(delivery.delivery_id)
+            if source_delivery is not None:
+                self._deliveries_by_id[source_delivery.delivery_id] = source_delivery
             if key is not None:
                 self._idempotency[key] = (
                     message.message_id,
-                    utc_now() + timedelta(days=7),
+                    None if source_delivery is not None else utc_now() + timedelta(days=7),
                     request_fingerprint,
                     tuple(delivery.delivery_id for delivery in deliveries),
                 )
@@ -421,10 +437,15 @@ class InMemoryMessageHubRepository:
                 )
             return tuple(self._deliveries_by_id[delivery_id] for delivery_id in delivery_ids)
 
-    def update_delivery(self, delivery: Delivery) -> None:
+    def update_delivery(self, delivery: Delivery, *, expected: Delivery | None = None) -> None:
         with self._lock:
-            if delivery.delivery_id not in self._deliveries_by_id:
+            current = self._deliveries_by_id.get(delivery.delivery_id)
+            if current is None:
                 raise ValueError(f"delivery does not exist: {delivery.delivery_id}")
+            if expected is not None and (
+                current.status != expected.status or current.updated_at != expected.updated_at
+            ):
+                raise AtomicCommitConflict("delivery changed concurrently")
             self._deliveries_by_id[delivery.delivery_id] = delivery
 
     def put_routing_rule(self, rule: RoutingRule) -> None:

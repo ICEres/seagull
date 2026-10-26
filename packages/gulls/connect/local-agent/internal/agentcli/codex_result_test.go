@@ -19,6 +19,10 @@ func codexResultTestConfig(contextDir string) Config {
 }
 
 func writeCodexTestRequest(t *testing.T, config Config, taskID string, handle string) []byte {
+	return writeCodexTestRequestWithAuth(t, config, taskID, handle, "")
+}
+
+func writeCodexTestRequestWithAuth(t *testing.T, config Config, taskID string, handle, authorizationID string) []byte {
 	t.Helper()
 	root := filepath.Join(config.ContextDir, codexTaskDirectory, taskID)
 	if err := ensurePrivateDirectory(root); err != nil {
@@ -27,7 +31,8 @@ func writeCodexTestRequest(t *testing.T, config Config, taskID string, handle st
 	request := codexTaskRequest{
 		Version: codexTaskVersion, TaskID: taskID, ProfileID: "profile-1",
 		GullHandle: handle, ConnectionRevision: "revision-1", Goal: "Review this task",
-		CreatedAt: "2026-10-21T00:00:00Z",
+		ReplyAuthorizationID: authorizationID,
+		CreatedAt:            "2026-10-21T00:00:00Z",
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
@@ -38,6 +43,41 @@ func writeCodexTestRequest(t *testing.T, config Config, taskID string, handle st
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestCodexTaskReplyRequiresAuthorizationAndIsImmutable(t *testing.T) {
+	config := codexResultTestConfig(t.TempDir())
+	taskID := "123e4567-e89b-12d3-a456-426614174000"
+	if _, err := writeCodexTaskReply(config, taskID, "public", "", ""); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing request error = %v", err)
+	}
+	writeCodexTestRequest(t, config, taskID, config.AgentHandle)
+	if _, err := writeCodexTaskReply(config, taskID, "public", "", ""); err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("missing authorization error = %v", err)
+	}
+
+	config = codexResultTestConfig(t.TempDir())
+	authID := "123e4567-e89b-12d3-a456-426614174001"
+	requestData := writeCodexTestRequestWithAuth(t, config, taskID, config.AgentHandle, authID)
+	reply, err := writeCodexTaskReply(config, taskID, "exact public reply", "profile-1", "revision-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(requestData)
+	if reply.RequestSHA256 != hex.EncodeToString(digest[:]) || reply.AuthorizationID != authID || reply.Content != "exact public reply" {
+		t.Fatalf("unexpected reply: %#v", reply)
+	}
+	if _, err := writeCodexTaskReply(config, taskID, "second", "profile-1", "revision-1"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("overwrite error = %v", err)
+	}
+	path := filepath.Join(config.ContextDir, codexTaskDirectory, taskID, codexTaskReplyFile)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("reply file mode/type = %v %o", info.Mode(), info.Mode().Perm())
+	}
 }
 
 func TestCodexTaskResultRoundTripIsLocalAndProfileScoped(t *testing.T) {
@@ -243,6 +283,7 @@ func TestCodexResultContentLimitAndLocalCommand(t *testing.T) {
 	stderr := new(strings.Builder)
 	code := Main([]string{
 		"--api-url", config.APIURL, "--agent-handle", config.AgentHandle, "--context-dir", contextDir,
+		"--profile-id", "profile-1", "--connection-revision", "revision-1",
 		"codex", "result", "--content", "from codex", taskID,
 	}, stdout, stderr, nil, nil)
 	if code != 0 {

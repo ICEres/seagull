@@ -52,9 +52,36 @@ final class ModelDecodingTests: XCTestCase {
         let item = try XCTUnwrap(response.items.first)
         XCTAssertEqual(item.id, "delivery_1")
         XCTAssertEqual(item.delivery.status, "delivered")
-        // No sender_handle from the hub — display must fall back to sender_agent_id.
-        XCTAssertEqual(item.senderDisplay, "agent_alice")
+        // No sender_handle from the hub — display should remain readable without
+        // exposing the raw agent ID as a UI label.
+        XCTAssertEqual(item.senderDisplay, "Gull · alice")
         XCTAssertEqual(item.bodyText, "Please review the deploy notes.")
+    }
+
+    func testSenderDisplayNameAndHandlePresentation() throws {
+        let withDisplayName = try decoder.decode(
+            InboxItem.self,
+            from: Data(#"{"delivery":{"delivery_id":"d1","sender_agent_id":"agent_opaque"},"message":{"sender_agent_id":"agent_opaque","sender_handle":"@atlas:gulls.ai","sender_display_name":"Atlas"}}"#.utf8)
+        )
+        XCTAssertEqual(withDisplayName.senderDisplay, "Atlas")
+
+        let withHandleOnly = try decoder.decode(
+            InboxItem.self,
+            from: Data(#"{"delivery":{"delivery_id":"d2","sender_agent_id":"agent_opaque"},"message":{"sender_agent_id":"agent_opaque","sender_handle":"@atlas:gulls.ai"}}"#.utf8)
+        )
+        XCTAssertEqual(withHandleOnly.senderDisplay, "atlas")
+
+        let withOpaqueID = try decoder.decode(
+            InboxItem.self,
+            from: Data(#"{"delivery":{"delivery_id":"d3","sender_agent_id":"agent_fbe74eac41164338a1084be3882c2a2f"}}"#.utf8)
+        )
+        XCTAssertEqual(withOpaqueID.senderDisplay, "Gull · fbe74e…")
+
+        let withOpaqueHandle = try decoder.decode(
+            InboxItem.self,
+            from: Data(#"{"delivery":{"delivery_id":"d4","sender_agent_id":"agent_fbe74eac41164338a1084be3882c2a2f"},"message":{"sender_handle":"agent_fbe74eac41164338a1084be3882c2a2f"}}"#.utf8)
+        )
+        XCTAssertEqual(withOpaqueHandle.senderDisplay, "Gull · fbe74e…")
     }
 
     func testOpenFixture() throws {

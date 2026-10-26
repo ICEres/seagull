@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -118,6 +119,15 @@ func profileIdentity(p RuntimeProfile) string {
 		dir = filepath.Clean(abs)
 	}
 	return handle + "\x00" + api + "\x00" + dir
+}
+
+func runtimeProfileIdentityDigest(p RuntimeProfile) string {
+	return runtimeIdentityDigest(profileIdentity(p))
+}
+
+func runtimeIdentityDigest(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
 }
 
 func RuntimeProfileID(env []string) (string, error) {
@@ -607,11 +617,48 @@ func (s *runtimeServer) statusJSON(id string) string {
 			continue
 		}
 		p.mu.RLock()
-		items = append(items, map[string]any{"id": key, "revision": p.profile.Revision, "status": p.status, "checked_at": p.checked.UTC().Format(time.RFC3339), "monitoring": p.profile.Monitoring, "error": p.errText, "identity": profileIdentity(p.profile)})
+		items = append(items, sanitizedRuntimeProfileStatus(key, p))
 		p.mu.RUnlock()
 	}
 	payload, _ := json.Marshal(map[string]any{"profiles": items})
 	return string(payload)
+}
+
+// sanitizedRuntimeProfileStatus is the public runtime discovery shape. It is
+// intentionally derived from the profile instead of returning its environment
+// map: the environment contains connector credentials and private paths.
+func sanitizedRuntimeProfileStatus(id string, p *runtimeProfile) map[string]any {
+	apiHost := ""
+	if raw := strings.TrimSpace(p.profile.Environment["SEAGULL_API_URL"]); raw != "" {
+		if parsed, err := url.Parse(raw); err == nil {
+			apiHost = parsed.Host
+		}
+	}
+	handle := strings.TrimSpace(p.profile.Environment["SEAGULL_AGENT_HANDLE"])
+	return map[string]any{
+		"id":              id,
+		"revision":        p.profile.Revision,
+		"handle":          handle,
+		"api_host":        apiHost,
+		"status":          p.status,
+		"checked_at":      p.checked.UTC().Format(time.RFC3339),
+		"monitoring":      p.profile.Monitoring,
+		"error":           publicRuntimeError(p.status, p.errText),
+		"identity_digest": runtimeProfileIdentityDigest(p.profile),
+	}
+}
+
+// publicRuntimeError is intentionally generic. Detailed refresh and
+// configuration errors remain in the local snapshot and process logs; runtime
+// discovery must not expose private paths, URLs, or credentials to callers.
+func publicRuntimeError(status, detail string) string {
+	if strings.TrimSpace(detail) == "" {
+		return ""
+	}
+	if status == "authorization_required" {
+		return "authorization required"
+	}
+	return "runtime needs attention"
 }
 
 func (s *runtimeServer) close() {
@@ -839,7 +886,7 @@ func commandMutates(args []string) bool {
 		break
 	}
 	switch command {
-	case "reply", "ack", "ignore", "post", "route":
+	case "reply", "reply-publish", "ack", "ignore", "post", "route":
 		return true
 	case "draft-reply":
 		for _, arg := range args {
@@ -1156,8 +1203,16 @@ func runtimeServeSeeded(ctx context.Context, socket string, profile RuntimeProfi
 
 func tryRuntimeRoute(global globalOptions, remaining []string, stdout, stderr io.Writer, env []string) (int, bool, error) {
 	command := remaining[0]
-	if command == "runtime" || command == "stream" || command == "version" || command == "login" || command == "auth" || command == "logout" || command == "pair" || command == "local-action" {
+	explicitProfile := strings.TrimSpace(global.ProfileID) != "" || strings.TrimSpace(global.Revision) != ""
+	// These commands intentionally stay local to the selected handoff. A
+	// scoped handoff may keep profile selectors at the command root, but local
+	// action requests and codex result files must never cross the runtime
+	// socket.
+	if command == "runtime" || command == "stream" || command == "version" || command == "login" || command == "auth" || command == "logout" || command == "pair" || command == "local-action" || command == "codex" {
 		return 0, false, nil
+	}
+	if explicitProfile && (strings.TrimSpace(global.ProfileID) == "" || strings.TrimSpace(global.Revision) == "") {
+		return 0, true, errors.New("explicit runtime routing requires both --profile-id and --connection-revision")
 	}
 	if command == "watch" {
 		once := false
@@ -1168,35 +1223,76 @@ func tryRuntimeRoute(global globalOptions, remaining []string, stdout, stderr io
 			}
 		}
 		if !once {
+			if explicitProfile {
+				return 0, true, errors.New("explicit runtime routing supports watch only with --once")
+			}
 			return 0, false, nil
 		}
 	}
 	path := RuntimeSocketPath(env)
 	if !RuntimeSocketAvailable(path) {
+		if explicitProfile {
+			return 0, true, errors.New("selected runtime profile is unavailable: runtime is not running")
+		}
 		return 0, false, nil
 	}
-	identity, err := runtimeProfileIdentity(env, ConfigOverrides{APIURL: global.APIURL, AgentHandle: global.AgentHandle, ContextDir: global.ContextDir})
-	if err != nil {
-		return 0, false, nil
+	identity := ""
+	if !explicitProfile {
+		var err error
+		identity, err = runtimeProfileIdentity(env, ConfigOverrides{APIURL: global.APIURL, AgentHandle: global.AgentHandle, ContextDir: global.ContextDir})
+		if err != nil {
+			return 0, false, nil
+		}
 	}
-	status, err := RuntimeClientRequest(path, RuntimeRequest{Version: runtimeProtocolVersion, ID: runtimeCommandID([]string{"status", identity}), Operation: "status"})
+	status, err := RuntimeClientRequest(path, RuntimeRequest{Version: runtimeProtocolVersion, ID: runtimeCommandID([]string{"status", global.ProfileID, global.Revision, identity}), Operation: "status", ProfileID: global.ProfileID})
 	if err != nil {
 		return 0, true, err
 	}
+	if status.ExitCode != 0 {
+		message := strings.TrimSpace(status.Stderr)
+		if message == "" {
+			message = "runtime status failed"
+		}
+		return 0, true, errors.New(message)
+	}
 	var payload struct {
-		Profiles []struct{ ID, Revision, Identity string } `json:"profiles"`
+		Profiles []struct {
+			ID             string `json:"id"`
+			Revision       string `json:"revision"`
+			IdentityDigest string `json:"identity_digest"`
+		} `json:"profiles"`
 	}
 	if json.Unmarshal([]byte(status.Stdout), &payload) != nil {
 		return 0, true, errors.New("runtime returned invalid status")
 	}
 	var match *struct{ ID, Revision, Identity string }
-	for i := range payload.Profiles {
-		if payload.Profiles[i].Identity == identity {
-			match = &payload.Profiles[i]
-			break
+	if explicitProfile {
+		for i := range payload.Profiles {
+			if payload.Profiles[i].ID == global.ProfileID {
+				if payload.Profiles[i].Revision != global.Revision {
+					return 0, true, errors.New("selected runtime profile revision is stale")
+				}
+				match = &struct{ ID, Revision, Identity string }{ID: payload.Profiles[i].ID, Revision: payload.Profiles[i].Revision}
+				break
+			}
+		}
+	} else {
+		digest := runtimeIdentityDigest(identity)
+		// The selected identity is computed from the resolved environment, so
+		// compare the digest only when the status payload exposes it. Older
+		// runtimes may not provide the sanitized field; those runtimes cannot be
+		// safely routed without exposing their private identity string.
+		for i := range payload.Profiles {
+			if payload.Profiles[i].IdentityDigest == digest {
+				match = &struct{ ID, Revision, Identity string }{ID: payload.Profiles[i].ID, Revision: payload.Profiles[i].Revision}
+				break
+			}
 		}
 	}
 	if match == nil {
+		if explicitProfile {
+			return 0, true, errors.New("selected runtime profile is not configured")
+		}
 		return 0, false, nil
 	}
 	args := append([]string{}, remaining...)
@@ -1237,13 +1333,18 @@ func runtimeManagedInboxClient(global globalOptions, env []string) (*runtimeIPCI
 		return nil, false
 	}
 	var payload struct {
-		Profiles []struct{ ID, Revision, Identity string } `json:"profiles"`
+		Profiles []struct {
+			ID             string `json:"id"`
+			Revision       string `json:"revision"`
+			IdentityDigest string `json:"identity_digest"`
+		} `json:"profiles"`
 	}
 	if json.Unmarshal([]byte(resp.Stdout), &payload) != nil {
 		return nil, false
 	}
+	digest := runtimeIdentityDigest(identity)
 	for _, p := range payload.Profiles {
-		if p.Identity == identity {
+		if p.IdentityDigest == digest {
 			return &runtimeIPCInboxClient{socket: path, profileID: p.ID, revision: p.Revision}, true
 		}
 	}

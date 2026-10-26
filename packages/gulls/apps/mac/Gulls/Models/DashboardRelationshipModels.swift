@@ -212,15 +212,15 @@ enum DashboardRelationshipProjector {
             return SenderIdentity(id: "unknown:\(profileID):0:", display: "Unknown participant", handle: nil)
         }
         let identity = senderIdentity(in: first, profileID: profileID, aliases: aliases)
-        if let handle = items.lazy.compactMap({ item -> String? in
-            let candidate = normalized(item.message?.senderHandle)
-            guard !candidate.isEmpty,
-                  senderIdentity(in: item, profileID: profileID, aliases: aliases).id == identity.id else { return nil }
-            return candidate
-        }).first {
-            return SenderIdentity(id: identity.id, display: handle, handle: handle)
-        }
-        return identity
+        let matching = items.filter { senderIdentity(in: $0, profileID: profileID, aliases: aliases).id == identity.id }
+        let handle = matching.lazy.compactMap { firstNonEmpty($0.message?.senderHandle) }.first
+        let displayName = matching.lazy.compactMap {
+            firstNonEmpty($0.resolvedSenderDisplayName, $0.message?.senderDisplayName)
+        }.first
+        let display = GullIdentityDisplay.readableName(
+            displayName: displayName, handle: handle, agentID: senderAgentID(in: first)
+        ) ?? identity.display
+        return SenderIdentity(id: identity.id, display: display, handle: handle ?? identity.handle)
     }
 
     private static func senderIdentity(in item: InboxItem,
@@ -229,13 +229,18 @@ enum DashboardRelationshipProjector {
         let handle = normalized(item.message?.senderHandle)
         let agentID = senderAgentID(in: item)
         if !agentID.isEmpty {
-            return SenderIdentity(id: "agent:\(agentID)", display: handle.isEmpty ? agentID : handle, handle: handle.isEmpty ? nil : handle)
+            let display = GullIdentityDisplay.readableName(
+                displayName: firstNonEmpty(item.resolvedSenderDisplayName, item.message?.senderDisplayName),
+                handle: item.message?.senderHandle,
+                agentID: agentID
+            ) ?? "Unknown participant"
+            return SenderIdentity(id: "agent:\(agentID)", display: display, handle: handle.isEmpty ? nil : handle)
         }
         if !handle.isEmpty {
             if let agentID = aliases[handle] {
-                return SenderIdentity(id: agentID, display: handle, handle: handle)
+                return SenderIdentity(id: agentID, display: item.senderDisplay, handle: handle)
             }
-            return SenderIdentity(id: "handle:\(handle)", display: handle, handle: handle)
+            return SenderIdentity(id: "handle:\(handle)", display: item.senderDisplay, handle: handle)
         }
         return SenderIdentity(id: "unknown:\(profileID.count):\(profileID)|\(item.id.count):\(item.id)", display: "Unknown participant", handle: nil)
     }

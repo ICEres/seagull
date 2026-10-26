@@ -12,7 +12,6 @@ struct CodexTaskSetupView: View {
     let inbox: InboxStore?
     let item: InboxItem?
 
-    private let sourceDeliveryID: String?
     private let sourceThreadID: String?
     // Captured once when the sheet is created. A reconnect must not redirect
     // the task to a different local Gull while context is being prepared.
@@ -25,17 +24,19 @@ struct CodexTaskSetupView: View {
     @State private var error: String?
     @State private var isLaunching = false
     @State private var launchTask: Task<Void, Never>?
+    @State private var ownerRequestID = UUID().uuidString
+    @State private var readinessReport: CodexReadinessReport?
+    @State private var isCheckingReadiness = false
 
     init(tasks: CodexTaskStore, cli: GullsCLI, inbox: InboxStore? = nil, item: InboxItem? = nil) {
         self.tasks = tasks
         self.cli = cli
         self.inbox = inbox
         self.item = item
-        sourceDeliveryID = item?.id
         sourceThreadID = item?.delivery.threadId ?? item?.message?.threadId
         _sourceProfileID = State(initialValue: inbox?.config.profileID ?? tasks.config.profileID)
         _sourceConnectionRevision = State(initialValue: inbox?.config.connectionRevision ?? tasks.config.connectionRevision)
-        _goal = State(initialValue: item == nil ? "" : "Draft a reply to this message.")
+        _goal = State(initialValue: item == nil ? "" : "Reply to this message as this Gull.")
     }
 
     private var isIncomingTask: Bool { item != nil }
@@ -46,6 +47,11 @@ struct CodexTaskSetupView: View {
 
     private var recipientName: String {
         item?.senderDisplay ?? "No message selected"
+    }
+
+    private var hasExistingConversation: Bool {
+        guard let sourceThreadID, !sourceThreadID.isEmpty else { return false }
+        return tasks.hasConversation(threadID: sourceThreadID)
     }
 
     private var canLaunch: Bool {
@@ -70,6 +76,7 @@ struct CodexTaskSetupView: View {
         .frame(minWidth: 460, idealWidth: 520, maxWidth: 620)
         .background(GullsStyle.canvas)
         .onAppear { tasks.refresh() }
+        .task { await refreshReadiness() }
         .onDisappear { launchTask?.cancel() }
     }
 
@@ -77,10 +84,16 @@ struct CodexTaskSetupView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 10) {
                 GullsAIIcon()
-                Text(isIncomingTask ? "Work with Codex" : "New Codex task")
+                Text(isIncomingTask ? "Let \(sourceName) handle this" : "New Codex task")
                     .font(.title2.weight(.semibold))
             }
-            Text("Run Codex here and review the result as a draft.")
+            Text(hasExistingConversation
+                 ? "Continue the private Codex context for this conversation. The Gull will deliver a public reply using its configured reply mode."
+                 : (isIncomingTask
+                    ? (tasks.config.sendRepliesAutomatically
+                       ? "Codex works privately for this Gull. Its submitted reply will be sent automatically."
+                       : "Let \(sourceName) handle this. Its reply will wait here for your approval before sending.")
+                    : "Run Codex here for a private task and review the result when it finishes."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -153,19 +166,50 @@ struct CodexTaskSetupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if let readinessReport, !readinessReport.isReady {
+                Label(readinessTitle(readinessReport), systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+            if isCheckingReadiness {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Checking Codex readiness")
+            }
             Spacer(minLength: 12)
             Button("Cancel") { launchTask?.cancel(); dismiss() }
                 .keyboardShortcut(.cancelAction)
             Button { startInGulls() } label: {
                 if isLaunching { ProgressView().controlSize(.small) }
-                else { Text("Start in Gulls") }
+                else { Text(tasks.isRunning ? "Queue task" : (isIncomingTask ? "Hand over" : "Start in Gulls")) }
             }
             .buttonStyle(.borderedProminent)
             .tint(GullsStyle.accent)
-            .disabled(!canLaunch)
-            Button("Open in Codex", action: openInCodex)
+            .disabled(!canStartInGulls)
+            Button(hasExistingConversation ? "Copy handoff & open Codex" : "Open in Codex", action: openInCodex)
                 .buttonStyle(.bordered)
                 .disabled(!canLaunch)
+        }
+    }
+
+    private var canStartInGulls: Bool {
+        canLaunch && readinessReport?.isReady == true
+    }
+
+    private func refreshReadiness() async {
+        isCheckingReadiness = true
+        defer { isCheckingReadiness = false }
+        readinessReport = await CodexReadiness().check()
+    }
+
+    private func readinessTitle(_ report: CodexReadinessReport) -> String {
+        switch report.state {
+        case .ready: return "Codex ready"
+        case .codexNotInstalled: return "Codex is not installed"
+        case .signInRequired: return "Sign in to Codex before starting here"
+        case .unsupportedVersion: return "Update Codex before starting here"
+        case .connectionFailed(let message): return message
         }
     }
 
@@ -192,56 +236,19 @@ struct CodexTaskSetupView: View {
         launchTask = Task { @MainActor in
             defer { isLaunching = false }
             do {
-                guard !Task.isCancelled else { return }
-                var contextPath: String?
-                guard tasks.config.profileID == sourceProfileID,
-                      tasks.config.connectionRevision == sourceConnectionRevision else {
-                    throw CodexTaskSetupError.connectionChanged
-                }
-                if let inbox, let deliveryID = sourceDeliveryID {
-                    guard inbox.config.profileID == sourceProfileID,
-                          inbox.config.connectionRevision == sourceConnectionRevision,
-                          inbox.isCurrent,
-                          inbox.items.contains(where: { $0.id == deliveryID }) else {
-                        throw CodexTaskSetupError.connectionChanged
-                    }
-                    guard let opened = await inbox.writeContextFile(for: deliveryID) else {
-                        throw CodexTaskSetupError.contextUnavailable
-                    }
-                    contextPath = opened.contextPath
-                } else if isIncomingTask {
-                    throw CodexTaskSetupError.contextUnavailable
-                }
-
-                guard !Task.isCancelled else { return }
-                guard tasks.config.profileID == sourceProfileID,
-                      tasks.config.connectionRevision == sourceConnectionRevision,
-                      inbox == nil || (inbox?.isCurrent == true
-                                       && inbox?.config.profileID == sourceProfileID
-                                       && inbox?.config.connectionRevision == sourceConnectionRevision
-                                       && sourceDeliveryID.map { deliveryID in
-                                           inbox?.items.contains(where: { $0.id == deliveryID }) == true
-                                       } == true) else {
-                    throw CodexTaskSetupError.connectionChanged
-                }
-                let task = try tasks.create(
-                    goal: goal.trimmingCharacters(in: .whitespacesAndNewlines),
-                    workingDirectory: workingDirectory,
-                    deliveryID: sourceDeliveryID,
-                    threadID: sourceThreadID,
-                    contextPath: contextPath,
-                    cliExecutableURL: cli.executableURL
-                )
+                let task = try await createTaskForRun()
                 try tasks.open(task)
                 dismiss()
+            } catch is CancellationError {
+                return
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.error = error.localizedDescription
             }
         }
     }
 
     private func startInGulls() {
-        guard canLaunch else { return }
+        guard canStartInGulls else { return }
         error = nil
         isLaunching = true
         launchTask = Task { @MainActor in
@@ -253,55 +260,21 @@ struct CodexTaskSetupView: View {
             } catch is CancellationError {
                 return
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.error = error.localizedDescription
             }
         }
     }
 
     private func createTaskForRun() async throws -> CodexTask {
-        guard tasks.config.profileID == sourceProfileID,
-              tasks.config.connectionRevision == sourceConnectionRevision else {
-            throw CodexTaskSetupError.connectionChanged
-        }
-        var contextPath: String?
-        if let inbox, let deliveryID = sourceDeliveryID {
-            guard inbox.isCurrent,
-                  inbox.config.profileID == sourceProfileID,
-                  inbox.config.connectionRevision == sourceConnectionRevision,
-                  inbox.items.contains(where: { $0.id == deliveryID }),
-                  let opened = await inbox.writeContextFile(for: deliveryID) else {
-                throw CodexTaskSetupError.contextUnavailable
-            }
-            contextPath = opened.contextPath
-        } else if isIncomingTask {
-            throw CodexTaskSetupError.contextUnavailable
-        }
-        guard !Task.isCancelled else { throw CancellationError() }
-        guard tasks.config.profileID == sourceProfileID,
-              tasks.config.connectionRevision == sourceConnectionRevision,
-              inbox == nil || (inbox?.isCurrent == true && inbox?.config.profileID == sourceProfileID
-                              && inbox?.config.connectionRevision == sourceConnectionRevision) else {
-            throw CodexTaskSetupError.connectionChanged
-        }
-        return try tasks.create(
+        try await tasks.prepareTask(
             goal: goal.trimmingCharacters(in: .whitespacesAndNewlines),
             workingDirectory: workingDirectory,
-            deliveryID: sourceDeliveryID,
-            threadID: sourceThreadID,
-            contextPath: contextPath,
-            cliExecutableURL: cli.executableURL
+            cli: cli,
+            inbox: inbox,
+            item: item,
+            sourceProfileID: sourceProfileID,
+            sourceConnectionRevision: sourceConnectionRevision,
+            ownerRequestID: ownerRequestID
         )
-    }
-}
-
-private enum CodexTaskSetupError: Error, LocalizedError {
-    case connectionChanged
-    case contextUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .connectionChanged: return "This Gull connection changed while the task was being prepared. Refresh it and try again."
-        case .contextUnavailable: return "The message context could not be prepared. The task was not opened in Codex."
-        }
     }
 }

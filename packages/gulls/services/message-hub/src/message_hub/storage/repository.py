@@ -89,6 +89,10 @@ class MessageHubRepository(Protocol):
         sender_agent_id: str,
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
+        source_delivery_id: str | None = None,
+        expected_source_delivery_status: str | None = None,
+        expected_source_delivery_updated_at: datetime | None = None,
+        source_delivery: Delivery | None = None,
     ) -> bool:
         """Atomically commit a message, thread, deliveries, and idempotency key."""
 
@@ -200,8 +204,8 @@ class MessageHubRepository(Protocol):
     def list_deliveries_by_ids(self, delivery_ids: tuple[str, ...]) -> tuple[Delivery, ...]:
         """Strongly read a committed delivery set by primary keys."""
 
-    def update_delivery(self, delivery: Delivery) -> None:
-        """Replace a delivery row."""
+    def update_delivery(self, delivery: Delivery, *, expected: Delivery | None = None) -> None:
+        """Replace a delivery row, optionally enforcing an optimistic version check."""
 
     def put_routing_rule(self, rule: RoutingRule) -> None:
         """Persist a user-controlled routing rule."""

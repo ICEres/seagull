@@ -20,6 +20,16 @@ final class LocalConnectionsStore {
         profiles.first { $0.profileID == selectedProfileID }
     }
 
+    /// Prefer a paired Gull over an old standalone development profile.
+    /// Network availability must not change the initial inbox scope.
+    var preferredInboxProfileID: String? {
+        let configured = profiles.filter(\.isConfigured)
+        return configured.first { $0.profileID == selectedProfileID && $0.isLocallyPaired }?.profileID
+            ?? configured.first(where: \.isLocallyPaired)?.profileID
+            ?? configured.first { $0.profileID == selectedProfileID }?.profileID
+            ?? configured.first?.profileID
+    }
+
     init(
         defaults: UserDefaults = .standard,
         tokenStore: any GullsTokenStore = KeychainStore()

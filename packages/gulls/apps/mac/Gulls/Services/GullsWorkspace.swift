@@ -72,7 +72,7 @@ final class GullsWorkspace {
             localControls[config.profileID] = LocalControlStore(config: config, defaults: localControlDefaults)
         }
         for config in connections.profiles where codexTasks[config.profileID] == nil {
-            codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID])
+            codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID], replyCLI: cli)
         }
         routeNotifications()
     }
@@ -99,7 +99,7 @@ final class GullsWorkspace {
                 inboxes[config.profileID]?.suspendMonitoring()
                 localControls[config.profileID]?.stop()
                 codexTasks[config.profileID]?.suspendExecution()
-                codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID])
+                codexTasks[config.profileID] = CodexTaskStore(config: config, localControl: localControls[config.profileID], replyCLI: cli)
                 inboxes[config.profileID] = makeInbox(config)
                 routeNotifications()
             }
@@ -179,7 +179,7 @@ final class GullsWorkspace {
         // sends an empty configuration if all profiles were removed asleep.
         for store in inboxes.values { store.suspendMonitoring() }
         for control in localControls.values { control.stop(forTermination: forTermination) }
-        for tasks in codexTasks.values { tasks.suspendExecution() }
+        for tasks in codexTasks.values { tasks.suspendExecution(revokeReplies: false) }
         CodexExecutionCoordinator.shared.shutdown()
     }
 
@@ -236,6 +236,12 @@ final class GullsWorkspace {
         let inbox = InboxStore(cli: cli, config: config, notifier: notifier,
                                notifiedStore: NotifiedSetStore(url: notifiedURL))
         inbox.onUpdateBadge = { [weak self] in self?.updateBadge() }
+        inbox.beforeOwnerDecision = { [weak self] deliveryID in
+            guard let self, let tasks = self.codexTasks[config.profileID] else {
+                throw CodexTaskStore.Failure("The Gull connection is no longer available.")
+            }
+            try await tasks.prepareOwnerDecision(deliveryID: deliveryID)
+        }
         return inbox
     }
 

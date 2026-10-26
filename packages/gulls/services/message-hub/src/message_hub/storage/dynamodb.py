@@ -1241,6 +1241,10 @@ class DynamoDbMessageHubRepository:
         sender_agent_id: str,
         idempotency_key: str | None = None,
         request_fingerprint: str | None = None,
+        source_delivery_id: str | None = None,
+        expected_source_delivery_status: str | None = None,
+        expected_source_delivery_updated_at: datetime | None = None,
+        source_delivery: Delivery | None = None,
     ) -> bool:
         actions: list[dict[str, Any]] = [
             {
@@ -1274,6 +1278,29 @@ class DynamoDbMessageHubRepository:
                     }
                 }
             )
+        if source_delivery is not None:
+            if source_delivery_id is not None and source_delivery.delivery_id != source_delivery_id:
+                raise AtomicCommitConflict("source delivery id mismatch")
+            source_put: dict[str, Any] = {
+                "TableName": self._deliveries.name,
+                "Item": delivery_to_item(source_delivery),
+            }
+            if expected_source_delivery_status is not None or expected_source_delivery_updated_at is not None:
+                conditions: list[str] = []
+                expression_names: dict[str, str] = {}
+                expression_values: dict[str, Any] = {}
+                if expected_source_delivery_status is not None:
+                    conditions.append("#status = :expected_status")
+                    expression_names["#status"] = "status"
+                    expression_values[":expected_status"] = expected_source_delivery_status
+                if expected_source_delivery_updated_at is not None:
+                    conditions.append("#updated_at = :expected_updated_at")
+                    expression_names["#updated_at"] = "updated_at"
+                    expression_values[":expected_updated_at"] = to_iso(expected_source_delivery_updated_at)
+                source_put["ConditionExpression"] = " AND ".join(conditions)
+                source_put["ExpressionAttributeNames"] = expression_names
+                source_put["ExpressionAttributeValues"] = expression_values
+            actions.append({"Put": source_put})
         if idempotency_key is not None:
             actions.append(
                 {
@@ -1285,6 +1312,7 @@ class DynamoDbMessageHubRepository:
                             message_id=message.message_id,
                             delivery_ids=tuple(delivery.delivery_id for delivery in deliveries),
                             request_fingerprint=request_fingerprint,
+                            durable=source_delivery is not None,
                         ),
                         "ConditionExpression": "attribute_not_exists(sender_agent_id) OR expires_at <= :now",
                         "ExpressionAttributeValues": {":now": int(time.time())},
@@ -1628,8 +1656,25 @@ class DynamoDbMessageHubRepository:
             deliveries.append(delivery_from_item(item))
         return tuple(deliveries)
 
-    def update_delivery(self, delivery: Delivery) -> None:
-        self.put_delivery(delivery)
+    def update_delivery(self, delivery: Delivery, *, expected: Delivery | None = None) -> None:
+        if expected is None:
+            self.put_delivery(delivery)
+            return
+        try:
+            self._deliveries.put_item(
+                Item=delivery_to_item(delivery),
+                ConditionExpression="#status = :expected_status AND #updated_at = :expected_updated_at",
+                ExpressionAttributeNames={"#status": "status", "#updated_at": "updated_at"},
+                ExpressionAttributeValues={
+                    ":expected_status": expected.status.value,
+                    ":expected_updated_at": to_iso(expected.updated_at),
+                },
+            )
+        except Exception as exc:
+            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if code == "ConditionalCheckFailedException":
+                raise AtomicCommitConflict("delivery changed concurrently") from exc
+            raise
 
     # -- routing rules
 
@@ -1868,13 +1913,15 @@ class DynamoDbMessageHubRepository:
         task_id: str | None = None,
         request_fingerprint: str | None = None,
         delivery_ids: tuple[str, ...] = (),
+        durable: bool = False,
     ) -> dict[str, Any]:
         item: dict[str, Any] = {
             "sender_agent_id": sender_agent_id,
             "idempotency_key": idempotency_key,
             "created_at": to_iso(datetime.now(timezone.utc)),
-            "expires_at": int(time.time()) + MESSAGE_IDEMPOTENCY_TTL_SECONDS,
         }
+        if not durable:
+            item["expires_at"] = int(time.time()) + MESSAGE_IDEMPOTENCY_TTL_SECONDS
         if message_id is not None:
             item["message_id"] = message_id
         if task_id is not None:

@@ -334,6 +334,29 @@ func (c *runtimeProfileClient) DecideDelivery(deliveryID, handle, decision, cont
 	return result, err
 }
 
+// These explicit passthroughs are required because runtimeProfileClient embeds
+// the narrow Client interface. Without them a resident runtime hides the
+// HTTP client's delegated publication capability from the command dispatcher.
+func (c *runtimeProfileClient) PublishDelegatedReply(deliveryID, publicationKey, taskID, content string) (map[string]any, error) {
+	delegated, ok := c.Client.(delegatedReplyClient)
+	if !ok {
+		return nil, errors.New("delegated reply publication is unavailable for this connection; refusing legacy fallback")
+	}
+	result, err := delegated.PublishDelegatedReply(deliveryID, publicationKey, taskID, content)
+	if err == nil {
+		c.updateHistoryDelivery(deliveryID, objectValue(result, "delivery"))
+	}
+	return result, err
+}
+
+func (c *runtimeProfileClient) DelegatedReplyStatus(deliveryID, publicationKey string) (map[string]any, error) {
+	delegated, ok := c.Client.(delegatedReplyClient)
+	if !ok {
+		return nil, errors.New("delegated reply status is unavailable for this connection")
+	}
+	return delegated.DelegatedReplyStatus(deliveryID, publicationKey)
+}
+
 func (c *runtimeProfileClient) AckMessage(messageID, handle string) (map[string]any, error) {
 	result, err := c.Client.AckMessage(messageID, handle)
 	if err == nil {

@@ -112,6 +112,39 @@ final class InboxStoreNotificationTests: XCTestCase {
         )
     }
 
+    private func makeContextStore(
+        openDelay: TimeInterval = 0,
+        openStarted: URL? = nil,
+        openOutput: String = "{\"context_path\":\"/tmp/context.md\"}",
+        openExitCode: Int = 0,
+        configured: Bool = true,
+        cli: GullsCLI? = nil
+    ) throws -> InboxStore {
+        let binary = tmp.appendingPathComponent("context-gulls")
+        let startMarker = openStarted.map { "touch \"\($0.path)\"" } ?? ":"
+        let script = """
+        #!/bin/bash
+        case "$2" in
+        open) \(startMarker); sleep \(openDelay); if [ \(openExitCode) -ne 0 ]; then printf '%s' '\(openOutput)' >&2; else printf '%s' '\(openOutput)'; fi; exit \(openExitCode) ;;
+        *) printf '{}' ;;
+        esac
+        """
+        try script.write(to: binary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+
+        let config = GullsConfig(defaults: defaults, tokenStore: MemoryTokenStore())
+        config.apiURL = configured ? "http://localhost:1" : ""
+        config.agentHandle = configured ? "@test:gulls.ai" : ""
+        config.contextDir = tmp.appendingPathComponent("context").path
+
+        return InboxStore(
+            cli: cli ?? GullsCLI(executableURL: binary),
+            config: config,
+            notifier: RecordingNotifier(),
+            notifiedStore: NotifiedSetStore(url: tmp.appendingPathComponent("context-notified.json"))
+        )
+    }
+
     func testUserActionFailureIsAlertableButBackgroundRefreshFailureIsNot() async throws {
         let actionStore = try makeFailingStore()
         await actionStore.ack("delivery-1")
@@ -125,6 +158,71 @@ final class InboxStoreNotificationTests: XCTestCase {
 
         XCTAssertNil(refreshStore.actionFailure)
         XCTAssertEqual(refreshStore.lastError, "fixture failure")
+    }
+
+    func testPrepareContextFileReturnsCLIErrorWithoutActionFailure() async throws {
+        let store = try makeContextStore(openOutput: "fixture context failure", openExitCode: 1)
+
+        do {
+            _ = try await store.prepareContextFile(for: "delivery-1")
+            XCTFail("expected context preparation to fail")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "fixture context failure")
+        }
+
+        XCTAssertNil(store.actionFailure)
+    }
+
+    func testPrepareContextFileReturnsCLIResult() async throws {
+        let store = try makeContextStore(openOutput: "{\"context_path\":\"/tmp/delivery-1.md\"}")
+
+        let result = try await store.prepareContextFile(for: "delivery-1")
+
+        XCTAssertEqual(result.contextPath, "/tmp/delivery-1.md")
+        XCTAssertNil(store.actionFailure)
+    }
+
+    func testPrepareContextFileRejectsResultAfterConnectionChanges() async throws {
+        let started = tmp.appendingPathComponent("context-started")
+        let store = try makeContextStore(openDelay: 0.25, openStarted: started)
+        let task = Task { try await store.prepareContextFile(for: "delivery-1") }
+
+        while !FileManager.default.fileExists(atPath: started.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        store.config.apiURL = "http://localhost:2"
+
+        do {
+            _ = try await task.value
+            XCTFail("expected stale context result to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("connection changed"))
+        }
+        XCTAssertNil(store.actionFailure)
+    }
+
+    func testPrepareContextFileReportsMissingCLIAndConfiguration() async throws {
+        let configured = try makeContextStore()
+        let missingCLI = InboxStore(
+            cli: nil,
+            config: configured.config,
+            notifier: RecordingNotifier(),
+            notifiedStore: NotifiedSetStore(url: tmp.appendingPathComponent("missing-cli.json"))
+        )
+        do {
+            _ = try await missingCLI.prepareContextFile(for: "delivery-1")
+            XCTFail("expected missing CLI failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("bundled gulls binary is missing"))
+        }
+
+        let unconfigured = try makeContextStore(configured: false)
+        do {
+            _ = try await unconfigured.prepareContextFile(for: "delivery-1")
+            XCTFail("expected missing configuration failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("connection is not configured"))
+        }
     }
 
     func testSuspendingDuringRefreshDiscardsStaleItemsAndNotifications() async throws {

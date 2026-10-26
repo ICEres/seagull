@@ -635,6 +635,8 @@ class LocalMessageHubApi:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except ForbiddenDeliveryError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
+        except AtomicCommitConflict as exc:
+            raise ApiError(409, "delivery_conflict", "delivery was already handled") from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
 
@@ -649,6 +651,63 @@ class LocalMessageHubApi:
         if optional_string(body, "decision") == "reply":
             wrapped["runtime_mode"] = "local"
         return self.submit_delivery_decision(delivery_id, wrapped)
+
+    def agent_publish_delegated_reply(
+        self, authorization: str | None, delivery_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        self._reject_cloud_owned_delivery(principal, delivery_id)
+        raw_content = body.get("content")
+        if not isinstance(raw_content, str) or not raw_content.strip():
+            raise ApiError(400, "bad_request", "content is required")
+        try:
+            result = self._service.publish_delegated_reply(
+                delivery_id,
+                agent_handle=principal.agent_handle,
+                publication_key=required_string(body, "publication_key"),
+                content=raw_content,
+                task_id=optional_string(body, "task_id"),
+                runtime_mode="local",
+            )
+        except InvalidMessageError as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
+        except IdempotencyConflictError as exc:
+            raise ApiError(409, "idempotency_conflict", str(exc)) from exc
+        except AtomicCommitConflict as exc:
+            raise ApiError(409, "delivery_conflict", "delivery was already handled") from exc
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        payload = decision_result_to_dict(result)
+        payload["publication_key"] = required_string(body, "publication_key")
+        payload["found"] = True
+        return payload
+
+    def agent_read_delegated_reply_receipt(
+        self, authorization: str | None, delivery_id: str, publication_key: str
+    ) -> dict[str, Any]:
+        principal = self._require_agent_token(authorization, required_scope="agent:post")
+        self._reject_cloud_owned_delivery(principal, delivery_id)
+        try:
+            result = self._service.delegated_reply_receipt(
+                delivery_id,
+                agent_handle=principal.agent_handle,
+                publication_key=publication_key,
+            )
+        except ForbiddenDeliveryError as exc:
+            raise ApiError(403, "forbidden", str(exc)) from exc
+        except NotFoundError as exc:
+            raise ApiError(404, "not_found", str(exc)) from exc
+        if result is None:
+            return {"publication_key": publication_key, "found": False}
+        delivery = self._service._repository.get_delivery(delivery_id)  # noqa: SLF001
+        return {
+            "publication_key": publication_key,
+            "found": True,
+            "delivery": None if delivery is None else delivery_to_dict(delivery),
+            "reply": send_result_to_dict(result),
+        }
 
     def _reject_cloud_owned_delivery(self, principal: Any, delivery_id: str) -> None:
         if principal.node_id is None:
@@ -1723,6 +1782,8 @@ class LocalMessageHubApi:
             )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
+        except AtomicCommitConflict as exc:
+            raise ApiError(409, "delivery_conflict", "delivery was already handled") from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
 
@@ -1748,6 +1809,8 @@ class LocalMessageHubApi:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except ForbiddenDeliveryError as exc:
             raise ApiError(403, "forbidden", str(exc)) from exc
+        except AtomicCommitConflict as exc:
+            raise ApiError(409, "delivery_conflict", "delivery was already handled") from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
 

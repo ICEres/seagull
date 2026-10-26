@@ -766,6 +766,26 @@ func TestPostDistinguishesDefinitiveRejectionFromUncertainOutcome(t *testing.T) 
 	}
 }
 
+func TestDelegatedReplyErrorCodeFailsClosedOnFourXX(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code int
+	}{
+		{"bad request", &statusError{code: 400, message: "invalid publication"}, 3},
+		{"missing endpoint", &statusError{code: 404, message: "not found"}, 3},
+		{"conflict", &statusError{code: 409, message: "already published"}, 3},
+		{"server failure", &statusError{code: 500, message: "lost response"}, 0},
+		{"transport failure", errors.New("502: connection reset"), 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := delegatedReplyErrorCode(test.err); got != test.code {
+				t.Fatalf("exit code = %d, want %d", got, test.code)
+			}
+		})
+	}
+}
+
 func TestHTTPClientUsesScopedAgentPathsWithRuntimeToken(t *testing.T) {
 	paths := []string{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1022,6 +1042,82 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestDelegatedReplyCommandsUseResidentWrapperAndExactHTTPContract(t *testing.T) {
+	taskID := "123e4567-e89b-12d3-a456-426614174000"
+	publicationKey := "123e4567-e89b-12d3-a456-426614174001"
+	content := "  exact public reply\nwith spacing  "
+	var requests []*http.Request
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req)
+		var body []byte
+		if req.Body != nil {
+			var err error
+			body, err = io.ReadAll(req.Body)
+			if err != nil {
+				return nil, err
+			}
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		if req.Method == http.MethodPost {
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return nil, err
+			}
+			if payload["publication_key"] != publicationKey || payload["task_id"] != taskID || payload["content"] != content {
+				return nil, errors.New("delegated publication payload changed exact content")
+			}
+			return historyHTTPResponse(map[string]any{
+				"publication_key": publicationKey,
+				"found":           true,
+				"delivery":        map[string]any{"delivery_id": "delivery_1", "status": "replied"},
+				"reply":           map[string]any{"message_id": "message_reply", "thread_id": "thread_1"},
+			}), nil
+		}
+		return historyHTTPResponse(map[string]any{"publication_key": publicationKey, "found": false}), nil
+	})
+	httpClient := NewHTTPClient("https://api.example.test", "secret-token")
+	httpClient.Client = &http.Client{Transport: transport}
+	resident := &runtimeProfileClient{Client: httpClient, profile: &runtimeProfile{}}
+	env := testEnv(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"--json", "reply-publish", "--publication-key", publicationKey, "--task-id", taskID, "--content", content, "delivery_1"}, &stdout, &stderr, env, resident)
+	if code != 0 {
+		t.Fatalf("reply-publish exit=%d stderr=%s", code, stderr.String())
+	}
+	if len(requests) != 1 || requests[0].Method != http.MethodPost || requests[0].URL.Path != "/agent/deliveries/delivery_1/reply-publications" {
+		t.Fatalf("unexpected publication requests: %d %#v", len(requests), requests)
+	}
+	if got := requests[0].Header.Get("authorization"); got != "Bearer secret-token" {
+		t.Fatalf("authorization = %q", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"--json", "reply-status", "--publication-key", publicationKey, "delivery_1"}, &stdout, &stderr, env, resident)
+	var statusPayload map[string]any
+	statusErr := json.Unmarshal(stdout.Bytes(), &statusPayload)
+	if code != 0 || statusErr != nil || statusPayload["found"] != false {
+		t.Fatalf("reply-status exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if len(requests) != 2 || requests[1].Method != http.MethodGet || requests[1].URL.Path != "/agent/deliveries/delivery_1/reply-publications/"+publicationKey {
+		t.Fatalf("unexpected status request: %d %#v", len(requests), requests)
+	}
+}
+
+func TestDelegatedReplyPublishFourXXIsDefinitive(t *testing.T) {
+	httpClient := NewHTTPClient("https://api.example.test", "secret-token")
+	httpClient.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("missing endpoint")), Header: http.Header{}}, nil
+	})}
+	resident := &runtimeProfileClient{Client: httpClient, profile: &runtimeProfile{}}
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"--json", "reply-publish", "--publication-key", "123e4567-e89b-12d3-a456-426614174001", "--task-id", "123e4567-e89b-12d3-a456-426614174000", "--content", "reply", "delivery_1"}, &stdout, &stderr, testEnv(t.TempDir()), resident)
+	if code != 3 {
+		t.Fatalf("exit=%d, want 3: %s", code, stderr.String())
+	}
 }
 
 func anySliceStrings(value any) []string {

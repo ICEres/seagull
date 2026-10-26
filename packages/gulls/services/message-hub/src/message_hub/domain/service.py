@@ -920,6 +920,10 @@ class MessageHubService:
         idempotency_key: str | None = None,
         runtime_mode: str | None = None,
         safety_evaluator: SafetyEvaluator | None = None,
+        source_delivery_id: str | None = None,
+        expected_source_delivery_status: DeliveryStatus | None = None,
+        expected_source_delivery_updated_at: datetime | None = None,
+        source_delivery: Delivery | None = None,
         _retry_count: int = 0,
     ) -> SendMessageResult:
         normalized_idempotency_key = (
@@ -997,6 +1001,10 @@ class MessageHubService:
                 sender_agent_id=sender.agent_id,
                 idempotency_key=normalized_idempotency_key,
                 request_fingerprint=request_fingerprint,
+                source_delivery_id=source_delivery_id,
+                expected_source_delivery_status=None if expected_source_delivery_status is None else expected_source_delivery_status.value,
+                expected_source_delivery_updated_at=expected_source_delivery_updated_at,
+                source_delivery=source_delivery,
             )
         except IdempotencyKeyConflict as exc:
             raise IdempotencyConflictError(str(exc)) from exc
@@ -1014,6 +1022,16 @@ class MessageHubService:
                         ),
                         republish=True,
                     )
+            if source_delivery is not None:
+                current_source = self._repository.get_delivery(source_delivery.delivery_id)
+                if current_source is None or (
+                    expected_source_delivery_status is not None
+                    and current_source.status != expected_source_delivery_status
+                ) or (
+                    expected_source_delivery_updated_at is not None
+                    and current_source.updated_at != expected_source_delivery_updated_at
+                ):
+                    raise
             if _retry_count < 2:
                 time.sleep(0.01 * (2 ** _retry_count))
                 return self.send_message(
@@ -1028,6 +1046,10 @@ class MessageHubService:
                     idempotency_key=normalized_idempotency_key,
                     runtime_mode=runtime_mode,
                     safety_evaluator=safety_evaluator,
+                    source_delivery_id=source_delivery_id,
+                    expected_source_delivery_status=expected_source_delivery_status,
+                    expected_source_delivery_updated_at=expected_source_delivery_updated_at,
+                    source_delivery=source_delivery,
                     _retry_count=_retry_count + 1,
                 )
             raise
@@ -2608,12 +2630,14 @@ class MessageHubService:
                 acked_at=now,
             )
             for delivery in deliveries
+            if delivery.status != DeliveryStatus.REPLIED
         )
 
+        original_by_id = {delivery.delivery_id: delivery for delivery in deliveries}
         for delivery in updated_deliveries:
-            self._repository.update_delivery(delivery)
+            self._repository.update_delivery(delivery, expected=original_by_id[delivery.delivery_id])
 
-        return updated_deliveries
+        return updated_deliveries or deliveries
 
     def ack_delivery(
         self,
@@ -2623,6 +2647,8 @@ class MessageHubService:
     ) -> Delivery:
         delivery = self._require_delivery_for_recipient(delivery_id, recipient_handle)
         self._require_delivery_not_held(delivery)
+        if delivery.status == DeliveryStatus.REPLIED:
+            return delivery
         now = self._clock()
         updated = replace(
             delivery,
@@ -2630,7 +2656,7 @@ class MessageHubService:
             updated_at=now,
             acked_at=now,
         )
-        self._repository.update_delivery(updated)
+        self._repository.update_delivery(updated, expected=delivery)
         return updated
 
     def apply_hook_result(
@@ -2647,6 +2673,8 @@ class MessageHubService:
         note: str | None = None,
     ) -> Delivery:
         delivery = self._require_delivery(delivery_id)
+        if delivery.status == DeliveryStatus.REPLIED:
+            return delivery
         normalized_hook = normalize_hook(hook)
         normalized_runtime = normalize_hook_runtime(runtime)
         normalized_action = normalize_hook_action(action)
@@ -2715,7 +2743,7 @@ class MessageHubService:
             current_stage=current_stage,
             updated_at=trace.created_at,
         )
-        self._repository.update_delivery(updated)
+        self._repository.update_delivery(updated, expected=delivery)
         return updated
 
     def decide_delivery(
@@ -2738,6 +2766,8 @@ class MessageHubService:
         self._require_delivery_not_held(delivery)
         normalized_decision = normalize_agent_decision(decision)
         normalized_refs = tuple(normalize_message_ref(ref) for ref in refs)
+        if delivery.status == DeliveryStatus.REPLIED and normalized_decision != "reply":
+            raise InvalidMessageError("delivery already has a reply")
         now = self._clock()
         trace = WorkflowTraceEntry(
             hook="agent.decision",
@@ -2755,6 +2785,42 @@ class MessageHubService:
             if sender is None:
                 raise NotFoundError(f"agent not found: {delivery.sender_agent_id}")
 
+            reply_key = "manual-reply:" + hashlib.sha256(
+                json.dumps(
+                    {"content": content, "content_ref": content_ref, "refs": [repr(ref) for ref in normalized_refs]},
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            runtime_agent = self._repository.get_agent_by_handle(agent_handle)
+            if runtime_agent is None:
+                raise NotFoundError(f"agent not found: {agent_handle}")
+            manual_idempotency_key = f"gulls-reply:{delivery.delivery_id}:{reply_key}"
+            if delivery.status == DeliveryStatus.REPLIED:
+                existing = self._repository.get_idempotency_record(runtime_agent.agent_id, manual_idempotency_key)
+                if existing is None:
+                    raise InvalidMessageError("delivery already has a reply")
+                replay = self.send_message(
+                    sender_handle=agent_handle,
+                    recipient_handles=[sender.handle],
+                    content=content,
+                    content_ref=content_ref,
+                    refs=normalized_refs,
+                    intent="reply",
+                    visibility="direct",
+                    thread_id=delivery.thread_id,
+                    runtime_mode=runtime_mode,
+                    idempotency_key=manual_idempotency_key,
+                )
+                return AgentDecisionResult(delivery=delivery, reply=replay)
+            updated = replace(
+                delivery,
+                status=DeliveryStatus.REPLIED,
+                workflow_trace=(*delivery.workflow_trace, trace),
+                current_stage="done",
+                updated_at=now,
+                acked_at=now,
+            )
             reply = self.send_message(
                 sender_handle=agent_handle,
                 recipient_handles=[sender.handle],
@@ -2765,16 +2831,12 @@ class MessageHubService:
                 visibility="direct",
                 thread_id=delivery.thread_id,
                 runtime_mode=runtime_mode,
+                idempotency_key=manual_idempotency_key,
+                source_delivery_id=delivery.delivery_id,
+                expected_source_delivery_status=delivery.status,
+                expected_source_delivery_updated_at=delivery.updated_at,
+                source_delivery=updated,
             )
-            updated = replace(
-                delivery,
-                status=DeliveryStatus.REPLIED,
-                workflow_trace=(*delivery.workflow_trace, trace),
-                current_stage="done",
-                updated_at=now,
-                acked_at=now,
-            )
-            self._repository.update_delivery(updated)
             return AgentDecisionResult(delivery=updated, reply=reply)
 
         if normalized_decision == "action":
@@ -2795,7 +2857,7 @@ class MessageHubService:
                 action_request=action_request,
                 updated_at=now,
             )
-            self._repository.update_delivery(updated)
+            self._repository.update_delivery(updated, expected=delivery)
             return AgentDecisionResult(delivery=updated, action_request=action_request)
 
         status = DeliveryStatus.IGNORED if normalized_decision == "ignore" else DeliveryStatus.NEEDS_REVIEW
@@ -2807,8 +2869,102 @@ class MessageHubService:
             updated_at=now,
             acked_at=now if normalized_decision == "ignore" else delivery.acked_at,
         )
-        self._repository.update_delivery(updated)
+        self._repository.update_delivery(updated, expected=delivery)
         return AgentDecisionResult(delivery=updated)
+
+    def publish_delegated_reply(
+        self,
+        delivery_id: str,
+        *,
+        agent_handle: str,
+        publication_key: str,
+        content: str,
+        task_id: str | None = None,
+        runtime_mode: str | None = "local",
+    ) -> AgentDecisionResult:
+        """Publish an explicitly submitted delegated reply exactly once.
+
+        The publication key is translated into the existing durable message
+        idempotency record. This keeps retries recoverable across process
+        restarts while keeping private agent results out of the send path.
+        """
+        key = normalize_required(publication_key, "publication_key")
+        if len(key) > 256:
+            raise InvalidMessageError("publication_key is too long")
+        if not isinstance(content, str) or not content.strip():
+            raise InvalidMessageError("content is required")
+        normalized_content = content
+        if len(normalized_content.encode("utf-8")) > 128 * 1024:
+            raise InvalidMessageError("content exceeds 128 KiB")
+        delivery = self._require_delivery_for_recipient(delivery_id, agent_handle)
+        self._require_delivery_not_held(delivery)
+        if delivery.status in {DeliveryStatus.IGNORED, DeliveryStatus.FAILED}:
+            raise InvalidMessageError("delivery is no longer replyable")
+        sender = self._repository.get_agent(delivery.sender_agent_id)
+        if sender is None:
+            raise NotFoundError(f"agent not found: {delivery.sender_agent_id}")
+
+        # A distinct namespace prevents a delegated publication from colliding
+        # with a human or legacy local-agent idempotency key.
+        idempotency_key = f"gulls-delegated-reply:{delivery_id}:{key}"
+        runtime_agent = self._repository.get_agent_by_handle(agent_handle)
+        if runtime_agent is None:
+            raise NotFoundError(f"agent not found: {agent_handle}")
+        if delivery.status == DeliveryStatus.REPLIED:
+            existing = self._repository.get_idempotency_record(runtime_agent.agent_id, idempotency_key)
+            if existing is None:
+                raise InvalidMessageError("delivery already has a reply")
+        reply = self.send_message(
+            sender_handle=agent_handle,
+            recipient_handles=[sender.handle],
+            content=normalized_content,
+            intent="reply",
+            visibility="direct",
+            thread_id=delivery.thread_id,
+            idempotency_key=idempotency_key,
+            runtime_mode=runtime_mode,
+            source_delivery_id=delivery.delivery_id,
+            expected_source_delivery_status=delivery.status,
+            expected_source_delivery_updated_at=delivery.updated_at,
+            source_delivery=replace(
+                delivery,
+                status=DeliveryStatus.REPLIED,
+                workflow_trace=(*delivery.workflow_trace, WorkflowTraceEntry(
+                    hook="agent.delegated_reply",
+                    runtime="agent_client",
+                    action="reply",
+                    actor=normalize_handle(agent_handle),
+                    note=None if task_id is None else f"task_id={task_id}",
+                    created_at=self._clock(),
+                )),
+                current_stage="done",
+                updated_at=self._clock(),
+                acked_at=self._clock(),
+            ),
+        )
+        latest = self._repository.get_delivery(delivery_id) or delivery
+        return AgentDecisionResult(delivery=latest, reply=reply)
+
+    def delegated_reply_receipt(
+        self,
+        delivery_id: str,
+        *,
+        agent_handle: str,
+        publication_key: str,
+    ) -> SendMessageResult | None:
+        """Recover a previously committed delegated reply after an uncertain send."""
+        key = normalize_required(publication_key, "publication_key")
+        delivery = self._require_delivery_for_recipient(delivery_id, agent_handle)
+        runtime_agent = self._repository.get_agent_by_handle(agent_handle)
+        if runtime_agent is None:
+            raise NotFoundError(f"agent not found: {delivery.sender_agent_id}")
+        idempotency_key = f"gulls-delegated-reply:{delivery_id}:{key}"
+        record = self._repository.get_idempotency_record(runtime_agent.agent_id, idempotency_key)
+        if record is None:
+            return None
+        message_id, _, _ = record
+        delivery_ids = self._repository.get_idempotency_delivery_ids(runtime_agent.agent_id, idempotency_key)
+        return self._result_for_existing_message(message_id, delivery_ids=delivery_ids, republish=False)
 
     def save_thread_summary(
         self,

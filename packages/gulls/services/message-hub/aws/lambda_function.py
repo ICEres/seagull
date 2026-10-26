@@ -1057,6 +1057,14 @@ def route_agent_runtime(method: str, path: str, event: dict[str, Any]) -> dict[s
         require_local_runtime_mode(runtime_profile)
         return response(201, api.agent_post(authorization, message_body(parse_body(event))))
 
+    if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "reply-publications":
+        require_local_runtime_mode(runtime_profile)
+        return response(200, api.agent_publish_delegated_reply(authorization, parts[2], parse_body(event)))
+
+    if method == "GET" and len(parts) == 5 and parts[:2] == ["agent", "deliveries"] and parts[3] == "reply-publications":
+        require_local_runtime_mode(runtime_profile)
+        return response(200, api.agent_read_delegated_reply_receipt(authorization, parts[2], parts[4]))
+
     if method == "POST" and len(parts) == 4 and parts[:2] == ["agent", "deliveries"] and parts[3] == "decision":
         if parse_body(event).get("decision") == "reply":
             require_local_runtime_mode(runtime_profile)

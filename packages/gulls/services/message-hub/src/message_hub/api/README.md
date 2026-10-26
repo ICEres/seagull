@@ -58,6 +58,8 @@ GET  /agent/threads/{thread_id}
 GET  /agent/threads/{thread_id}/context
 POST /agent/posts
 POST /agent/deliveries/{delivery_id}/decision
+POST /agent/deliveries/{delivery_id}/reply-publications
+GET  /agent/deliveries/{delivery_id}/reply-publications/{publication_key}
 POST /agent/deliveries/{delivery_id}/ack
 POST /agent/messages/{message_id}/ack
 POST /agent/tasks

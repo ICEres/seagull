@@ -29,6 +29,7 @@ from message_hub.domain import (
     task_lifecycle_next_states,
 )
 from message_hub.storage import InMemoryMessageHubRepository
+from message_hub.storage.repository import AtomicCommitConflict
 
 
 class DeterministicIds:
@@ -1799,6 +1800,205 @@ class MessageHubServiceTest(TestCase):
 
         messages = self.service.get_thread(result.thread.thread_id)
         self.assertEqual(["Please inspect this.", "Inspected. Looks fine."], [message.content_inline for message in messages])
+
+    def test_delegated_reply_replays_and_recovers_by_publication_key(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        delivery_id = result.deliveries[0].delivery_id
+        first = self.service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="task-1",
+            content="Inspected. Looks fine.",
+        )
+        second = self.service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="task-1",
+            content="Inspected. Looks fine.",
+        )
+        self.assertEqual(first.reply.message.message_id, second.reply.message.message_id)
+        self.assertEqual(2, len(self.service.get_thread(result.thread.thread_id)))
+        receipt = self.service.delegated_reply_receipt(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="task-1",
+        )
+        self.assertIsNotNone(receipt)
+        self.assertEqual(first.reply.message.message_id, receipt.message.message_id)
+        with self.assertRaises(InvalidMessageError):
+            self.service.publish_delegated_reply(
+                delivery_id,
+                agent_handle="@reviewer:gulls.ai",
+                publication_key="another-key",
+                content="A second public reply",
+            )
+
+    def test_delegated_reply_key_is_bound_to_source_delivery_and_content(self) -> None:
+        first = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="First",
+        )
+        second = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Second",
+        )
+        self.service.publish_delegated_reply(
+            first.deliveries[0].delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="same-key",
+            content="Reply one",
+        )
+        with self.assertRaises(IdempotencyConflictError):
+            self.service.publish_delegated_reply(
+                first.deliveries[0].delivery_id,
+                agent_handle="@reviewer:gulls.ai",
+                publication_key="same-key",
+                content="Different content",
+            )
+        second_reply = self.service.publish_delegated_reply(
+            second.deliveries[0].delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="same-key",
+            content="Reply two",
+        )
+        self.assertNotEqual("Reply one", second_reply.reply.message.content_inline)
+
+    def test_manual_reply_claim_blocks_later_delegated_publication(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        self.service.decide_delivery(
+            result.deliveries[0].delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            decision="reply",
+            content="Manual answer",
+        )
+        with self.assertRaises(InvalidMessageError):
+            self.service.publish_delegated_reply(
+                result.deliveries[0].delivery_id,
+                agent_handle="@reviewer:gulls.ai",
+                publication_key="late-task",
+                content="Late agent answer",
+            )
+
+    def test_ack_does_not_overwrite_replied_delivery(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        delivery_id = result.deliveries[0].delivery_id
+        self.service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="ack-guard",
+            content="Completed",
+        )
+        self.assertEqual(DeliveryStatus.REPLIED, self.service.ack_delivery(
+            delivery_id,
+            recipient_handle="@reviewer:gulls.ai",
+        ).status)
+        hooked = self.service.apply_hook_result(
+            delivery_id,
+            hook="reply.before",
+            runtime="cloud_node",
+            action="review",
+            note="late hook",
+        )
+        self.assertEqual(DeliveryStatus.REPLIED, hooked.status)
+        with self.assertRaises(InvalidMessageError):
+            self.service.publish_delegated_reply(
+                delivery_id,
+                agent_handle="@reviewer:gulls.ai",
+                publication_key="late-hook-reply",
+                content="Duplicate after hook",
+            )
+
+    def test_concurrent_delegated_publications_claim_one_source_delivery(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        delivery_id = result.deliveries[0].delivery_id
+
+        def publish(index: int):
+            try:
+                return self.service.publish_delegated_reply(
+                    delivery_id,
+                    agent_handle="@reviewer:gulls.ai",
+                    publication_key=f"parallel-{index}",
+                    content=f"Answer {index}",
+                )
+            except (InvalidMessageError, IdempotencyConflictError, AtomicCommitConflict):
+                return None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(publish, range(8)))
+        self.assertEqual(1, sum(outcome is not None for outcome in outcomes))
+        self.assertEqual(2, len(self.service.get_thread(result.thread.thread_id)))
+
+    def test_delegated_reply_replays_after_commit_reports_uncertain_conflict(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        original_commit = self.repository.commit_message_send
+        injected = {"done": False}
+
+        def commit_then_report_uncertain(**kwargs):
+            created = original_commit(**kwargs)
+            if not injected["done"] and kwargs.get("source_delivery") is not None:
+                injected["done"] = True
+                raise AtomicCommitConflict("simulated lost response")
+            return created
+
+        self.repository.commit_message_send = commit_then_report_uncertain  # type: ignore[method-assign]
+        published = self.service.publish_delegated_reply(
+            result.deliveries[0].delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="uncertain-1",
+            content="Recovered answer",
+        )
+        self.assertEqual("Recovered answer", published.reply.message.content_inline)
+        self.assertEqual(2, len(self.service.get_thread(result.thread.thread_id)))
+
+    def test_delegated_reply_receipt_has_no_short_idempotency_expiry(self) -> None:
+        result = self.service.send_message(
+            sender_handle="@researcher:gulls.ai",
+            recipient_handles=["@reviewer:gulls.ai"],
+            content="Please inspect this.",
+        )
+        delivery_id = result.deliveries[0].delivery_id
+        published = self.service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="durable-1",
+            content="Durable answer",
+        )
+        runtime = self.repository.get_agent_by_handle("@reviewer:gulls.ai")
+        self.assertIsNotNone(runtime)
+        record = self.repository.get_idempotency_record(
+            runtime.agent_id,
+            f"gulls-delegated-reply:{delivery_id}:durable-1",
+        )
+        self.assertIsNotNone(record)
+        self.assertIsNone(record[2])
+        receipt = self.service.delegated_reply_receipt(
+            delivery_id,
+            agent_handle="@reviewer:gulls.ai",
+            publication_key="durable-1",
+        )
+        self.assertEqual(published.reply.message.message_id, receipt.message.message_id)
 
     def test_agent_action_decision_creates_pending_action_request(self) -> None:
         result = self.service.send_message(

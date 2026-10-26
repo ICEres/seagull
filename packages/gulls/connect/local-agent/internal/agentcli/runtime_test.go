@@ -32,6 +32,78 @@ func TestRuntimeProfileIdentityNormalizesConfiguredPath(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusUsesSanitizedProfileMetadata(t *testing.T) {
+	privateDir := filepath.Join(t.TempDir(), "private-context")
+	p := &runtimeProfile{
+		profile: RuntimeProfile{
+			ID: "profile-one", Revision: "revision-one", Monitoring: true,
+			Environment: map[string]string{
+				"SEAGULL_API_URL":           "https://sea.example.test/api",
+				"SEAGULL_AGENT_HANDLE":      "@one:gulls.ai",
+				"SEAGULL_AGENT_CONTEXT_DIR": privateDir,
+				"SEAGULL_CONNECTOR_TOKEN":   "sga_private_token",
+			},
+		},
+		status:  "connected",
+		errText: "request failed for " + privateDir + "?access_token=sga_fake_secret",
+		checked: time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC),
+	}
+	s := &runtimeServer{profiles: map[string]*runtimeProfile{"profile-one": p}}
+	status := s.statusJSON("")
+	if strings.Contains(status, "sga_private_token") || strings.Contains(status, "sga_fake_secret") || strings.Contains(status, privateDir) || strings.Contains(status, "identity\"") {
+		t.Fatalf("runtime status leaked private profile data: %s", status)
+	}
+	if !strings.Contains(status, `"error":"runtime needs attention"`) {
+		t.Fatalf("runtime status did not use generic discovery error: %s", status)
+	}
+	for _, want := range []string{"profile-one", "revision-one", "@one:gulls.ai", "sea.example.test", "identity_digest"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("runtime status omitted %q: %s", want, status)
+		}
+	}
+}
+
+func TestPublicRuntimeErrorKeepsAuthorizationActionable(t *testing.T) {
+	if got := publicRuntimeError("authorization_required", "private path: /Users/example/token?key=sga_secret"); got != "authorization required" {
+		t.Fatalf("authorization discovery error = %q", got)
+	}
+	if got := publicRuntimeError("reconnecting", "private path: /Users/example/token?key=sga_secret"); got != "runtime needs attention" {
+		t.Fatalf("runtime discovery error = %q", got)
+	}
+}
+
+func TestParseGlobalExplicitRuntimeSelection(t *testing.T) {
+	global, remaining, err := parseGlobal("gulls", []string{
+		"--profile-id", "profile-one", "--connection-revision", "revision-one", "inbox",
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.ProfileID != "profile-one" || global.Revision != "revision-one" || len(remaining) != 1 || remaining[0] != "inbox" {
+		t.Fatalf("parsed selection = %#v remaining=%#v", global, remaining)
+	}
+}
+
+func TestExplicitRuntimeSelectionFailsClosedWhenRuntimeUnavailable(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "runtime.sock")
+	env := []string{"SEAGULL_RUNTIME_SOCKET=" + socket}
+	global := globalOptions{ProgramName: "gulls", ProfileID: "profile-one", Revision: "revision-one"}
+	_, handled, err := tryRuntimeRoute(global, []string{"inbox"}, io.Discard, io.Discard, env)
+	if !handled || err == nil || !strings.Contains(err.Error(), "runtime is not running") {
+		t.Fatalf("explicit unavailable route: handled=%v err=%v", handled, err)
+	}
+	_, handled, err = tryRuntimeRoute(global, []string{"watch"}, io.Discard, io.Discard, env)
+	if !handled || err == nil || !strings.Contains(err.Error(), "watch only with --once") {
+		t.Fatalf("explicit long-lived watch route: handled=%v err=%v", handled, err)
+	}
+	for _, command := range []string{"codex", "local-action"} {
+		_, handled, err = tryRuntimeRoute(global, []string{command}, io.Discard, io.Discard, env)
+		if handled || err != nil {
+			t.Fatalf("local command %s was runtime-routed: handled=%v err=%v", command, handled, err)
+		}
+	}
+}
+
 func TestRuntimePausedSnapshotPermissions(t *testing.T) {
 	dir := t.TempDir()
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"items":[]}`)) }))

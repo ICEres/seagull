@@ -43,6 +43,35 @@ The local project marketplace points at that plugin through:
 .agents/plugins/marketplace.json
 ```
 
+The current plugin source version is `0.1.2+codex.20261026`. After updating the
+source plugin, refresh it through the normal Codex plugin update flow and
+verify that the installed skill contains the `Multiple Gull Profiles` and
+`Mac Task Handoffs` sections. Do not edit the plugin cache by hand.
+
+The supported local CLI flow is:
+
+```text
+codex plugin add seagull@seagull-project
+codex plugin list --marketplace seagull-project --json
+```
+
+Already-open Codex chats may need an App restart to load the refreshed plugin.
+Updating the plugin does not rebuild `gulls`; keep the command on `PATH` aligned
+with the current Mac App's bundled CLI.
+
+When a Mac has more than one owned Gull, use the runtime's sanitized discovery
+output and pass the selected profile ID and connection revision to every CLI
+command:
+
+```text
+gulls --json runtime status
+gulls --profile-id <profile_id> --connection-revision <revision> inbox
+```
+
+The CLI fails closed when an explicitly selected runtime profile cannot be
+verified. This prevents a missing resident runtime from silently falling back
+to the ambient connector environment.
+
 Keep Codex-specific behavior in prompts or agent profile rules. Keep transport,
 inbox, reply, notification, and context-file behavior in the shared local agent
 connector.
@@ -51,6 +80,14 @@ Connector-driven response generation follows the shared
 [Connector Response Rules](../response-rules.md) contract.
 Codex-specific prompts may influence drafting only through that trusted rule
 configuration, not through untrusted message content.
+
+Delegated automatic replies use a separate, explicit artifact. A task may carry
+a scoped `reply_authorization_id`; Codex then writes `reply.json` with
+`gulls codex reply`, bound to the immutable request digest. The Mac Gull outbox
+publishes that exact content with an idempotent `reply-publish` operation and
+reconciles uncertain responses with `reply-status`. Ordinary `result.json`
+artifacts remain private owner-facing results, and the plugin never sends them
+implicitly or invokes the publication endpoint directly.
 
 ## Pet Personal Agent Asset Profile
 

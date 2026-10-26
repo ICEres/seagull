@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,15 @@ type historyQueryClient interface {
 
 type historyDeliveryClient interface {
 	HistoryDelivery(deliveryID string) (map[string]any, error)
+}
+
+// delegatedReplyClient is implemented by clients that support the versioned,
+// idempotent public-reply publication endpoint. It is intentionally optional
+// so test doubles and older embedded clients can continue to satisfy Client;
+// callers must fail closed when delegated publication is requested without it.
+type delegatedReplyClient interface {
+	PublishDelegatedReply(deliveryID, publicationKey, taskID, content string) (map[string]any, error)
+	DelegatedReplyStatus(deliveryID, publicationKey string) (map[string]any, error)
 }
 
 func getInboxForContext(client Client, handle string, limit int) (map[string]any, error) {
@@ -243,6 +253,43 @@ func (c *HTTPClient) DecideDelivery(deliveryID string, agentHandle string, decis
 		path = "/agent/deliveries/" + escapePathValue(deliveryID) + "/decision"
 	}
 	return c.request(http.MethodPost, path, body)
+}
+
+// PublishDelegatedReply submits the exact content produced by a delegated
+// agent. The publication key is the durable idempotency key bound to the
+// source delivery and task. This never falls back to the legacy decision
+// endpoint because that endpoint is not safe for automatic retries.
+func (c *HTTPClient) PublishDelegatedReply(deliveryID, publicationKey, taskID, content string) (map[string]any, error) {
+	if c.Token == "" {
+		return nil, errors.New("delegated reply publication requires an authenticated local connection")
+	}
+	if strings.TrimSpace(publicationKey) == "" {
+		return nil, errors.New("delegated reply publication requires publication_key")
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, errors.New("delegated reply content must not be empty")
+	}
+	body := map[string]any{
+		"publication_key": publicationKey,
+		"content":         content,
+	}
+	if strings.TrimSpace(taskID) != "" {
+		body["task_id"] = taskID
+	}
+	return c.request(http.MethodPost, "/agent/deliveries/"+escapePathValue(deliveryID)+"/reply-publications", body)
+}
+
+// DelegatedReplyStatus reconciles an uncertain send after a network timeout.
+// A missing receipt is returned by the server as a normal 404 statusError;
+// callers should surface that distinction instead of retrying blindly.
+func (c *HTTPClient) DelegatedReplyStatus(deliveryID, publicationKey string) (map[string]any, error) {
+	if c.Token == "" {
+		return nil, errors.New("delegated reply status requires an authenticated local connection")
+	}
+	if strings.TrimSpace(publicationKey) == "" {
+		return nil, errors.New("delegated reply status requires publication_key")
+	}
+	return c.request(http.MethodGet, "/agent/deliveries/"+escapePathValue(deliveryID)+"/reply-publications/"+escapePathValue(publicationKey), nil)
 }
 
 func escapePathValue(value string) string {

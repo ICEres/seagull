@@ -395,7 +395,7 @@ struct DashboardView: View {
     private var codexEntries: [CodexDashboardEntry] {
         codexTasks.flatMap { store in
             store.tasks.compactMap { task in
-                task.execution == nil ? nil : CodexDashboardEntry(store: store, task: task)
+                task.execution == nil && task.reply == nil ? nil : CodexDashboardEntry(store: store, task: task)
             }
         }
         .sorted { ($0.task.request.createdAt, $0.id) > ($1.task.request.createdAt, $1.id) }
@@ -403,23 +403,64 @@ struct DashboardView: View {
 
     private var codexSummary: String {
         let statuses = codexEntries.compactMap { $0.task.execution?.status }
+        let queued = statuses.filter { $0 == .queued }.count
         let active = statuses.filter { $0 == .starting || $0 == .working }.count
         let approval = statuses.filter { $0 == .needsApproval }.count
-        let ready = statuses.filter { $0 == .draftReady }.count
+        let ready = codexEntries.filter { hasUsableDraft($0.task) }.count
+        let review = codexEntries.filter {
+            $0.task.execution?.status == .uncertain
+                || ($0.task.reply.map { [.needsReview, .uncertain, .failed].contains($0.status) } ?? false)
+        }.count
         var parts: [String] = []
+        if queued > 0 { parts.append("\(queued) queued") }
         if active > 0 { parts.append("\(active) working") }
         if approval > 0 { parts.append("\(approval) needs approval") }
         if ready > 0 { parts.append("\(ready) ready") }
+        if review > 0 { parts.append("\(review) needs review") }
         return parts.joined(separator: " · ")
     }
 
+    private func hasUsableDraft(_ task: CodexTask) -> Bool {
+        guard task.reply == nil, task.result != nil, task.resultError == nil else { return false }
+        switch task.work?.draftDisposition ?? .available {
+        case .available, .used:
+            return true
+        case .sent, .discarded, .superseded:
+            return false
+        }
+    }
+
     private func codexStatus(_ task: CodexTask) -> String {
+        if let reply = task.reply {
+            switch reply.status {
+            case .waitingForReply: break
+            case .needsReview: return "Reply needs review"
+            case .readyToSend, .sending: return "Sending reply"
+            case .uncertain: return "Check send status"
+            case .sent: return "Reply sent"
+            case .revoked: return "Taken over"
+            case .failed: return "Reply not sent"
+            }
+            if task.execution?.status == .draftReady { return "No public reply submitted" }
+        }
+        if task.execution?.status == .draftReady {
+            guard task.resultError == nil else { return "Draft unavailable" }
+            switch task.work?.draftDisposition ?? .available {
+            case .available, .used: return "Draft ready"
+            case .sent: return "Draft sent"
+            case .discarded: return "Draft discarded"
+            case .superseded: return "Draft superseded"
+            }
+        }
         switch task.execution?.status {
+        case .queued: return "Queued"
         case .starting: return "Starting"
         case .working: return "Working"
         case .needsApproval: return "Needs approval"
         case .draftReady: return "Draft ready"
         case .interrupted: return "Stopped"
+        case .uncertain: return "Needs review"
+        case .cancelled: return "Cancelled"
         case .failed: return "Failed"
         case nil: return "Awaiting draft"
         }
@@ -611,7 +652,7 @@ struct ConversationsView: View {
                 .joined(separator: " ")
                 .lowercased()
                 .contains(query)
-            if localMatch { return true }
+            if localMatch || group.items.contains(where: { $0.senderSearchText.lowercased().contains(query) }) { return true }
             guard isHistorySearchReady(group.profileID, query, filter.historyStatus) else { return false }
             let matchedIDs = historyMatchedDeliveryIDs(group.profileID)
             return group.items.contains { matchedIDs.contains($0.id) }

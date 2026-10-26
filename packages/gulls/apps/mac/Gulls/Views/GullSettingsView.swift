@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GullSettingsView: View {
     @Bindable var account: CloudAccountStore
+    var workspace: GullsWorkspace?
     var onPair: ((CloudAgentProfile) -> Void)?
 
     @State private var selectedID: String?
@@ -36,9 +37,11 @@ struct GullSettingsView: View {
 
     init(
         account: CloudAccountStore,
+        workspace: GullsWorkspace? = nil,
         onPair: ((CloudAgentProfile) -> Void)? = nil
     ) {
         self.account = account
+        self.workspace = workspace
         self.onPair = onPair
     }
 
@@ -225,6 +228,34 @@ struct GullSettingsView: View {
                 .frame(width: 180)
                 .disabled(isSaving || runtimeLoading.contains(gull.id) || runtimeSaving.contains(gull.id) || runtimeModes[gull.id] == nil)
             }
+            if let local = localConfig(for: gull), let tasks = workspace?.codexTasks[local.profileID] {
+                Text("On this Mac")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.top, 6)
+                CloudSettingsRow(
+                    "Send replies automatically",
+                    detail: local.sendRepliesAutomatically
+                        ? "Replies submitted by this Gull's agent are sent automatically."
+                        : "Delegated replies wait for your approval before sending."
+                ) {
+                    Toggle("Send replies automatically", isOn: Binding(
+                        get: { local.sendRepliesAutomatically },
+                        set: { value in
+                            do {
+                                try tasks.setSendRepliesAutomatically(value)
+                            } catch {
+                                status = error.localizedDescription
+                                statusIsError = true
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                }
+                Text("Applies to work handed to this Gull on this Mac. Existing replies waiting for review stay in review.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if onPair != nil {
                 Button("Pair this Mac") { requestPair(gull) }
                     .buttonStyle(.bordered)
@@ -234,6 +265,17 @@ struct GullSettingsView: View {
             if let status {
                 CloudSettingsStatus(message: status, isError: statusIsError)
             }
+        }
+    }
+
+    private func localConfig(for gull: CloudAgentProfile) -> GullsConfig? {
+        guard let socialURL = account.runtime?.socialAPIURL,
+              let server = try? CodexWorkRecord.normalizedAPIURL(socialURL) else { return nil }
+        return workspace?.connections.profiles.first { config in
+            guard config.isLocallyPaired,
+                  (try? CodexWorkRecord.normalizedAPIURL(config.socialAPIURL)) == server else { return false }
+            return config.agentHandle.caseInsensitiveCompare(gull.handle) == .orderedSame
+                || config.agentHandle.caseInsensitiveCompare("@\(gull.handle)") == .orderedSame
         }
     }
 

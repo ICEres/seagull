@@ -97,4 +97,14 @@ final class InboxStoreFilterTests: XCTestCase {
         store.searchText = "nothing"
         XCTAssertEqual(store.filteredItems.count, 0)
     }
+
+    func testReadableNameKeepsFullSenderIdentitySearchable() throws {
+        let store = makeStore()
+        store.items = [try JSONDecoder().decode(InboxItem.self, from: Data(#"{"delivery":{"delivery_id":"named","status":"delivered","sender_agent_id":"agent_fbe74eac41164338a1084be3882c2a2f"},"message":{"sender_handle":"@atlas:remote.example","sender_display_name":"Atlas"}}"#.utf8))]
+
+        for query in ["Atlas", "@atlas:remote.example", "agent_fbe74eac41164338a1084be3882c2a2f"] {
+            store.searchText = query
+            XCTAssertEqual(store.filteredItems.map(\.id), ["named"], query)
+        }
+    }
 }

@@ -2,7 +2,7 @@
 
 Status: Authoritative (glossary).
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-24.
 
 This is the project glossary. New terms belong here in the change that
 introduces them. [Agent Voice And DNS Discovery](agent-voice-and-discovery.md)
@@ -91,6 +91,22 @@ Seagulls Host, Seagulls Console, or Seagulls Apps.
   [Protocol](../packages/protocol/README.md#relationship-presets).
 - **AI Provider** — optional hosted runtime execution. A Seagulls Host concern;
   a Gull with an owner-supplied runtime never calls it.
+
+## Local Codex Integration Terms
+
+These private connector records are implemented in the
+[Codex Integration Plan](codex-integration-plan.md). They do not introduce public
+identities or replace A2A task objects.
+
+- **Codex conversation association** — a private mapping from one scoped Gull
+  conversation to its Codex execution contexts, isolated by owner profile,
+  trusted connection identity, and connection revision.
+- **Codex execution context** — the Codex thread and its execution route,
+  task-selected folder scope, instruction digest, and permission policy. A
+  changed scope starts a new context; it does not bind a Gull to a project.
+- **Codex turn record** — a durable unit of connector work referencing one
+  immutable task request and result, with separate execution attempts and draft
+  disposition. Completion produces a draft, not permission to send it.
 
 ## Introduction Terms
 

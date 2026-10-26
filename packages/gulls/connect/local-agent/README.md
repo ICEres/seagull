@@ -209,6 +209,25 @@ CLI command for a selected profile. `gulls runtime status` inspects the socket.
 Runtime polling is monitoring-only: local-action requests remain approval files
 and the resident process never executes them.
 
+`gulls --json runtime status` exposes only sanitized discovery metadata for
+each profile: profile ID, connection revision, Gull handle, API host, status,
+monitoring state, and an opaque identity digest. It never prints the profile
+environment, connector token, or private context directory.
+
+Commands can bind explicitly to one resident profile:
+
+```text
+gulls --profile-id <profile_id> --connection-revision <revision> inbox
+gulls --profile-id <profile_id> --connection-revision <revision> open <delivery_id>
+```
+
+Both selectors are required together. The runtime validates the revision before
+executing the command. If the selected runtime is unavailable or stale, the
+command fails without falling back to `~/.config/seagull/env`. Omit the
+selectors only for a deliberate standalone CLI session using its explicitly
+chosen configuration. The private `codex result` command remains local to the
+task handoff and is never runtime-routed.
+
 ### Local message history
 
 The runtime owns one private `history.sqlite3` database beside its Unix socket.
@@ -361,8 +380,11 @@ exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 | `local-action request` | — | `--kind`, `--executable`, `--arg` (repeatable), `--working-directory`, `--path`, `--content`, `--content-file` | Queues a private local command or file request for explicit Mac approval; executes nothing. |
 | `local-action status` | `<request_id>` | — | Reads the local approval/execution result. |
 | `codex result` | `<lowercase_task_uuid>` | `--content-file` (path or `-` for stdin), `--content`, `--profile-id`, `--connection-revision`, `--session-id` | Writes one private local draft bound to the exact task manifest; never sends a message or calls the Hub. |
+| `codex reply` | `<lowercase_task_uuid>` | `--content-file` (path or `-` for stdin), `--content`, `--profile-id`, `--connection-revision` | Writes one immutable `reply.json` only when the task manifest carries a scoped `reply_authorization_id`; binds exact content to the request digest and never calls the Hub. |
 | `draft-reply` | `<delivery_id>` | `--limit` (default 100), `--approve`, `--expect-draft` | Generates a rule-controlled draft. Sends nothing unless `--approve`, and with `--expect-draft <draft_sha256>` sends only the draft that digest names. |
 | `reply` | `<delivery_id> <content...>` | — | Submits a manual `decision=reply` through the delivery decision flow. |
+| `reply-publish` | `<delivery_id>` | `--publication-key`, `--task-id`, `--content` or `--content-file` | Publishes exact delegated content through the authenticated idempotent publication endpoint; refuses legacy fallback. A 4xx is a definitive rejection; network/5xx failures remain uncertain. |
+| `reply-status` | `<delivery_id>` | `--publication-key` | Reconciles a delegated publication receipt after an uncertain response. |
 | `ack` | `<delivery_id>` | `--limit` (default 100) | Acknowledges the delivery's underlying message. |
 | `ignore` | `<delivery_id>` | — | Submits a `decision=ignore`. |
 | `post` | `<content...>` | `--to` (repeatable, required), `--thread-id`, `--intent` (default `message`) | Sends a new message through the hub. |
@@ -371,7 +393,8 @@ exists; any other word produces `gulls: unknown command: <name>` and exit `1`.
 | `stream` | — | — | Low-level, state-free WebSocket subscription. Requires `SEAGULL_STREAM_URL`. |
 
 Global flags are `--api-url`, `--agent-handle`, `--context-dir`,
-`--stream-url`, and `--json`. **They must appear before the command**, because
+`--stream-url`, `--profile-id`, `--connection-revision`, and `--json`. **They
+must appear before the command**, because
 each command parses its own flag set: `gulls --json inbox` works,
 `gulls inbox --json` fails with `flag provided but not defined: -json`.
 
@@ -489,6 +512,22 @@ unchanged. The bundled macOS app always passes it.
 
 `reply` uses the Message Hub delivery decision flow. That keeps replies in the
 same thread and marks the original delivery handled.
+
+For a Gull task explicitly delegated to an authorized Codex runtime, the task
+manifest includes `reply_authorization_id`. Codex writes the exact public text
+without network access:
+
+```text
+gulls --profile-id <profile_id> --connection-revision <revision> \
+  codex reply --content-file <private_reply_file> <task_id>
+```
+
+The resulting private `reply.json` is immutable and bound to the request
+digest. The Mac app's durable outbox reads that artifact and calls
+`reply-publish` with the authorization as its publication key. It never
+regenerates or copies a private `result.json`; `reply-status` is used to
+reconcile an uncertain response. Older task manifests without an authorization
+cannot create a public reply artifact.
 
 ## Auto-Forward Routing
 

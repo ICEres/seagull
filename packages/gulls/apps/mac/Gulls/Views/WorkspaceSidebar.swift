@@ -10,7 +10,8 @@ struct WorkspaceSidebar: View {
     let overviewSelected: Bool
     let messagesSelected: Bool
     let gullsSelected: Bool
-    let totalAttentionCount: Int
+    let attentionCount: Int
+    var scopeName: String? = nil
     var accountName: String = "Your account"
     let onOverview: () -> Void
     let onMessages: () -> Void
@@ -40,7 +41,7 @@ struct WorkspaceSidebar: View {
                 title: "Messages",
                 systemImage: "bubble.left.and.bubble.right",
                 selected: messagesSelected,
-                badge: totalAttentionCount,
+                badge: attentionCount,
                 action: onMessages
             )
             navigationButton(
@@ -123,9 +124,10 @@ struct WorkspaceSidebar: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(title)
+        .help(title == "Messages" ? "Messages · \(scopeName ?? "All Gulls")" : title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityLabel(badge > 0 ? "\(title), \(attentionCountLabel(badge))" : title)
+        .accessibilityValue(title == "Messages" ? scopeName ?? "All Gulls" : "")
     }
 
     private var accountFooter: some View {

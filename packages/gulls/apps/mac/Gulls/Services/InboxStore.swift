@@ -17,6 +17,7 @@ final class InboxStore {
     /// config can change before GullsWorkspace has replaced the store.
     let connectionRevision: String
     @ObservationIgnored var onUpdateBadge: (() -> Void)?
+    @ObservationIgnored var beforeOwnerDecision: ((String) async throws -> Void)?
 
     var items: [InboxItem] = []
     var selectedDeliveryID: String?
@@ -135,7 +136,7 @@ final class InboxStore {
         return mergedItems.filter { item in
             guard filter.matches(item.delivery.statusValue) else { return false }
             guard !query.isEmpty else { return true }
-            return item.senderDisplay.lowercased().contains(query)
+            return item.senderSearchText.lowercased().contains(query)
                 || (item.bodyText?.lowercased().contains(query) ?? false)
         }
     }
@@ -444,12 +445,16 @@ final class InboxStore {
     @discardableResult
     func reply(to deliveryID: String, content: String) async -> DecisionResult? {
         await performAction(title: "Couldn’t send reply") { cli, environment in
-            try await cli.reply(id: deliveryID, content: content, environment: environment)
+            try await self.beforeOwnerDecision?(deliveryID)
+            guard self.isCurrent else { throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting") }
+            return try await cli.reply(id: deliveryID, content: content, environment: environment)
         }
     }
 
     func ack(_ deliveryID: String) async {
         _ = await performAction(title: "Couldn’t acknowledge message") { cli, environment in
+            try await self.beforeOwnerDecision?(deliveryID)
+            guard self.isCurrent else { throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting") }
             try await cli.ack(id: deliveryID, environment: environment)
         }
     }
@@ -457,7 +462,9 @@ final class InboxStore {
     @discardableResult
     func ignore(_ deliveryID: String) async -> DecisionResult? {
         await performAction(title: "Couldn’t ignore message") { cli, environment in
-            try await cli.ignore(id: deliveryID, environment: environment)
+            try await self.beforeOwnerDecision?(deliveryID)
+            guard self.isCurrent else { throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting") }
+            return try await cli.ignore(id: deliveryID, environment: environment)
         }
     }
 
@@ -470,6 +477,10 @@ final class InboxStore {
             throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting")
         }
         guard let cli else { throw GullsCLI.Failure.launch("bundled gulls binary is missing") }
+        if approve {
+            try await beforeOwnerDecision?(deliveryID)
+            guard isCurrent else { throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting") }
+        }
         let result = try await cli.draftReply(
             id: deliveryID,
             approve: approve,
@@ -487,6 +498,32 @@ final class InboxStore {
         await performAction(title: "Couldn’t open context", refreshAfter: false) { cli, environment in
             try await cli.openDelivery(id: deliveryID, environment: environment)
         }
+    }
+
+    /// Writes a delivery context while preserving the underlying CLI error for
+    /// callers that can present a task-scoped failure inline. The connection
+    /// revision is captured before the subprocess starts so a result from an
+    /// old profile can never be accepted after an edit or reconnect.
+    func prepareContextFile(for deliveryID: String) async throws -> OpenResult {
+        guard isCurrent else {
+            throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting")
+        }
+        guard config.isConfigured else {
+            throw GullsCLI.Failure.configuration("the Gull connection is not configured")
+        }
+        guard let cli else {
+            throw GullsCLI.Failure.launch("bundled gulls binary is missing")
+        }
+
+        let revision = config.connectionRevision
+        let environment = config.cliEnvironment()
+        try Task.checkCancellation()
+        let result = try await cli.openDelivery(id: deliveryID, environment: environment)
+        try Task.checkCancellation()
+        guard revision == config.connectionRevision, isCurrent else {
+            throw GullsCLI.Failure.configuration("connection changed; refresh the Gull before acting")
+        }
+        return result
     }
 
     private func performAction<T>(

@@ -190,6 +190,16 @@ actor GullsCLI {
         try await runDecoding(["reply", id, content], environment: environment)
     }
 
+    func publishReply(id: String, publicationKey: String, taskID: String, contentFile: URL,
+                      environment: Environment) async throws -> GullReplyReceipt {
+        try await runDecoding(["reply-publish", "--publication-key", publicationKey,
+                              "--task-id", taskID, "--content-file", contentFile.path, id], environment: environment)
+    }
+
+    func replyStatus(id: String, publicationKey: String, environment: Environment) async throws -> GullReplyReceipt {
+        try await runDecoding(["reply-status", "--publication-key", publicationKey, id], environment: environment)
+    }
+
     func ack(id: String, environment: Environment) async throws {
         // Ack output is an opaque hub map; exit code 0 is the contract.
         _ = try await run(["ack", id], environment: environment)

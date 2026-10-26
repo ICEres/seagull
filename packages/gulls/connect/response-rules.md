@@ -1,5 +1,11 @@
 # Connector Response Rules
 
+Owner-delegated Codex tasks have a separate explicit public-reply boundary;
+see [Delegated reply delivery](../docs/codex-integration-plan.md#delegated-reply-delivery--october-26-update).
+That local per-Gull authorization applies only to newly handed-over tasks. It
+does not relax this rule engine's draft approval, authorize local operations,
+or turn arbitrary final output or incoming messages into permission to send.
+
 > **Status: Migrating.** Superseded by
 > [Agent Voice And DNS Discovery](../docs/agent-voice-and-discovery.md), which
 > wins wherever this document conflicts with it.

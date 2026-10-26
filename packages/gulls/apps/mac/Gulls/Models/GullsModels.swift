@@ -72,6 +72,8 @@ struct InboxItem: Decodable, Equatable, Identifiable {
     let delivery: Delivery
     let message: Message?
     let currentMessage: CurrentMessage?
+    // Local directory metadata is presentation-only; payload identity stays intact.
+    var resolvedSenderDisplayName: String? = nil
 
     var id: String { delivery.deliveryId }
 
@@ -81,9 +83,17 @@ struct InboxItem: Decodable, Equatable, Identifiable {
         case currentMessage = "current_message"
     }
 
-    // Same fallbacks the CLI uses in itemSummary (context.go).
     var senderDisplay: String {
-        firstNonEmpty(message?.senderHandle, message?.senderAgentId, delivery.senderAgentId) ?? "unknown"
+        firstNonEmpty(resolvedSenderDisplayName) ?? GullIdentityDisplay.readableName(
+            displayName: message?.senderDisplayName,
+            handle: message?.senderHandle,
+            agentID: firstNonEmpty(message?.senderAgentId, delivery.senderAgentId)
+        ) ?? "unknown"
+    }
+
+    var senderSearchText: String {
+        [senderDisplay, message?.senderHandle ?? "", message?.senderAgentId ?? "", delivery.senderAgentId ?? ""]
+            .joined(separator: " ")
     }
 
     var bodyText: String? {
@@ -140,6 +150,7 @@ struct Message: Decodable, Equatable {
     let threadId: String?
     let senderAgentId: String?
     let senderHandle: String?
+    let senderDisplayName: String?
     let intent: String?
     let visibility: String?
     let contentInline: String?
@@ -151,11 +162,53 @@ struct Message: Decodable, Equatable {
         case threadId = "thread_id"
         case senderAgentId = "sender_agent_id"
         case senderHandle = "sender_handle"
+        case senderDisplayName = "sender_display_name"
         case intent
         case visibility
         case contentInline = "content_inline"
         case safetyStatus = "safety_status"
         case createdAt = "created_at"
+    }
+}
+
+/// Presentation-only identity fallback for external Gulls.
+///
+/// Agent IDs remain the source of truth for routing and grouping. This helper
+/// only prevents opaque IDs from leaking into titles and avatars when the hub
+/// has not supplied a public handle or display name.
+enum GullIdentityDisplay {
+    static func readableName(displayName: String?, handle: String?, agentID: String?) -> String? {
+        if let displayName = normalized(displayName) {
+            return displayName
+        }
+        if let handle = normalized(handle), !isOpaqueAgentID(handle) {
+            return localPart(of: handle) ?? handle
+        }
+        guard let agentID = normalized(agentID) else { return nil }
+        return "Gull · \(shortAgentID(agentID))"
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func localPart(of handle: String) -> String? {
+        let value = handle.hasPrefix("@") ? String(handle.dropFirst()) : handle
+        guard let colon = value.firstIndex(of: ":") else { return nil }
+        let local = String(value[..<colon])
+        return local.isEmpty ? nil : local
+    }
+
+    private static func shortAgentID(_ agentID: String) -> String {
+        let value = agentID.hasPrefix("agent_") ? String(agentID.dropFirst("agent_".count)) : agentID
+        guard value.count > 6 else { return value }
+        return String(value.prefix(6)) + "…"
+    }
+
+    private static func isOpaqueAgentID(_ value: String) -> Bool {
+        value.hasPrefix("agent_") || value.hasPrefix("agent-")
     }
 }
 

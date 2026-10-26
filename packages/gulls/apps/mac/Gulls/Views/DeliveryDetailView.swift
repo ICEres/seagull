@@ -16,6 +16,10 @@ struct DeliveryDetailView: View {
     var onStopCodex: (() -> Void)? = nil
     var onApproveCodex: (() -> Void)? = nil
     var onDeclineCodex: (() -> Void)? = nil
+    var onCheckStatusCodex: (() -> Void)? = nil
+    var onApproveReply: (() -> Void)? = nil
+    var onCheckReplyStatus: (() -> Void)? = nil
+    var onTakeOverReply: (() -> Void)? = nil
     var compact = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var contextExpanded = false
@@ -66,6 +70,33 @@ struct DeliveryDetailView: View {
                     .background(GullsStyle.messageIncoming, in: RoundedRectangle(cornerRadius: 18))
                     Spacer(minLength: compact ? 0 : 28)
                 }
+                if let reply = codexTask?.reply,
+                   reply.status == .sent, reply.messageID != nil,
+                   let content = reply.content,
+                   !content.isEmpty {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        Spacer(minLength: compact ? 0 : 28)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(verbatim: localGullName)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Text(verbatim: content)
+                                .font(.body)
+                                .textSelection(.enabled)
+                            if let sentAt = reply.sentAt {
+                                Text(Self.displayReceived(sentAt))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                        }
+                        .padding(16)
+                        .background(GullsStyle.messageOutgoing, in: RoundedRectangle(cornerRadius: 18))
+                        if !compact {
+                            WingAvatar(identity: localGullName, size: 26)
+                        }
+                    }
+                }
                 if let lastError = item.delivery.lastError {
                     Label(lastError, systemImage: "exclamationmark.triangle")
                         .font(.callout)
@@ -75,12 +106,17 @@ struct DeliveryDetailView: View {
                 if let codexTask {
                     CodexTaskResultView(
                         task: codexTask,
+                        gullName: localGullName,
                         onUseDraft: onUseCodexDraft,
                         onOpen: onReopenCodexTask,
                         onContinue: onContinueCodex,
                         onStop: onStopCodex,
                         onApprove: onApproveCodex,
-                        onDecline: onDeclineCodex
+                        onDecline: onDeclineCodex,
+                        onCheckStatus: onCheckStatusCodex,
+                        onApproveReply: onApproveReply,
+                        onCheckReplyStatus: onCheckReplyStatus,
+                        onTakeOverReply: onTakeOverReply
                     )
                 }
                 DisclosureGroup("Message details") {
@@ -159,10 +195,10 @@ struct DeliveryDetailView: View {
     private var codexButton: some View {
         if let onOpenCodex {
             Button(action: onOpenCodex) {
-                Label { Text("Work with Codex") } icon: { GullsAIIcon() }
+                Label { Text("Let \(localGullName) handle this") } icon: { GullsAIIcon() }
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Work with Codex")
+            .accessibilityLabel("Let \(localGullName) handle this")
             .help("Start a Codex task for this message")
         }
     }

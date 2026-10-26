@@ -47,6 +47,7 @@ final class CodexTaskStoreTests: XCTestCase {
 
     private func writeResult(_ task: CodexTask, in store: CodexTaskStore,
                              changing: (inout [String: Any]) -> Void = { _ in }) throws {
+        _ = try store.selectRoute(.external, for: task)
         let directory = taskDirectory(task, in: store)
         let request = try Data(contentsOf: directory.appendingPathComponent("request.json"))
         var object: [String: Any] = [
@@ -110,7 +111,7 @@ final class CodexTaskStoreTests: XCTestCase {
     func testFolderIsOptionalAndSecretsStayOutOfHandoffAndLink() throws {
         let config = try config()
         var opened: URL?
-        let store = CodexTaskStore(config: config, openURL: { opened = $0; return true })
+        let store = CodexTaskStore(config: config, openURL: { opened = $0; return true }, copyHandoff: { _ in })
         let task = try create(store)
         let directory = taskDirectory(task, in: store)
         let requestData = try Data(contentsOf: directory.appendingPathComponent("request.json"))
@@ -218,8 +219,8 @@ final class CodexTaskStoreTests: XCTestCase {
         try FileManager.default.removeItem(at: directory.appendingPathComponent("result.json"))
         try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("result.json"), withDestinationURL: requestURL)
         store.refresh()
-        XCTAssertNotNil(store.latestTask(for: "delivery-one")?.resultError)
-        XCTAssertNil(store.latestTask(for: "delivery-one")?.result)
+        XCTAssertNil(store.latestTask(for: "delivery-one"))
+        XCTAssertNotNil(store.lastError)
     }
 
     func testExecutionUpdatesPinExactRequestDigestWithoutReadingMessageSnapshot() throws {
@@ -257,6 +258,103 @@ final class CodexTaskStoreTests: XCTestCase {
         invalid.completedAt = "2026-10-21T09:00:00Z"
         XCTAssertNoThrow(try store.updateExecution(invalid, for: task))
         XCTAssertEqual(store.tasks.first?.result?.content, "A draft")
+    }
+
+    func testTamperedNativeResultNeverBecomesDraftEvenWithCachedDraftReadyExecution() throws {
+        let store = CodexTaskStore(config: try config())
+        let task = try create(store, deliveryID: "delivery-one")
+        let routed = try store.selectRoute(.embedded, for: task)
+        let threadID = UUID().uuidString.lowercased()
+        let execution = CodexTaskExecution(status: .draftReady, output: "Original draft",
+                                            codexThreadID: threadID, turnID: "turn-1",
+                                            completedAt: "2026-10-21T09:00:00Z")
+        try store.updateExecution(execution, for: routed)
+
+        let resultURL = taskDirectory(task, in: store).appendingPathComponent("result.json")
+        var tampered = try JSONSerialization.jsonObject(with: Data(contentsOf: resultURL)) as! [String: Any]
+        tampered["content"] = "Tampered draft"
+        try JSONSerialization.data(withJSONObject: tampered).write(to: resultURL)
+        store.refresh()
+
+        let refreshed = try XCTUnwrap(store.latestTask(for: "delivery-one"))
+        XCTAssertNil(refreshed.result)
+        XCTAssertNotNil(refreshed.resultError)
+        XCTAssertThrowsError(try store.draft(for: refreshed, deliveryID: "delivery-one"))
+    }
+
+    func testDraftReadyExecutionRecoversImmutableResultAfterPublicationCrash() throws {
+        let config = try config()
+        let task: CodexTask
+        do {
+            let store = CodexTaskStore(config: config)
+            task = try create(store, deliveryID: "delivery-one")
+            let routed = try store.selectRoute(.embedded, for: task)
+            let execution = CodexTaskExecution(status: .draftReady, output: "Recovered draft",
+                                                codexThreadID: UUID().uuidString.lowercased(), turnID: "turn-1",
+                                                completedAt: "2026-10-21T09:00:00Z")
+            try store.updateExecution(execution, for: routed)
+            try FileManager.default.removeItem(at: taskDirectory(task, in: store).appendingPathComponent("result.json"))
+        }
+
+        let restored = CodexTaskStore(config: config)
+        let recovered = try XCTUnwrap(restored.latestTask(for: "delivery-one"))
+        XCTAssertEqual(recovered.result?.content, "Recovered draft")
+        XCTAssertNil(recovered.resultError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: taskDirectory(task, in: restored)
+            .appendingPathComponent("result.json").path))
+    }
+
+    func testPreparedPublicationIsRecoveredOnNextLoad() throws {
+        let config = try config()
+        let task: CodexTask
+        do {
+            let store = CodexTaskStore(config: config)
+            task = try create(store, deliveryID: "delivery-one")
+            var work = try XCTUnwrap(task.work)
+            work.publication = .prepared
+            let database = try CodexSessionDatabase(url: store.tasksDirectory.appendingPathComponent("sessions.sqlite3"))
+            try database.saveWork(work)
+        }
+
+        let restored = CodexTaskStore(config: config)
+        let recovered = try XCTUnwrap(restored.latestTask(for: "delivery-one"))
+        XCTAssertEqual(recovered.work?.publication, .ready)
+        XCTAssertNil(recovered.resultError)
+    }
+
+    func testTerminalDraftDispositionCannotBeReusedOrRedirected() throws {
+        let store = CodexTaskStore(config: try config())
+        let task = try create(store, deliveryID: "delivery-one")
+        try writeResult(task, in: store)
+        let ready = try XCTUnwrap(store.latestTask(for: "delivery-one"))
+
+        XCTAssertEqual(try store.draft(for: ready, deliveryID: "delivery-one"), "A proposed reply, not a sent message.")
+        try store.updateDraftDisposition(.sent, for: ready, deliveryID: "delivery-one")
+
+        XCTAssertThrowsError(try store.updateDraftDisposition(.available, for: ready, deliveryID: "delivery-one"))
+        XCTAssertThrowsError(try store.updateDraftDisposition(.used, for: ready, deliveryID: "delivery-one"))
+        XCTAssertThrowsError(try store.draft(for: ready, deliveryID: "delivery-two"))
+        XCTAssertThrowsError(try store.updateDraftDisposition(.discarded, for: ready, deliveryID: "delivery-two"))
+    }
+
+    func testImportedExternalResultCannotBeReplacedByAnotherValidResult() throws {
+        let store = CodexTaskStore(config: try config())
+        let task = try create(store, deliveryID: "delivery-one")
+        try writeResult(task, in: store)
+        let ready = try XCTUnwrap(store.latestTask(for: "delivery-one"))
+        XCTAssertEqual(ready.result?.content, "A proposed reply, not a sent message.")
+
+        let resultURL = taskDirectory(task, in: store).appendingPathComponent("result.json")
+        var changed = try JSONSerialization.jsonObject(with: Data(contentsOf: resultURL)) as! [String: Any]
+        changed["content"] = "A different but otherwise valid reply."
+        try JSONSerialization.data(withJSONObject: changed).write(to: resultURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: resultURL.path)
+        store.refresh()
+
+        let rejected = try XCTUnwrap(store.latestTask(for: "delivery-one"))
+        XCTAssertNil(rejected.result)
+        XCTAssertTrue(rejected.resultError?.contains("changed") == true)
+        XCTAssertThrowsError(try store.draft(for: rejected, deliveryID: "delivery-one"))
     }
 
     func testActiveSessionRestoresAsInterruptedAndClearsApprovalFields() throws {
@@ -338,6 +436,7 @@ final class CodexTaskStoreTests: XCTestCase {
         let config = try config()
         let store = CodexTaskStore(config: config)
         let task = try create(store, deliveryID: "delivery-one")
+        _ = try store.selectRoute(.external, for: task)
         let cli = try XCTUnwrap(GullsCLI.bundled())
         let process = Process()
         process.executableURL = cli.executableURL
@@ -362,5 +461,202 @@ final class CodexTaskStoreTests: XCTestCase {
         let ready = try XCTUnwrap(store.latestTask(for: "delivery-one"))
         XCTAssertEqual(try store.draft(for: ready, deliveryID: "delivery-one"), "A local Codex result.\n")
         XCTAssertNil(ready.resultError)
+    }
+
+    // MARK: - Task preparation source and failure boundaries
+
+    private func preparationCLI(
+        context: URL,
+        deliveryID: String = "delivery-history",
+        contextFailure: String? = nil,
+        threadStartedMarker: URL? = nil
+    ) throws -> GullsCLI {
+        let url = context.appendingPathComponent("gulls-preparation-fixture")
+        try FileManager.default.createDirectory(at: context, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        // Test messages are fixed, single-line fixture text, so a shell
+        // single-quoted diagnostic keeps the generated script argument-safe.
+        let failure = contextFailure.map { "printf '%s' '\($0)' >&2; exit 1" } ?? ""
+        let threadMarker = threadStartedMarker.map { "touch \"\($0.path)\"" } ?? ""
+        let script = """
+        #!/bin/bash
+        if [ "$1" = "--json" ]; then shift; fi
+        command="$1"
+        case "$command" in
+          history)
+            if [ "${2:-}" = "summary" ]; then
+              printf '%s' '{"total_deliveries":1,"pending_deliveries":1,"distinct_threads":1,"distinct_senders":1,"daily_received":[],"relationships":[]}'
+            else
+              printf '%s' '{"items":[{"delivery":{"delivery_id":"\(deliveryID)","message_id":"message-\(deliveryID)","thread_id":"thread-\(deliveryID)","sender_agent_id":"agent_alice","recipient_agent_id":"agent_one","status":"delivered","created_at":"2026-10-24T09:00:00Z"},"message":{"message_id":"message-\(deliveryID)","thread_id":"thread-\(deliveryID)","sender_agent_id":"agent_alice","sender_handle":"@alice:gulls.ai","content_inline":"Please review the deploy notes.","created_at":"2026-10-24T09:00:00Z"},"current_message":{"content_inline":"Please review the deploy notes."}}],"total":1,"sync_complete":true}'
+            fi
+            ;;
+          open)
+            \(failure)
+            mkdir -p "$SEAGULL_AGENT_CONTEXT_DIR"
+            printf '%s' '# prepared context' > "$SEAGULL_AGENT_CONTEXT_DIR/\(deliveryID).md"
+            chmod 600 "$SEAGULL_AGENT_CONTEXT_DIR/\(deliveryID).md"
+            printf '%s' '{"context_path":"'"$SEAGULL_AGENT_CONTEXT_DIR/\(deliveryID).md"'","delivery":{"delivery_id":"\(deliveryID)","status":"delivered"}}'
+            ;;
+          thread)
+            \(threadMarker)
+            sleep 0.35
+            printf '%s' '{"thread_id":"thread-\(deliveryID)","messages":[{"message_id":"message-\(deliveryID)","thread_id":"thread-\(deliveryID)","sender_handle":"@alice:gulls.ai","content_inline":"Please review the deploy notes.","created_at":"2026-10-24T09:00:00Z"}]}'
+            ;;
+          *)
+            printf '%s' '{}'
+            ;;
+        esac
+        """
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return GullsCLI(executableURL: url)
+    }
+
+    func testPrepareTaskUsesHistoryOnlySourceItem() async throws {
+        let config = try config()
+        let context = URL(fileURLWithPath: config.contextDir, isDirectory: true)
+        let cli = try preparationCLI(context: context)
+        let inbox = InboxStore(cli: cli, config: config, notifier: Notifier())
+        await inbox.history.loadInitial()
+        XCTAssertTrue(inbox.items.isEmpty)
+        let item = try XCTUnwrap(inbox.mergedItems.first)
+        XCTAssertNotNil(inbox.history.item(id: item.id))
+        let store = CodexTaskStore(config: config)
+
+        let task = try await store.prepareTask(
+            goal: "Draft a reply to this message.", workingDirectory: nil, cli: cli,
+            inbox: inbox, item: item, sourceProfileID: config.profileID,
+            sourceConnectionRevision: config.connectionRevision, ownerRequestID: "owner-history"
+        )
+
+        XCTAssertEqual(task.request.profileID, config.profileID)
+        XCTAssertEqual(task.request.connectionRevision, config.connectionRevision)
+        XCTAssertEqual(task.request.deliveryID, item.id)
+        XCTAssertEqual(task.request.threadID, item.delivery.threadId)
+        XCTAssertNotNil(task.request.contextPath)
+        XCTAssertEqual(store.tasks.count, 1)
+        XCTAssertNil(task.execution, "preparation must not dispatch model work")
+    }
+
+    func testPrepareTaskRetainsContextFailureReasonAndLeavesStoreEmpty() async throws {
+        let config = try config()
+        let context = URL(fileURLWithPath: config.contextDir, isDirectory: true)
+        let reason = "authenticated local runtime instructions are unavailable"
+        let cli = try preparationCLI(context: context, contextFailure: reason)
+        let inbox = InboxStore(cli: cli, config: config, notifier: Notifier())
+        await inbox.history.loadInitial()
+        let item = try XCTUnwrap(inbox.mergedItems.first)
+        let store = CodexTaskStore(config: config)
+
+        do {
+            _ = try await store.prepareTask(
+                goal: "Draft a reply.", workingDirectory: nil, cli: cli,
+                inbox: inbox, item: item, sourceProfileID: config.profileID,
+                sourceConnectionRevision: config.connectionRevision, ownerRequestID: "owner-failure"
+            )
+            XCTFail("context preparation should fail")
+        } catch let error as CodexTaskPreparationError {
+            guard case .contextUnavailable(let message) = error else {
+                return XCTFail("unexpected preparation error: \(error)")
+            }
+            XCTAssertTrue(message.contains(reason))
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertNil(store.lastError)
+        XCTAssertNil(inbox.actionFailure)
+    }
+
+    func testPrepareTaskRejectsWrongCapturedIdentityBeforeCLI() async throws {
+        let config = try config()
+        let context = URL(fileURLWithPath: config.contextDir, isDirectory: true)
+        let cli = try preparationCLI(context: context)
+        let inbox = InboxStore(cli: cli, config: config, notifier: Notifier())
+        await inbox.history.loadInitial()
+        let item = try XCTUnwrap(inbox.mergedItems.first)
+        let store = CodexTaskStore(config: config)
+
+        do {
+            _ = try await store.prepareTask(
+                goal: "Draft a reply.", workingDirectory: nil, cli: cli,
+                inbox: inbox, item: item, sourceProfileID: "wrong-profile",
+                sourceConnectionRevision: config.connectionRevision, ownerRequestID: "owner-identity"
+            )
+            XCTFail("wrong source profile should fail")
+        } catch let error as CodexTaskPreparationError {
+            guard case .connectionChanged = error else {
+                return XCTFail("unexpected preparation error: \(error)")
+            }
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testPrepareTaskRejectsConfigurationChangeDuringThreadFetch() async throws {
+        let config = try config()
+        let context = URL(fileURLWithPath: config.contextDir, isDirectory: true)
+        let marker = context.appendingPathComponent("thread-started")
+        let cli = try preparationCLI(context: context, threadStartedMarker: marker)
+        let inbox = InboxStore(cli: cli, config: config, notifier: Notifier())
+        await inbox.history.loadInitial()
+        let item = try XCTUnwrap(inbox.mergedItems.first)
+        let store = CodexTaskStore(config: config)
+        let revision = config.connectionRevision
+        let task = Task {
+            try await store.prepareTask(
+                goal: "Draft a reply.", workingDirectory: nil, cli: cli,
+                inbox: inbox, item: item, sourceProfileID: config.profileID,
+                sourceConnectionRevision: revision, ownerRequestID: "owner-race"
+            )
+        }
+        try await waitForFile(marker)
+        config.apiURL = "https://changed.example.test"
+
+        do {
+            _ = try await task.value
+            XCTFail("configuration changes during preparation should fail")
+        } catch let error as CodexTaskPreparationError {
+            guard case .connectionChanged = error else {
+                return XCTFail("unexpected preparation error: \(error)")
+            }
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testPrepareTaskRejectsSourceDisappearingDuringThreadFetch() async throws {
+        let config = try config()
+        let context = URL(fileURLWithPath: config.contextDir, isDirectory: true)
+        let marker = context.appendingPathComponent("thread-started")
+        let cli = try preparationCLI(context: context, threadStartedMarker: marker)
+        let inbox = InboxStore(cli: cli, config: config, notifier: Notifier())
+        await inbox.history.loadInitial()
+        let item = try XCTUnwrap(inbox.mergedItems.first)
+        let store = CodexTaskStore(config: config)
+        let task = Task {
+            try await store.prepareTask(
+                goal: "Draft a reply.", workingDirectory: nil, cli: cli,
+                inbox: inbox, item: item, sourceProfileID: config.profileID,
+                sourceConnectionRevision: config.connectionRevision, ownerRequestID: "owner-disappear"
+            )
+        }
+        try await waitForFile(marker)
+        inbox.items = []
+        inbox.history.reset()
+
+        do {
+            _ = try await task.value
+            XCTFail("source disappearance during preparation should fail")
+        } catch let error as CodexTaskPreparationError {
+            guard case .messageUnavailable = error else {
+                return XCTFail("unexpected preparation error: \(error)")
+            }
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    private func waitForFile(_ url: URL) async throws {
+        for _ in 0..<50 {
+            if FileManager.default.fileExists(atPath: url.path) { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Timed out waiting for fixture marker: \(url.lastPathComponent)")
     }
 }

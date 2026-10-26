@@ -89,6 +89,23 @@ final class DashboardRelationshipModelsTests: XCTestCase {
         XCTAssertEqual(result.relationships.first?.counterpartHandle, "atlas")
     }
 
+    func testResolvedNamePreservesAgentRoutingAndRelationshipIdentity() throws {
+        let original = try item("message", threadID: "thread", sender: nil,
+                                senderAgentID: "agent_fbe74eac41164338a1084be3882c2a2f")
+        let before = DashboardRelationshipProjector.makeSnapshot(from: [profile("one", items: [original])])
+        var resolved = original
+        resolved.resolvedSenderDisplayName = "Atlas"
+        let after = DashboardRelationshipProjector.makeSnapshot(from: [profile("one", items: [resolved])])
+
+        XCTAssertEqual(after.relationships.first?.counterpart, "Atlas")
+        XCTAssertEqual(after.relationships.first?.id, before.relationships.first?.id)
+        XCTAssertEqual(after.relationships.first?.counterpartID, before.relationships.first?.counterpartID)
+        XCTAssertEqual(after.relationships.first?.groups.first?.counterpart, "Atlas")
+        XCTAssertEqual(after.relationships.first?.groups.first?.primaryItem.delivery, original.delivery)
+        XCTAssertEqual(after.relationships.first?.groups.first?.primaryItem.message, original.message)
+        XCTAssertEqual(after.relationships.first?.groups.first?.primaryItem.senderDisplay, "Atlas")
+    }
+
     func testScopePreservesGloballyObservedAliasesAndRouteIDs() throws {
         let identified = try item("identified", sender: "atlas", senderAgentID: "agent-1")
         let aliased = try item("aliased", sender: "atlas")

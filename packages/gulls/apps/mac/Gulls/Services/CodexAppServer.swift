@@ -19,6 +19,11 @@ final class CodexAppServer {
     var onRequest: RequestHandler?
     var onDisconnect: (() -> Void)?
     var isConnected: Bool { process?.isRunning == true && isInitialized }
+    /// The executable selected by this transport. Readiness checks use this
+    /// value so preflight cannot inspect a different global Codex binary.
+    var executableURLForReadiness: URL? {
+        executableURL ?? Self.findExecutable(fileManager: fileManager)
+    }
 
     private static let maximumLineBytes = 4 * 1024 * 1024
     private static let requestTimeout: TimeInterval = 30

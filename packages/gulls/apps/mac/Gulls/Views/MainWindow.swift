@@ -53,10 +53,13 @@ struct MainWindow: View {
     }
 
     @State private var destination = Destination.overview
-    @State private var scopeProfileID: String?
+    // The app has one workspace window; retain its explicit scope across launches.
+    @AppStorage("workspace.scopeProfileID") private var storedScopeProfileID: String?
     @State private var localReview: LocalReview?
     @State private var codexLaunch: CodexLaunch?
     @State private var pendingCodexDraft: CodexDraft?
+    @State private var activeCodexDraft: CodexDraft?
+    @State private var pendingCodexSendConfirmation: CodexDraft?
     @State private var codexError: String?
     @State private var replyTarget: ReplyTarget?
     @State private var replyText = ""
@@ -112,7 +115,8 @@ struct MainWindow: View {
                     overviewSelected: destination == .overview,
                     messagesSelected: destination == .messages,
                     gullsSelected: destination == .gulls,
-                    totalAttentionCount: allSnapshot.needsAttention.count,
+                    attentionCount: snapshot.needsAttention.count,
+                    scopeName: scopeName,
                     accountName: accountName,
                     onOverview: { navigate(to: .overview) },
                     onMessages: { navigate(to: .messages) },
@@ -198,12 +202,23 @@ struct MainWindow: View {
         } message: { _ in
             Text("Your current reply will be replaced. The Codex draft will still need to be sent by you.")
         }
-        .alert("Couldn’t complete the Codex action", isPresented: Binding(
+        .alert(pendingCodexSendConfirmation == nil ? "Couldn’t complete the Codex action" : "Reply sent; Codex status not updated", isPresented: Binding(
             get: { codexError != nil }, set: { if !$0 { codexError = nil } }
         )) {
+            if pendingCodexSendConfirmation != nil {
+                Button("Retry status update") { retryCodexSendConfirmation() }
+            }
             Button("OK", role: .cancel) { codexError = nil }
         } message: {
-            Text(codexError ?? "")
+            if pendingCodexSendConfirmation != nil {
+                Text(
+                    "The reply was sent successfully. "
+                    + (codexError ?? "The local Codex draft status could not be updated.")
+                    + " Retrying only updates local status; it will not send the reply again."
+                )
+            } else {
+                Text(codexError ?? "")
+            }
         }
         .sheet(isPresented: $isAddingGull) {
             let generation = account?.sessionID
@@ -265,8 +280,8 @@ struct MainWindow: View {
             }
         }
         .onChange(of: stores.map(\.config.profileID)) { _, profileIDs in
-            if let scopeProfileID, !profileIDs.contains(scopeProfileID) {
-                self.scopeProfileID = nil
+            if let storedScopeProfileID, storedScopeProfileID != "all", !profileIDs.contains(storedScopeProfileID) {
+                self.storedScopeProfileID = nil
             }
             if let localReview, !profileIDs.contains(localReview.profileID) {
                 self.localReview = nil
@@ -422,14 +437,15 @@ struct MainWindow: View {
     private func detailWithReply(_ item: InboxItem) -> some View {
         let tasks = workspace?.codexTasks[store.config.profileID]
         let task = tasks?.latestTask(for: item.id)
+        let displayName = senderDisplay(for: item)
         let target = ReplyTarget(deliveryID: item.id, profileID: store.config.profileID,
-                                 connectionRevision: store.config.connectionRevision, senderDisplay: item.senderDisplay)
+                                 connectionRevision: store.config.connectionRevision, senderDisplay: displayName)
         let detail = DeliveryDetailView(
             item: item,
             localGullName: localGullName,
             relatedItems: selectedGroup?.items ?? [],
             onSelectItem: { openDelivery(profileID: store.config.profileID, deliveryID: $0.id) },
-            onOpenProfile: { handle in openGullProfile(handle: handle, name: item.senderDisplay) },
+            onOpenProfile: { handle in openGullProfile(handle: handle, name: displayName) },
             senderProfileHandle: profileHandle(for: item),
             onOpenCodex: tasks?.config.codexEnabled == true && store.cli != nil ? { beginCodexTask() } : nil,
             codexTask: task,
@@ -465,6 +481,54 @@ struct MainWindow: View {
                 if let tasks, let task,
                    let current = currentCodexTask(task, target: target, in: tasks) {
                     tasks.decline(current)
+                }
+            } : nil,
+            onCheckStatusCodex: tasks != nil && task?.execution?.status == .uncertain ? {
+                guard let tasks, let task,
+                      let current = currentCodexTask(task, target: target, in: tasks) else {
+                    codexError = "This Codex task is no longer attached to the current message. Open the message again."
+                    return
+                }
+                Task {
+                    do { try await tasks.checkStatus(current) }
+                    catch { codexError = error.localizedDescription }
+                }
+            } : nil,
+            onApproveReply: tasks != nil && task != nil ? {
+                guard let tasks, let task,
+                      let current = currentCodexTask(task, target: target, in: tasks) else { return }
+                Task {
+                    do { try await tasks.approveReply(current) }
+                    catch { codexError = error.localizedDescription }
+                }
+            } : nil,
+            onCheckReplyStatus: tasks != nil && task != nil ? {
+                guard let tasks, let task,
+                      let current = currentCodexTask(task, target: target, in: tasks) else { return }
+                Task {
+                    do { try await tasks.checkReplyStatus(current) }
+                    catch { codexError = error.localizedDescription }
+                }
+            } : nil,
+            onTakeOverReply: tasks != nil && task != nil ? {
+                guard let tasks, let task,
+                      let current = currentCodexTask(task, target: target, in: tasks) else { return }
+                Task {
+                    do {
+                        let content = try await tasks.takeOverReply(current)
+                        await MainActor.run {
+                            guard replyTarget == nil || replyTarget?.id == target.id else {
+                                codexError = "The current reply belongs to another message; the Gull reply was taken over without replacing it."
+                                return
+                            }
+                            if replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                               let content {
+                                replyText = content
+                            }
+                            replyTarget = target
+                            replyFocused = true
+                        }
+                    } catch { codexError = error.localizedDescription }
                 }
             } : nil,
             compact: usesCompactLayout
@@ -566,7 +630,7 @@ struct MainWindow: View {
             }
             if workspace?.codexTasks[store.config.profileID]?.config.codexEnabled == true {
                 Button(action: beginCodexTask) {
-                    Label { Text("Work with Codex") } icon: { GullsAIIcon() }
+                    Label { Text("Let \(localGullName) handle this") } icon: { GullsAIIcon() }
                 }
                 .disabled(store.cli == nil)
             }
@@ -608,8 +672,17 @@ struct MainWindow: View {
 
     private func beginReply() {
         showDetail()
-        if replyTarget == nil { replyTarget = selectedTarget }
-        replyFocused = true
+        guard let target = replyTarget ?? selectedTarget else { return }
+        Task { @MainActor in
+            do {
+                if let tasks = workspace?.codexTasks[target.profileID] {
+                    try await tasks.prepareOwnerDecision(deliveryID: target.deliveryID)
+                }
+                guard source(for: target) != nil else { return }
+                replyTarget = target
+                replyFocused = true
+            } catch { codexError = error.localizedDescription }
+        }
     }
 
     // One status item for transport health and monitoring controls.
@@ -725,11 +798,22 @@ struct MainWindow: View {
 
     private func navigate(to destination: Destination) {
         self.destination = destination
-        scopeProfileID = nil
         if destination == .gulls, selectedDirectoryHandle == nil {
             selectedDirectoryHandle = ownedGulls.first?.handle ?? savedGulls.first?.handle
         }
         if destination != .overview { showList() }
+    }
+
+    private var scopeProfileID: String? {
+        get {
+            if storedScopeProfileID == "all" { return nil }
+            if let storedScopeProfileID, stores.contains(where: { $0.config.profileID == storedScopeProfileID }) {
+                return storedScopeProfileID
+            }
+            return workspace?.connections.preferredInboxProfileID
+                ?? (store.config.isConfigured ? store.config.profileID : nil)
+        }
+        nonmutating set { storedScopeProfileID = newValue ?? "all" }
     }
 
     private func selectDirectoryGull(_ handle: String) {
@@ -745,16 +829,15 @@ struct MainWindow: View {
     private func openGullProfile(handle: String, name: String?) {
         guard let canonical = SavedGull.canonicalHandle(handle) else { return }
         destination = .gulls
-        scopeProfileID = nil
         selectDirectoryGull(canonical)
         directoryFallbackName = name == handle ? nil : name
     }
 
     private func openStartedConversation(_ conversation: GullConversation) {
         guard visibleStartedConversations.contains(where: { $0.id == conversation.id }) else { return }
+        if scopeProfileID != nil { scopeProfileID = conversation.senderProfileID }
         selectedStartedConversationID = conversation.id
         destination = .messages
-        scopeProfileID = nil
         showDetail()
     }
 
@@ -791,7 +874,7 @@ struct MainWindow: View {
                 startConversation(to: handle, name: name, agentID: agentID, sender: sender)
             },
             onMessages: {
-                scopeProfileID = owned?.profileID
+                if let profileID = owned?.profileID { scopeProfileID = profileID }
                 selectedStartedConversationID = nil
                 destination = .messages
                 showList()
@@ -811,6 +894,30 @@ struct MainWindow: View {
         return allRelationships.relationships.first {
             $0.counterpartID == "agent:\(agentID)" && $0.counterpartHandle != nil
         }?.counterpartHandle.flatMap(SavedGull.canonicalHandle) ?? SavedGull.canonicalHandle(agentID)
+    }
+
+    private func senderDisplay(for item: InboxItem) -> String {
+        let agentID = firstNonEmpty(item.message?.senderAgentId, item.delivery.senderAgentId)
+        let handle = item.message?.senderHandle.flatMap(SavedGull.canonicalHandle)
+        if let saved = savedGulls.first(where: {
+            (agentID != nil && $0.agentID == agentID) || (handle != nil && $0.handle == handle)
+        }) {
+            return saved.displayName
+        }
+        if let owned = account?.ownedGulls.first(where: {
+            (agentID != nil && $0.agentID == agentID) || (handle != nil && $0.handle == handle)
+        }) {
+            return firstNonEmpty(owned.displayName, SavedGull.defaultDisplayName(for: owned.handle))
+                ?? item.senderDisplay
+        }
+        return item.senderDisplay
+    }
+
+    private func resolvedSender(in item: InboxItem) -> InboxItem {
+        var resolved = item
+        let name = senderDisplay(for: item)
+        if name != item.senderDisplay { resolved.resolvedSenderDisplayName = name }
+        return resolved
     }
 
     private func selectRelationship(_ relationship: DashboardRelationship) {
@@ -1043,7 +1150,7 @@ struct MainWindow: View {
                 profileID: $0.config.profileID,
                 handle: $0.config.agentHandle,
                 displayName: firstNonEmpty($0.config.displayName, $0.agent?.displayName),
-                items: $0.isCurrent ? $0.mergedItems : []
+                items: $0.isCurrent ? $0.mergedItems.map { resolvedSender(in: $0) } : []
             )
         }
     }
@@ -1112,7 +1219,7 @@ struct MainWindow: View {
               snapshot.allGroups.contains(where: { group in
                   group.profileID == store.config.profileID && group.items.contains { $0.id == item.id }
               }) else { return nil }
-        return item
+        return selectedGroup?.items.first { $0.id == item.id }
     }
 
     private var canActOnSelection: Bool {
@@ -1222,8 +1329,12 @@ struct MainWindow: View {
                 throw CodexTaskStore.Failure("This Gull’s connection changed. Open the original message again.")
             }
             let content = try draft.tasks.draft(for: draft.task, deliveryID: draft.target.deliveryID)
+            if let activeCodexDraft, !sameCodexDraft(activeCodexDraft, draft) {
+                guard markCodexDraft(.superseded, activeCodexDraft) else { return }
+            }
             replyTarget = draft.target
             replyText = content
+            activeCodexDraft = draft
             draftTarget = nil
             pendingCodexDraft = nil
             openDelivery(profileID: draft.target.profileID, deliveryID: draft.target.deliveryID)
@@ -1253,7 +1364,7 @@ struct MainWindow: View {
                 deliveryID: $0.id,
                 profileID: store.config.profileID,
                 connectionRevision: store.config.connectionRevision,
-                senderDisplay: $0.senderDisplay
+                senderDisplay: senderDisplay(for: $0)
             )
         }
     }
@@ -1324,6 +1435,7 @@ struct MainWindow: View {
                 get: { replyText },
                 set: { text in
                     if replyTarget == nil { replyTarget = target }
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { discardActiveCodexDraft() }
                     replyText = text
                 }
             ))
@@ -1365,6 +1477,7 @@ struct MainWindow: View {
                 .help("Draft a reply using this Gull’s rules")
                 if replyTarget != nil {
                     Button {
+                        discardActiveCodexDraft()
                         replyText = ""
                         replyTarget = nil
                     } label: {
@@ -1408,21 +1521,73 @@ struct MainWindow: View {
     private func sendReply(to target: ReplyTarget) {
         let content = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isBusy, !content.isEmpty, let source = source(for: target) else { return }
+        if let task = workspace?.codexTasks[target.profileID]?.latestTask(for: target.deliveryID),
+           let reply = task.reply,
+           (reply.deliveryUnresolved || [.sending, .uncertain, .sent].contains(reply.status)) {
+            codexError = reply.status == .sent
+                ? "This message already has a sent Gull reply."
+                : "The Gull reply delivery is unresolved. Check its status before sending."
+            return
+        }
         // Capture before awaiting: neither a refresh nor a notification can
         // redirect this send to the newly selected delivery.
         replyTarget = target
         isBusy = true
+        let codexDraft = activeCodexDraft
         Task {
             guard source.config.connectionRevision == target.connectionRevision else {
                 isBusy = false
                 return
             }
             if await source.reply(to: target.deliveryID, content: content) != nil {
+                if let codexDraft, codexDraft.target.id == target.id {
+                    if !markCodexDraft(.sent, codexDraft) {
+                        pendingCodexSendConfirmation = codexDraft
+                        codexError = codexError ?? "The local Codex draft status could not be updated."
+                    }
+                    activeCodexDraft = nil
+                }
                 replyText = ""
                 replyTarget = nil
             }
             isBusy = false
         }
+    }
+
+    private func retryCodexSendConfirmation() {
+        guard let pendingCodexSendConfirmation else { return }
+        do {
+            try pendingCodexSendConfirmation.tasks.updateDraftDisposition(
+                .sent,
+                for: pendingCodexSendConfirmation.task,
+                deliveryID: pendingCodexSendConfirmation.target.deliveryID
+            )
+            self.pendingCodexSendConfirmation = nil
+            codexError = nil
+        } catch {
+            codexError = error.localizedDescription
+        }
+    }
+
+    private func sameCodexDraft(_ lhs: CodexDraft, _ rhs: CodexDraft) -> Bool {
+        lhs.task.id == rhs.task.id && lhs.target.id == rhs.target.id
+    }
+
+    @discardableResult
+    private func markCodexDraft(_ disposition: CodexDraftDisposition, _ draft: CodexDraft) -> Bool {
+        do {
+            try draft.tasks.updateDraftDisposition(disposition, for: draft.task, deliveryID: draft.target.deliveryID)
+            return true
+        } catch {
+            codexError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func discardActiveCodexDraft() {
+        guard let activeCodexDraft else { return }
+        _ = markCodexDraft(.discarded, activeCodexDraft)
+        self.activeCodexDraft = nil
     }
 
     private func targetGullName(_ target: ReplyTarget) -> String {

@@ -874,6 +874,34 @@ class DynamoDbRepositoryTest(unittest.TestCase):
         self.assertEqual(len(inbox), 1)
         self.assertEqual(inbox[0].message.content_inline, "hello over dynamodb")
 
+    def test_delegated_reply_atomically_claims_source_delivery_over_dynamodb(self) -> None:
+        service = MessageHubService(repository=self.repository)
+        service.register_agent("@atomic-source:gulls.ai")
+        service.register_agent("@atomic-runtime:gulls.ai")
+        inbound = service.send_message(
+            sender_handle="@atomic-source:gulls.ai",
+            recipient_handles=("@atomic-runtime:gulls.ai",),
+            content="delegated request",
+        )
+        delivery_id = inbound.deliveries[0].delivery_id
+        reply = service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@atomic-runtime:gulls.ai",
+            publication_key="publication-1",
+            content="exact delegated answer",
+        )
+        self.assertEqual(DeliveryStatus.REPLIED, self.repository.get_delivery(delivery_id).status)
+        replay = service.publish_delegated_reply(
+            delivery_id,
+            agent_handle="@atomic-runtime:gulls.ai",
+            publication_key="publication-1",
+            content="exact delegated answer",
+        )
+        self.assertEqual(reply.reply.message.message_id, replay.reply.message.message_id)
+        source = self.repository.get_delivery(delivery_id)
+        self.assertIsNotNone(source)
+        self.assertEqual("done", source.current_stage)
+
     def test_atomic_idempotency_and_task_commit_over_dynamodb(self) -> None:
         service = MessageHubService(repository=self.repository)
         service.register_agent("@atomic-sender:gulls.ai")

@@ -2,7 +2,7 @@
 
 Status: Authoritative (process).
 
-Last updated: 2026-08-04.
+Last updated: 2026-10-24.
 
 This repository documents two systems at once: the implementation that runs
 today, and the accepted redesign that has not been built yet. Without a rule for
@@ -90,6 +90,7 @@ Authoritative and product contracts:
 | [Agent Voice And DNS Discovery](../packages/gulls/docs/agent-voice-and-discovery.md) | Authoritative |
 | [Concept](../packages/gulls/docs/concept.md) | Authoritative (product concept) |
 | [Migration Plan](../packages/gulls/docs/migration-plan.md) | Authoritative (delivery) |
+| [Codex Integration Plan](../packages/gulls/docs/codex-integration-plan.md) | Authoritative (delivery) |
 | [Terminology](../packages/gulls/docs/terminology.md) | Authoritative (glossary) |
 | [Seagulls Platform Spec](../packages/seagulls/docs/spec.md) | Authoritative (layer) |
 | [Pet Spec](../packages/pet/docs/spec.md) | Authoritative (layer) |

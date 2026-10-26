@@ -176,7 +176,7 @@ struct SettingsView: View {
             if account.isSignedIn {
                 switch item {
                 case .gulls:
-                    GullSettingsView(account: account, onPair: { gull in
+                    GullSettingsView(account: account, workspace: workspace, onPair: { gull in
                         pairingGull = gull
                         scroll(to: LocalConnectionsView.pairingAnchor, using: proxy)
                     })

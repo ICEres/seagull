@@ -18,6 +18,8 @@ type globalOptions struct {
 	AgentHandle string
 	ContextDir  string
 	StreamURL   string
+	ProfileID   string
+	Revision    string
 	JSON        bool
 	ProgramName string
 }
@@ -81,7 +83,7 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 	// Codex result is a local handoff operation. It must read and write only
 	// the profile's private context directory and must never cross the runtime
 	// socket or make a network request.
-	if allowRuntimeRoute && client == nil && remaining[0] != "codex" {
+	if allowRuntimeRoute && client == nil {
 		if code, handled, err := tryRuntimeRoute(global, remaining, stdout, stderr, env); handled {
 			return code, err
 		}
@@ -317,6 +319,77 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 		}
 		printJSONOrText(stdout, global.JSON, result, formatDecision(result, "Replied"))
 		return 0, nil
+	case "reply-publish":
+		fs := commandFlagSet("reply-publish", stderr)
+		publicationKey := fs.String("publication-key", "", "durable idempotency key for this delegated reply")
+		taskID := fs.String("task-id", "", "Codex task UUID that produced this reply")
+		content := fs.String("content", "", "exact public reply content")
+		contentFile := fs.String("content-file", "", "read exact public reply content from a file, or - for stdin")
+		if err := parseCommand(fs, commandArgs); err != nil {
+			return 0, err
+		}
+		if fs.NArg() != 1 {
+			return 0, usage("reply-publish requires delivery_id")
+		}
+		if strings.TrimSpace(*publicationKey) == "" {
+			return 0, usage("reply-publish requires --publication-key")
+		}
+		if strings.TrimSpace(*taskID) == "" {
+			return 0, usage("reply-publish requires --task-id")
+		}
+		if !validLowerUUID(strings.TrimSpace(*taskID)) {
+			return 0, usage("reply-publish task-id must be a lowercase UUID")
+		}
+		if *content != "" && *contentFile != "" {
+			return 0, usage("reply-publish accepts only one of --content or --content-file")
+		}
+		if *content == "" && *contentFile == "" {
+			return 0, usage("reply-publish requires --content or --content-file")
+		}
+		_, client, err := loadRuntime(global, env, client, nil)
+		if err != nil {
+			return 0, err
+		}
+		delegated, ok := client.(delegatedReplyClient)
+		if !ok {
+			return 0, errors.New("delegated reply publication is unavailable for this connection; refusing legacy fallback")
+		}
+		replyContent, err := readCodexResultContent(*content, *contentFile, os.Stdin)
+		if err != nil {
+			return 0, err
+		}
+		result, err := delegated.PublishDelegatedReply(fs.Arg(0), strings.TrimSpace(*publicationKey), strings.TrimSpace(*taskID), replyContent)
+		if err != nil {
+			return delegatedReplyErrorCode(err), err
+		}
+		printJSONOrText(stdout, global.JSON, result, formatDecision(result, "Published delegated reply"))
+		return 0, nil
+	case "reply-status":
+		fs := commandFlagSet("reply-status", stderr)
+		publicationKey := fs.String("publication-key", "", "durable idempotency key for this delegated reply")
+		if err := parseCommand(fs, commandArgs); err != nil {
+			return 0, err
+		}
+		if fs.NArg() != 1 {
+			return 0, usage("reply-status requires delivery_id")
+		}
+		if strings.TrimSpace(*publicationKey) == "" {
+			return 0, usage("reply-status requires --publication-key")
+		}
+		_, client, err := loadRuntime(global, env, client, nil)
+		if err != nil {
+			return 0, err
+		}
+		delegated, ok := client.(delegatedReplyClient)
+		if !ok {
+			return 0, errors.New("delegated reply status is unavailable for this connection")
+		}
+		result, err := delegated.DelegatedReplyStatus(fs.Arg(0), strings.TrimSpace(*publicationKey))
+		if err != nil {
+			return 0, err
+		}
+		printJSONOrText(stdout, global.JSON, result, mustJSON(result))
+		return 0, nil
 	case "ack":
 		fs := commandFlagSet("ack", stderr)
 		limit := fs.Int("limit", 100, "maximum inbox deliveries to search")
@@ -525,6 +598,18 @@ func runWithRouting(programName string, args []string, stdout io.Writer, stderr 
 	}
 }
 
+// delegatedReplyErrorCode distinguishes a definitive server rejection from
+// an uncertain transport failure. A 4xx response means the server did not
+// accept this publication and is safe to report as a rejected operation;
+// network errors and 5xx responses remain retryable/uncertain.
+func delegatedReplyErrorCode(err error) int {
+	var status *statusError
+	if errors.As(err, &status) && status.code >= 400 && status.code < 500 {
+		return 3
+	}
+	return 0
+}
+
 func parseGlobal(programName string, args []string, stderr io.Writer) (globalOptions, []string, error) {
 	if programName == "" {
 		programName = "gulls"
@@ -536,6 +621,8 @@ func parseGlobal(programName string, args []string, stderr io.Writer) (globalOpt
 	fs.StringVar(&opts.AgentHandle, "agent-handle", "", "Local agent handle. Defaults to SEAGULL_AGENT_HANDLE.")
 	fs.StringVar(&opts.ContextDir, "context-dir", "", "Context handoff directory. Defaults to SEAGULL_AGENT_CONTEXT_DIR or .seagull/agent.")
 	fs.StringVar(&opts.StreamURL, "stream-url", "", "WebSocket stream URL (ws:// or wss://). Defaults to SEAGULL_STREAM_URL.")
+	fs.StringVar(&opts.ProfileID, "profile-id", "", "Explicit resident runtime profile ID. Must be paired with --connection-revision.")
+	fs.StringVar(&opts.Revision, "connection-revision", "", "Explicit resident runtime connection revision. Must be paired with --profile-id.")
 	fs.BoolVar(&opts.JSON, "json", false, "Print raw JSON where supported.")
 	if err := fs.Parse(args); err != nil {
 		return opts, nil, err
@@ -845,8 +932,8 @@ func printUsage(out io.Writer, programName string) {
 	if programName == "" {
 		programName = "gulls"
 	}
-	fmt.Fprintf(out, "usage: %s [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--json] <command> [args]\n", programName)
-	fmt.Fprintln(out, "commands: runtime serve|status, inbox, history [summary], watch, open, reply, ack, ignore, draft-reply, post, whoami, thread, context, route, local-action, codex result")
+	fmt.Fprintf(out, "usage: %s [--api-url URL] [--agent-handle HANDLE] [--context-dir DIR] [--profile-id ID --connection-revision REVISION] [--json] <command> [args]\n", programName)
+	fmt.Fprintln(out, "commands: runtime serve|status, inbox, history [summary], watch, open, reply, reply-publish, reply-status, ack, ignore, draft-reply, post, whoami, thread, context, route, local-action, codex result")
 }
 
 type stringList []string

@@ -12,12 +12,14 @@ struct CodexTaskRequest: Codable, Equatable {
     let workingDirectory: String?
     let contextPath: String?
     let createdAt: String
+    var replyAuthorizationID: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case version, goal
         case taskID = "task_id", profileID = "profile_id", gullHandle = "gull_handle"
         case connectionRevision = "connection_revision", deliveryID = "delivery_id", threadID = "thread_id"
         case workingDirectory = "working_directory", contextPath = "context_path", createdAt = "created_at"
+        case replyAuthorizationID = "reply_authorization_id"
     }
 }
 
@@ -45,13 +47,15 @@ struct CodexTask: Equatable, Identifiable {
     let result: CodexTaskResult?
     let resultError: String?
     var execution: CodexTaskExecution? = nil
+    var work: CodexWorkRecord? = nil
+    var reply: GullReplyPublication? = nil
 
     var id: String { request.taskID }
 }
 
 struct CodexTaskExecution: Codable, Equatable {
     enum Status: String, Codable {
-        case starting, working, needsApproval, draftReady, interrupted, failed
+        case queued, starting, working, needsApproval, draftReady, interrupted, failed, cancelled, uncertain
     }
 
     var status: Status

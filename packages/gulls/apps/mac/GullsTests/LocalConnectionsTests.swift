@@ -97,6 +97,75 @@ final class LocalConnectionsTests: XCTestCase {
         XCTAssertNil(store.profiles.first(where: { $0.profileID == added.profileID }))
     }
 
+    func testInboxPrefersPairedGullOverLegacyProfileEvenWhileOffline() {
+        let defaults = suite()
+        let tokens = MemoryTokenStore()
+        let connections = LocalConnectionsStore(defaults: defaults, tokenStore: tokens)
+        let legacy = connections.selectedConfig!
+        legacy.apiURL = "http://localhost:8200"
+        legacy.agentHandle = "@worker:gulls.ai"
+        let paired = connections.add(displayName: "Test")
+        paired.apiURL = "https://message.example"
+        paired.agentHandle = "@test:gulls.ai"
+        paired.socialAPIURL = "https://social.example"
+        paired.nodeID = "node_test"
+        paired.token = "sga_test"
+        paired.monitoringEnabled = false
+        connections.select(profileID: legacy.profileID)
+
+        XCTAssertEqual(connections.preferredInboxProfileID, paired.profileID)
+        let restored = LocalConnectionsStore(defaults: defaults, tokenStore: tokens)
+        XCTAssertEqual(restored.preferredInboxProfileID, paired.profileID)
+        XCTAssertEqual(restored.selectedProfileID, legacy.profileID, "choosing a default scope must not mutate the connection selection")
+    }
+
+    func testDelegatedReplyDeliveryPreferenceIsPerProfileAndDefaultsToAutomatic() {
+        let defaults = suite()
+        let tokens = MemoryTokenStore()
+        let first = GullsConfig(profileID: "first", defaults: defaults, tokenStore: tokens)
+        let second = GullsConfig(profileID: "second", defaults: defaults, tokenStore: tokens)
+
+        XCTAssertTrue(first.sendRepliesAutomatically)
+        XCTAssertTrue(second.sendRepliesAutomatically)
+        first.sendRepliesAutomatically = false
+
+        XCTAssertFalse(first.sendRepliesAutomatically)
+        XCTAssertTrue(second.sendRepliesAutomatically)
+        XCTAssertFalse(GullsConfig(profileID: "first", defaults: defaults, tokenStore: tokens).sendRepliesAutomatically)
+    }
+
+    func testInboxPreservesSelectedPairedGullAcrossReload() {
+        let defaults = suite()
+        let tokens = MemoryTokenStore()
+        let connections = LocalConnectionsStore(defaults: defaults, tokenStore: tokens)
+        let first = connections.add(displayName: "First")
+        let second = connections.add(displayName: "Second")
+        for config in [first, second] {
+            config.apiURL = "https://message.example"
+            config.agentHandle = "@\(config.displayName.lowercased()):gulls.ai"
+            config.socialAPIURL = "https://social.example"
+            config.nodeID = "node_\(config.profileID)"
+            config.token = "sga_test"
+        }
+        connections.select(profileID: first.profileID)
+
+        let restored = LocalConnectionsStore(defaults: defaults, tokenStore: tokens)
+        XCTAssertEqual(restored.preferredInboxProfileID, first.profileID)
+    }
+
+    func testInboxFallsBackToConfiguredProfilesWithoutPairing() {
+        let connections = LocalConnectionsStore(defaults: suite(), tokenStore: MemoryTokenStore())
+        XCTAssertNil(connections.preferredInboxProfileID)
+        let first = connections.selectedConfig!
+        first.apiURL = "http://localhost:8200"
+        first.agentHandle = "@first:gulls.ai"
+        let second = connections.add()
+        XCTAssertEqual(connections.preferredInboxProfileID, first.profileID)
+        second.apiURL = "http://localhost:8300"
+        second.agentHandle = "@second:gulls.ai"
+        XCTAssertEqual(connections.preferredInboxProfileID, second.profileID)
+    }
+
     func testMonitoringPauseAndSuspendHaveDifferentPersistenceSemantics() {
         let defaults = suite()
         let config = GullsConfig(defaults: defaults, tokenStore: MemoryTokenStore())

@@ -1,6 +1,6 @@
 {
   "name": "seagull",
-  "version": "0.1.0+codex.20260621155053",
+  "version": "0.1.2+codex.20261026",
   "description": "Codex plugin for using the local Seagull CLI connector.",
   "author": {
     "name": "Local developer"

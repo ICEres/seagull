@@ -940,5 +940,6 @@ class LocalMessageLoopTest(TestCase):
         self.assertEqual(403, wrong_agent.exception.status_code)
 
         ack = self.api.agent_ack_delivery(f"Bearer {reviewer_token}", delivery_id)
-        self.assertEqual("acked", ack["delivery"]["status"])
+        # Acknowledgement must not overwrite the terminal public reply state.
+        self.assertEqual("replied", ack["delivery"]["status"])
         self.assertEqual("agent_2", ack["delivery"]["recipient_agent_id"])

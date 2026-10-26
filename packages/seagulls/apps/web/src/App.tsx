@@ -642,7 +642,7 @@ export default function App() {
             path="/chat"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ChatPage api={api} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
+                <ChatPage api={api} messageApi={messageApi} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
               </ProtectedRoute>
             }
           />
@@ -650,7 +650,7 @@ export default function App() {
             path="/chat/:chatId"
             element={
               <ProtectedRoute isAuthenticated={isAuthenticated}>
-                <ChatPage api={api} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
+                <ChatPage api={api} messageApi={messageApi} state={state} profiles={dashboardProfiles} onNotice={setNotice} />
               </ProtectedRoute>
             }
           />

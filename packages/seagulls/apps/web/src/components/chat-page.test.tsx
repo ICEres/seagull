@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "./chat-page";
 import { SocialApiClient } from "../lib/api";
+import { MessageHubClient } from "../lib/message-hub";
 import { emptyLoopState } from "../lib/state";
 import type { AgentChatMessage, AgentChatSession, AgentProfile, LoopState } from "../lib/social";
 
@@ -133,17 +134,20 @@ async function renderChatPage({
   fetchImpl,
   initialEntry = "/chat/chat_a",
   profiles = [agent()],
+  messageApi,
 }: {
   fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   initialEntry?: string;
   profiles?: AgentProfile[];
-}): Promise<void> {
+  messageApi?: MessageHubClient;
+}): Promise<{ api: SocialApiClient; messageApi: MessageHubClient }> {
   vi.stubGlobal("fetch", vi.fn(fetchImpl));
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const api = new SocialApiClient("https://social.example.test");
+  const hub = messageApi ?? new MessageHubClient("https://hub.example.test");
 
   await act(async () => {
     root?.render(
@@ -151,14 +155,19 @@ async function renderChatPage({
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route
+              path="/chat"
+              element={<ChatPage api={api} state={loopState()} profiles={profiles} messageApi={hub} onNotice={() => {}} />}
+            />
+            <Route
               path="/chat/:chatId"
-              element={<ChatPage api={api} state={loopState()} profiles={profiles} onNotice={() => {}} />}
+              element={<ChatPage api={api} state={loopState()} profiles={profiles} messageApi={hub} onNotice={() => {}} />}
             />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     );
   });
+  return { api, messageApi: hub };
 }
 
 function chatListResponse(chats: AgentChatSession[]): Response {
@@ -175,6 +184,32 @@ function messageTextarea(): HTMLTextAreaElement {
     throw new Error("Message textarea not found.");
   }
   return textarea;
+}
+
+function recipientInput(): HTMLInputElement {
+  const input = container?.querySelector('input#chat-recipient');
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Recipient input not found.");
+  }
+  return input;
+}
+
+async function waitForRecipientInput(): Promise<HTMLInputElement> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const input = container?.querySelector('input#chat-recipient');
+    if (input instanceof HTMLInputElement) return input;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  throw new Error("Recipient input not found.");
+}
+
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("Native input setter unavailable.");
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function submit(textarea: HTMLTextAreaElement, content: string): void {
@@ -598,5 +633,96 @@ describe("ChatPage", () => {
         }),
       );
     });
+  });
+
+  it("resolves a foreign Gull through the Message Hub and opens direct Chat without a private chat POST", async () => {
+    const messageApi = new MessageHubClient("https://hub.example.test", "hub-token");
+    vi.spyOn(messageApi, "getAgent").mockResolvedValue({
+      agent: { agent_id: "agent-mira", handle: "@mira:gulls.ai", display_name: "Mira", capabilities: [], status: "active", trigger_mode: "pull", webhook_enabled: false, created_at: "2026-06-13T00:00:00Z", updated_at: "2026-06-13T00:00:00Z" },
+    });
+    const requests: Array<{ method: string; path: string }> = [];
+    await renderChatPage({
+      initialEntry: "/chat",
+      messageApi,
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        requests.push({ method: init?.method ?? "GET", path: url.pathname });
+        if (url.pathname === "/agent-chats" && init?.method !== "POST") return chatListResponse([]);
+        if (url.pathname === "/agent-network/inbox") return response({ items: [], next_cursor: null });
+        if (url.pathname === "/agent-network/sent") return response({ messages: [], next_cursor: null, truncated: false });
+        return response({ error: "not_found" }, 404);
+      },
+    });
+    await act(async () => setInputValue(await waitForRecipientInput(), "@mira:gulls.ai"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    await waitForText(container!, "Mira");
+    const match = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent?.includes("@mira:gulls.ai"));
+    await act(async () => match?.click());
+    await waitForText(container!, "@mira:gulls.ai");
+    expect(requests.some((request) => request.method === "POST" && request.path === "/agent-chats")).toBe(false);
+    expect(messageApi.getAgent).toHaveBeenCalledWith("@mira:gulls.ai");
+  });
+
+  it("keeps an owned Gull on the existing private chat endpoint", async () => {
+    const ownMira = agent({ agent_id: "agent-mira", handle: "@mira:gulls.ai", display_name: "Mira" });
+    const messageApi = new MessageHubClient("https://hub.example.test");
+    vi.spyOn(messageApi, "getAgent").mockResolvedValue({
+      agent: { agent_id: ownMira.agent_id, handle: ownMira.handle, display_name: ownMira.display_name, capabilities: [], status: "active", trigger_mode: "pull", webhook_enabled: false, created_at: ownMira.created_at, updated_at: ownMira.updated_at },
+    });
+    const posts: Array<Record<string, unknown>> = [];
+    const created = chat({ chat_id: "chat_mira", agent_id: ownMira.agent_id, agent_handle: ownMira.handle, title: "Chat with Mira" });
+    let createdOnServer = false;
+    await renderChatPage({
+      initialEntry: "/chat",
+      profiles: [agent(), ownMira],
+      messageApi,
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/agent-chats" && init?.method === "POST") {
+          posts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          createdOnServer = true;
+          return response({ created: true, chat: created });
+        }
+        if (url.pathname === "/agent-chats" && init?.method !== "POST") return chatListResponse(createdOnServer ? [created] : []);
+        if (url.pathname === "/agent-chats/chat_mira/messages") return messagesResponse([]);
+        if (url.pathname === "/agent-network/inbox") return response({ items: [], next_cursor: null });
+        if (url.pathname === "/agent-network/sent") return response({ messages: [], next_cursor: null, truncated: false });
+        return response({ error: "not_found" }, 404);
+      },
+    });
+    await act(async () => setInputValue(await waitForRecipientInput(), "@mira:gulls.ai"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    await waitForText(container!, "Mira");
+    const match = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent?.includes("@mira:gulls.ai"));
+    await act(async () => match?.click());
+    await waitForText(container!, "Chat with Mira");
+    expect(posts).toEqual([{ owner_user_id: "user_1", agent_handle: "@mira:gulls.ai" }]);
+  });
+
+  it("does not use a stale resolved recipient after the address changes", async () => {
+    const messageApi = new MessageHubClient("https://hub.example.test");
+    vi.spyOn(messageApi, "getAgent").mockImplementation(async (handle) => {
+      if (handle === "@mira:gulls.ai") return { agent: { agent_id: "agent-mira", handle, display_name: "Mira", capabilities: [], status: "active", trigger_mode: "pull", webhook_enabled: false, created_at: "2026-06-13T00:00:00Z", updated_at: "2026-06-13T00:00:00Z" } };
+      throw new Error("not found");
+    });
+    const posts: string[] = [];
+    await renderChatPage({
+      initialEntry: "/chat",
+      messageApi,
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/agent-chats" && init?.method === "POST") posts.push(String(init.body));
+        if (url.pathname === "/agent-chats" && init?.method !== "POST") return chatListResponse([]);
+        if (url.pathname === "/agent-network/inbox") return response({ items: [], next_cursor: null });
+        if (url.pathname === "/agent-network/sent") return response({ messages: [], next_cursor: null, truncated: false });
+        return response({ error: "not_found" }, 404);
+      },
+    });
+    await act(async () => setInputValue(await waitForRecipientInput(), "@mira:gulls.ai"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    await waitForText(container!, "Mira");
+    await act(async () => setInputValue(await waitForRecipientInput(), "@other:gulls.ai"));
+    expect(Array.from(container!.querySelectorAll("button")).some((button) => button.textContent?.includes("@mira:gulls.ai"))).toBe(false);
+    expect(posts).toEqual([]);
   });
 });

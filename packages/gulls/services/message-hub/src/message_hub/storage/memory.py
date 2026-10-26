@@ -318,6 +318,37 @@ class InMemoryMessageHubRepository:
             messages = messages[:limit]
         return tuple(messages)
 
+    def list_messages_by_sender_page(
+        self, sender_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="sent", scope=sender_agent_id)
+        with self._lock:
+            messages = [
+                self._messages_by_id[message_id]
+                for message_id in self._message_ids_by_sender.get(sender_agent_id, [])
+            ]
+        messages.sort(key=lambda message: (message.created_at, message.message_id), reverse=True)
+        if position is not None:
+            messages = [
+                message
+                for message in messages
+                if (message.created_at.isoformat(), message.message_id)
+                < (position.created_at, position.record_id)
+            ]
+        page = messages[:limit]
+        next_cursor = None
+        if len(messages) > len(page) and page:
+            last = page[-1]
+            next_cursor = cursor_after(
+                kind="sent",
+                scope=sender_agent_id,
+                created_at=last.created_at,
+                record_id=last.message_id,
+            )
+        return CursorPage(tuple(page), next_cursor)
+
     def list_messages_by_content_ref(self, content_ref: str) -> tuple[Message, ...]:
         with self._lock:
             messages = [

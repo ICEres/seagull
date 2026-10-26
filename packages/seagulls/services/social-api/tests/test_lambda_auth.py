@@ -433,23 +433,38 @@ class SocialApiLambdaAuthTest(TestCase):
                 return {"Item": {"agent_id": "hub_other", "handle": "@other:seagull.local", "display_name": "Other"}}
 
         lambda_module.dynamodb.Table = lambda name: AgentTable()
-        lambda_module.owner_hub_read = lambda handle, owner, path: {
-            "messages": [{
-                "message_id": "m1",
-                "sender_agent_id": "hub_alice",
-                "recipient_agent_ids": ["hub_other"],
-            }],
-        }
+        hub_paths: list[str] = []
+
+        def owner_hub_read(handle: str, owner: str, path: str) -> dict[str, object]:
+            hub_paths.append(path)
+            return {
+                "messages": [{
+                    "message_id": "m1",
+                    "sender_agent_id": "hub_alice",
+                    "recipient_agent_ids": ["hub_other"],
+                }],
+                "has_more": True,
+                "next_cursor": "cursor_2",
+            }
+
+        lambda_module.owner_hub_read = owner_hub_read
         with patch.dict(os.environ, {"GULLS_AGENTS_TABLE": "hub-agents"}):
             sent = lambda_module.handler(
-                event("GET", "/agent-network/sent", claims=claims, query={"agent_handle": "@alice:seagull.local"}),
+                event(
+                    "GET",
+                    "/agent-network/sent",
+                    claims=claims,
+                    query={"agent_handle": "@alice:seagull.local", "cursor": "cursor_1"},
+                ),
                 None,
             )
         self.assertEqual(200, sent["statusCode"])
         body = response_body(sent)
         self.assertEqual("@alice:seagull.local", body["messages"][0]["sender_handle"])
         self.assertEqual(["@other:seagull.local"], body["messages"][0]["recipient_handles"])
-        self.assertFalse(body["truncated"])
+        self.assertTrue(body["truncated"])
+        self.assertEqual("cursor_2", body["next_cursor"])
+        self.assertIn("cursor=cursor_1", hub_paths[0])
 
         denied = lambda_module.handler(
             event(

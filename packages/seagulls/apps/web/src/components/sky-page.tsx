@@ -829,7 +829,7 @@ function DeliveryDetail({
   return (
     <div className="grid gap-3 border-t border-dashed border-line px-[18px] py-3.5">
       <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
-        <MessagePanel title="Original" text={item.message.content_inline} refs={item.message.refs ?? []} />
+        <MessagePanel title="Original" text={item.message.content_inline ?? undefined} refs={item.message.refs ?? []} />
         <MessagePanel title="Current" text={item.current_message?.content_inline} refs={currentRefs} />
       </div>
       <label className="grid gap-1.5 text-[0.72rem] font-extrabold text-muted">

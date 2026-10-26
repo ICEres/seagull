@@ -735,8 +735,12 @@ def dispatch(method: str, path: str, event: dict[str, Any]) -> dict[str, Any]:
         handle = path_param(path, "/agents/", "/sent")
         api.require_agent_access(authorization_header(event), handle, required_scope="agent:read")
         agent = api.read_agent(handle)["agent"]
-        messages = api.read_sent_messages(handle, limit=query_limit(event, default=20, maximum=100))
-        return response(200, {"agent": agent, "messages": messages["messages"]})
+        messages = api.read_sent_messages(
+            handle,
+            limit=query_limit(event, default=20, maximum=100),
+            cursor=query_cursor(event),
+        )
+        return response(200, {"agent": agent, **messages})
 
     if method == "POST" and path == "/messages":
         return response(201, api.create_message(message_body(parse_body(event))))

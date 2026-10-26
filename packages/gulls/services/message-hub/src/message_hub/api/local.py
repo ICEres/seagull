@@ -459,15 +459,27 @@ class LocalMessageHubApi:
 
         return {"items": [inbox_item_to_dict(item) for item in items]}
 
-    def read_sent_messages(self, handle: str, *, limit: int = 20) -> dict[str, Any]:
+    def read_sent_messages(
+        self, handle: str, *, limit: int = 20, cursor: str | None = None
+    ) -> dict[str, Any]:
         try:
-            messages = self._service.get_sent_messages(handle, limit=limit)
+            messages, next_cursor = self._service.get_sent_messages_page(
+                handle, limit=limit, cursor=cursor
+            )
         except InvalidMessageError as exc:
             raise ApiError(400, "bad_request", str(exc)) from exc
         except NotFoundError as exc:
             raise ApiError(404, "not_found", str(exc)) from exc
+        except InvalidCursor as exc:
+            raise ApiError(400, "bad_request", str(exc)) from exc
 
-        return {"messages": [message_to_dict(message) for message in messages]}
+        result: dict[str, Any] = {
+            "messages": [message_to_dict(message) for message in messages],
+            "has_more": next_cursor is not None,
+        }
+        if next_cursor is not None:
+            result["next_cursor"] = next_cursor
+        return result
 
     def personal_agent_inbox(
         self, handle: str, *, limit: int = 20, cursor: str | None = None

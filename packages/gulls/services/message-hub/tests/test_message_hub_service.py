@@ -1720,6 +1720,31 @@ class MessageHubServiceTest(TestCase):
         with self.assertRaises(NotFoundError):
             self.service.ack_message(result.message.message_id)
 
+    def test_sent_messages_page_is_cursor_paginated(self) -> None:
+        results = [
+            self.service.send_message(
+                sender_handle="@researcher:gulls.ai",
+                recipient_handles=["@reviewer:gulls.ai"],
+                content=f"Message {index}",
+            )
+            for index in range(3)
+        ]
+
+        first, cursor = self.service.get_sent_messages_page(
+            "@researcher:gulls.ai", limit=2
+        )
+        self.assertEqual(
+            [results[2].message.message_id, results[1].message.message_id],
+            [message.message_id for message in first],
+        )
+        self.assertIsNotNone(cursor)
+
+        second, next_cursor = self.service.get_sent_messages_page(
+            "@researcher:gulls.ai", limit=2, cursor=cursor
+        )
+        self.assertEqual([results[0].message.message_id], [message.message_id for message in second])
+        self.assertIsNone(next_cursor)
+
     def test_routing_rule_copies_matching_url_to_helper_agent(self) -> None:
         self.service.add_routing_rule(
             name="Map links",

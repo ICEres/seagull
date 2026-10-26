@@ -1,12 +1,14 @@
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SocialApiClient, SocialApiError } from "../lib/api";
+import { configuredMessageApiUrl, MessageHubClient, MessageHubError } from "../lib/message-hub";
 import type { AgentChatMessage, AgentProfile, LoopState, RuntimeMode } from "../lib/social";
 import { formatRelativeTime } from "../lib/state";
 import { GullAvatar, Wing, YOUR_WING, statusDotColor, wingFor } from "@seagulls/ui";
 import { Chip, EmptyState, shortHandle, shortId, type Notice } from "./shared";
+import { DirectChatThread, useGullDirectChats, type DirectChatSelection } from "./direct-chat";
 
 type AppMutationError = Error | SocialApiError;
 type SendChatMessage = { chatId: string; content: string; owner: string };
@@ -19,15 +21,19 @@ export function ChatPage({
   api,
   state,
   profiles,
+  messageApi,
   onNotice,
 }: {
   api: SocialApiClient;
   state: LoopState;
   profiles: AgentProfile[];
+  messageApi?: MessageHubClient;
   onNotice: (notice: Notice) => void;
 }) {
   const navigate = useNavigate();
   const params = useParams();
+  const [searchParams] = useSearchParams();
+  const hub = useMemo(() => messageApi ?? new MessageHubClient(configuredMessageApiUrl()), [messageApi]);
   const queryClient = useQueryClient();
   const threadRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -35,9 +41,16 @@ export function ChatPage({
   const [draft, setDraft] = useState("");
   const [flying, setFlying] = useState(false);
   const [unconfirmedMessages, setUnconfirmedMessages] = useState<AgentChatMessage[]>([]);
+  const [recipientInput, setRecipientInput] = useState("");
+  const [recipientAddress, setRecipientAddress] = useState("");
 
   const ownerUserId = state.activeUser?.user_id ?? null;
   const selectedChatId = params.chatId ?? null;
+  const directMode = selectedChatId === "direct";
+  const ownedProfiles = profiles.filter((profile) => profile.owner_user_id === ownerUserId);
+  const directSelection: DirectChatSelection | null = directMode && searchParams.get("sender") && searchParams.get("recipient")
+    ? { senderHandle: searchParams.get("sender")!, recipientHandle: searchParams.get("recipient")!, threadId: searchParams.get("thread") || undefined }
+    : null;
 
   const chatsQuery = useQuery({
     queryKey: ["social-agent-chats", api.baseUrl, ownerUserId],
@@ -45,11 +58,12 @@ export function ChatPage({
     enabled: Boolean(ownerUserId),
   });
   const chats = chatsQuery.data?.items ?? [];
-  const selectedChat =
+  const selectedChat = directMode ? null :
     chats.find((chat) => chat.chat_id === selectedChatId) ?? (selectedChatId ? null : chats[0] ?? null);
+  const directChats = useGullDirectChats(api, ownerUserId, ownedProfiles, new Set(chats.flatMap((chat) => chat.hub_thread_id ? [chat.hub_thread_id] : [])));
 
   useEffect(() => {
-    if (picking || chats.length === 0) {
+    if (picking || directMode || chats.length === 0) {
       return;
     }
     // Only auto-select when no chat is addressed. A chatId that is missing from
@@ -58,7 +72,7 @@ export function ChatPage({
     if (!selectedChatId) {
       navigate(`/chat/${chats[0].chat_id}`, { replace: true });
     }
-  }, [chats, navigate, picking, selectedChatId]);
+  }, [chats, navigate, picking, selectedChatId, directMode]);
 
   function scrollThread() {
     const element = threadRef.current;
@@ -231,7 +245,47 @@ export function ChatPage({
   const chatAgent = selectedChat
     ? profiles.find((profile) => profile.handle === selectedChat.agent_handle) ?? null
     : null;
-  const showPicker = picking || (!selectedChat && !chatsQuery.isFetching);
+  const showPicker = picking || (!selectedChat && !directSelection && !chatsQuery.isFetching);
+  const fullAddress = /^@[a-z0-9_.-]+:[a-z0-9.-]+$/i.test(recipientAddress);
+  const recipientQuery = useQuery({
+    queryKey: ["message-gull", hub.baseUrl, recipientAddress],
+    queryFn: () => hub.getAgent(recipientAddress),
+    enabled: showPicker && fullAddress,
+    retry: false,
+    staleTime: 30000,
+  });
+  const lookupMissing = recipientQuery.error instanceof MessageHubError && recipientQuery.error.status === 404;
+  const lookupMessage = recipientAddress !== recipientInput.trim().toLowerCase() || recipientQuery.isFetching
+    ? "Looking up…" : !fullAddress ? "Use a full handle." : lookupMissing ? "Gull not found." : "Could not look up this Gull.";
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRecipientAddress(recipientInput.trim().toLowerCase()), 250);
+    return () => window.clearTimeout(timer);
+  }, [recipientInput]);
+
+  function selectDirect(selection: DirectChatSelection, replace = false) {
+    setPicking(false);
+    const query = new URLSearchParams({ sender: selection.senderHandle, recipient: selection.recipientHandle });
+    if (selection.threadId) query.set("thread", selection.threadId);
+    navigate(`/chat/direct?${query}`, { replace });
+  }
+
+  function selectRecipient() {
+    const recipient = recipientQuery.data?.agent;
+    if (!recipient || recipientAddress !== recipientInput.trim().toLowerCase()) return;
+    if (ownedProfiles.some((profile) => profile.handle === recipient.handle)) {
+      createChatMutation.mutate(recipient.handle);
+      return;
+    }
+    const sender = ownedProfiles.find((profile) => profile.handle === state.activeProfile?.handle) ?? ownedProfiles[0];
+    if (!sender) return;
+    const existing = directChats.conversations.find((conversation) => conversation.senderHandle === sender.handle && conversation.recipientHandle === recipient.handle);
+    selectDirect({ senderHandle: sender.handle, recipientHandle: recipient.handle, threadId: existing?.threadId });
+  }
+
+  const conversationRows = [
+    ...chats.map((chat) => ({ kind: "assistant" as const, key: chat.chat_id, updatedAt: chat.updated_at, chat })),
+    ...directChats.conversations.map((chat) => ({ kind: "direct" as const, key: `${chat.senderHandle}:${chat.threadId}`, updatedAt: chat.updatedAt, chat })),
+  ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return (
     <div className="mx-auto max-w-[1020px]">
@@ -243,7 +297,7 @@ export function ChatPage({
         <span className="flex-1" />
         <button
           type="button"
-          onClick={() => setPicking(true)}
+          onClick={() => { setPicking(true); setRecipientInput(""); setRecipientAddress(""); }}
           className="min-h-9 rounded-lg border-0 bg-accent px-3.5 text-[0.84rem] font-extrabold text-white hover:bg-accent-strong"
         >
           New chat
@@ -252,51 +306,65 @@ export function ChatPage({
 
       <div className="grid h-[calc(100vh-190px)] min-h-[460px] grid-cols-[264px_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-card max-[860px]:grid-cols-1 max-[860px]:h-auto">
         <div className="overflow-y-auto border-r border-line max-[860px]:max-h-52 max-[860px]:border-r-0 max-[860px]:border-b">
-          {chats.length === 0 ? (
+          {conversationRows.length === 0 ? (
             <EmptyState title="No chats yet" detail="Start one — your gulls are listening." />
           ) : (
-            chats.map((chat) => {
-              const active = selectedChat?.chat_id === chat.chat_id && !picking;
+            conversationRows.map((row) => {
+              const assistant = row.kind === "assistant" ? row.chat : null;
+              const direct = row.kind === "direct" ? row.chat : null;
+              const handle = assistant?.agent_handle ?? direct!.recipientHandle;
+              const active = !picking && (assistant ? selectedChat?.chat_id === assistant.chat_id
+                : directSelection?.senderHandle === direct!.senderHandle && directSelection.threadId === direct!.threadId);
               return (
                 <button
-                  key={chat.chat_id}
+                  key={row.key}
                   type="button"
                   onClick={() => {
                     setPicking(false);
-                    navigate(`/chat/${chat.chat_id}`);
+                    if (direct) selectDirect(direct);
+                    else navigate(`/chat/${assistant!.chat_id}`);
                   }}
                   className={`flex w-full items-start gap-2.5 border-0 border-b border-line px-4 py-3.5 text-left text-ink hover:bg-accent-soft ${
                     active ? "bg-accent-soft" : "bg-transparent"
                   }`}
                 >
-                  <GullAvatar handle={chat.agent_handle} />
+                  <GullAvatar handle={handle} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
                       <strong className="overflow-hidden text-[0.9rem] text-ellipsis whitespace-nowrap">
-                        {chat.title}
+                        {assistant?.title ?? shortHandle(handle)}
                       </strong>
                       <span className="ml-auto flex-none text-[0.7rem] font-extrabold text-faint">
-                        {formatRelativeTime(chat.updated_at)}
+                        {formatRelativeTime(row.updatedAt)}
                       </span>
                     </span>
                     <span className="mt-0.5 block overflow-hidden text-[0.8rem] text-ellipsis whitespace-nowrap text-muted">
-                      {chatSnippet(chat.chat_id, shortHandle(chat.agent_handle))}
+                      {assistant ? chatSnippet(assistant.chat_id, shortHandle(handle)) : direct!.snippet || handle}
                     </span>
                   </span>
                 </button>
               );
             })
           )}
+          {directChats.isError ? <div className="px-4 py-3 text-[0.74rem] text-muted">Gull chats unavailable. <button type="button" onClick={directChats.refetch} className="border-0 bg-transparent p-0 font-extrabold text-accent">Retry</button></div> : null}
         </div>
 
         {showPicker ? (
           <div className="grid place-content-center justify-items-center gap-[22px] bg-bg p-[30px]">
-            <p className="m-0 font-extrabold text-muted">Who do you want to talk to?</p>
-            {profiles.length === 0 ? (
+            <div className="flex w-full max-w-[340px] items-center gap-3">
+              <label htmlFor="chat-recipient" className="text-[0.8rem] font-extrabold text-muted">To</label>
+              <input id="chat-recipient" value={recipientInput} onChange={(event) => setRecipientInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); selectRecipient(); } }} placeholder="@name:gulls.ai" autoComplete="off" spellCheck={false} />
+            </div>
+            {recipientInput.trim() ? <div className="w-full max-w-[340px]" aria-live="polite">
+              {recipientInput.trim().toLowerCase() === recipientAddress && recipientQuery.data?.agent ? <button type="button" onClick={selectRecipient} disabled={!ownedProfiles.length || createChatMutation.isPending} className="flex w-full items-center gap-3 rounded-xl border border-line bg-card px-[18px] py-4 text-left hover:border-accent disabled:opacity-40">
+                <GullAvatar handle={recipientQuery.data.agent.handle} size={34} />
+                <span className="min-w-0"><strong className="block text-[0.85rem]">{recipientQuery.data.agent.display_name || shortHandle(recipientQuery.data.agent.handle)}</strong><span className="block text-[0.74rem] font-bold text-faint [overflow-wrap:anywhere]">{recipientQuery.data.agent.handle}</span></span>
+              </button> : <span role={recipientQuery.isError ? "alert" : undefined} className="text-[0.8rem] text-muted">{lookupMessage}{recipientQuery.isError && !lookupMissing ? <> <button type="button" onClick={() => void recipientQuery.refetch()} className="border-0 bg-transparent p-0 font-extrabold text-accent">Retry</button></> : null}</span>}
+            </div> : ownedProfiles.length === 0 ? (
               <EmptyState title="No gulls yet" detail="Register a gull in the Flock first." />
             ) : (
               <div className="flex flex-wrap justify-center gap-3.5">
-                {profiles.map((profile) => (
+                {ownedProfiles.map((profile) => (
                   <button
                     key={profile.agent_id}
                     type="button"
@@ -318,6 +386,8 @@ export function ChatPage({
               </div>
             )}
           </div>
+        ) : directSelection && ownerUserId ? (
+          <DirectChatThread key={`${api.baseUrl}:${ownerUserId}`} api={api} ownerUserId={ownerUserId} profiles={ownedProfiles} {...directSelection} deliveries={directChats.deliveries} onSelect={(selection) => selectDirect(selection, true)} onNotice={onNotice} />
         ) : selectedChat ? (
           <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
             <div className="flex items-center gap-3 border-b border-line px-5 py-3">

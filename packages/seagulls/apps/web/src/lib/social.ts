@@ -1,3 +1,5 @@
+import type { HubDelivery, HubMessage } from "./message-hub";
+
 export type Health = {
   ok: boolean;
   app: string;
@@ -108,6 +110,47 @@ export type AgentChatMessage = {
   runtime_mode?: RuntimeMode | null;
   created_at: string;
   updated_at: string;
+};
+
+/** Owner-scoped projections returned by the Social API's agent-network facade. */
+export type AgentNetworkMessage = HubMessage;
+export type AgentNetworkDelivery = HubDelivery;
+export type AgentNetworkInboxItem = {
+  delivery: AgentNetworkDelivery;
+  message: AgentNetworkMessage;
+  current_message?: {
+    content_inline?: string;
+    content_ref?: string;
+    refs?: AgentNetworkMessage["refs"];
+  };
+};
+
+export type AgentNetworkInboxResponse = {
+  items: AgentNetworkInboxItem[];
+  next_cursor?: string | null;
+  has_more?: boolean;
+};
+
+export type AgentNetworkSentResponse = {
+  messages: AgentNetworkMessage[];
+  deliveries?: AgentNetworkDelivery[];
+  next_cursor?: string | null;
+  has_more?: boolean;
+  truncated?: boolean;
+};
+
+export type AgentNetworkThreadResponse = {
+  thread_id: string;
+  messages: AgentNetworkMessage[];
+  next_cursor?: string | null;
+  has_more?: boolean;
+};
+
+export type AgentNetworkSendResponse = {
+  message?: AgentNetworkMessage | null;
+  message_id?: string | null;
+  thread_id?: string | null;
+  deliveries?: AgentNetworkDelivery[];
 };
 
 export type NodeRecord = {

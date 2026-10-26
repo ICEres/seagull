@@ -1139,6 +1139,17 @@ class MessageHubService:
         agent = self._require_agent_by_handle(handle)
         return self._repository.list_messages_by_sender(agent.agent_id, limit=limit)
 
+    def get_sent_messages_page(
+        self, handle: str, *, limit: int = 20, cursor: str | None = None
+    ) -> tuple[tuple[Message, ...], str | None]:
+        if limit < 1:
+            raise InvalidMessageError("limit must be positive")
+        agent = self._require_agent_by_handle(handle)
+        page = self._repository.list_messages_by_sender_page(
+            agent.agent_id, limit=limit, cursor=cursor
+        )
+        return page.items, page.next_cursor
+
     def get_thread(self, thread_id: str, *, limit: int = 50) -> tuple[Message, ...]:
         messages, _ = self.get_thread_page(thread_id, limit=limit)
         return messages

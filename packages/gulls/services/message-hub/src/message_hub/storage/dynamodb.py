@@ -1386,6 +1386,40 @@ class DynamoDbMessageHubRepository:
         )
         return tuple(message_from_item(item) for item in items)
 
+    def list_messages_by_sender_page(
+        self, sender_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        position = decode_cursor(cursor, kind="sent", scope=sender_agent_id)
+        kwargs: dict[str, Any] = {
+            "KeyConditionExpression": self._partition_condition("sender_agent_id", sender_agent_id),
+            "IndexName": "sender-created-at-index",
+            "ScanIndexForward": False,
+            "Limit": limit + 1,
+        }
+        if position is not None:
+            kwargs["ExclusiveStartKey"] = {
+                "message_id": position.record_id,
+                "sender_agent_id": sender_agent_id,
+                "created_at": position.created_at,
+            }
+        result = self._messages.query(**kwargs)
+        raw_items = result.get("Items", [])
+        has_more = len(raw_items) > limit or result.get("LastEvaluatedKey") is not None
+        page_items = raw_items[:limit]
+        messages = [message_from_item(item) for item in page_items]
+        next_cursor = None
+        if has_more and messages:
+            last = page_items[-1]
+            next_cursor = cursor_after(
+                kind="sent",
+                scope=sender_agent_id,
+                created_at=str(last["created_at"]),
+                record_id=str(last["message_id"]),
+            )
+        return CursorPage(tuple(messages), next_cursor)
+
     def list_messages_by_content_ref(self, content_ref: str) -> tuple[Message, ...]:
         from boto3.dynamodb.conditions import Attr
 

@@ -86,8 +86,8 @@ export type HubMessage = {
   recipient_handles?: string[];
   intent: string;
   visibility: string;
-  content_inline?: string;
-  content_ref?: string;
+  content_inline?: string | null;
+  content_ref?: string | null;
   refs?: MessageRef[];
   schema_version: string;
   safety_status: string;
@@ -230,6 +230,11 @@ export class MessageHubClient extends JsonApiClient {
     capabilities?: string[];
   }): Promise<{ created: boolean; agent: MessageHubAgent }> {
     return this.request("POST", "/agents", body);
+  }
+
+  /** Resolve one canonical Gull handle on this Message Hub. */
+  getAgent(handle: string): Promise<{ agent: MessageHubAgent }> {
+    return this.request("GET", `/agents/${encodeURIComponent(handle)}`);
   }
 
   getInbox(handle: string, limit = 20): Promise<{ agent: MessageHubAgent; items: InboxItem[] }> {

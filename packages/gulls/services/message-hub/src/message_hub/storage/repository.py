@@ -150,6 +150,11 @@ class MessageHubRepository(Protocol):
     def list_messages_by_sender(self, sender_agent_id: str, *, limit: int | None = None) -> tuple[Message, ...]:
         """Return messages created by an agent in newest-first order."""
 
+    def list_messages_by_sender_page(
+        self, sender_agent_id: str, *, limit: int, cursor: str | None = None
+    ) -> CursorPage[Message]:
+        """Return one newest-first sender message page after an opaque cursor."""
+
     def list_messages_by_content_ref(self, content_ref: str) -> tuple[Message, ...]:
         """Return messages that reference a payload by content_ref."""
 

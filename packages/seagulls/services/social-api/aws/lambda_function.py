@@ -382,17 +382,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             handle = required_query_string(query, "agent_handle")
             profile = service.get_owned_profile(owner_user_id=owner, agent_handle=handle)
             limit = optional_query_int(query, "limit", default=100)
+            cursor = optional_query_string(query, "cursor")
+            suffix = f"?limit={limit}"
+            if cursor:
+                suffix += f"&cursor={quote(cursor, safe='')}"
             result = owner_hub_read(
                 profile.handle,
                 owner,
-                f"/agents/{quote(profile.handle, safe='')}/sent?limit={limit}",
+                f"/agents/{quote(profile.handle, safe='')}/sent{suffix}",
             )
             messages = result.get("messages") if isinstance(result.get("messages"), list) else []
             return response(
                 200,
                 {
                     **enrich_owner_hub_payload(result),
-                    "truncated": len(messages) >= limit,
+                    "truncated": result.get("has_more", len(messages) >= limit),
                 },
             )
 

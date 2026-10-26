@@ -10,6 +10,7 @@ from message_hub.storage.dynamodb import (
     delivery_to_item,
     message_to_item,
 )
+from message_hub.storage.pagination import InvalidCursor
 
 
 class QueryTable:
@@ -113,6 +114,20 @@ class DynamoPaginationTest(TestCase):
             thread_summaries_table=None,
         )
 
+    def _sent_repository(self) -> DynamoDbMessageHubRepository:
+        return DynamoDbMessageHubRepository(
+            agents_table=None,
+            messages_table=QueryTable(
+                list(self.repository._messages.items),
+                partition_key="sender_agent_id",
+                id_key="message_id",
+            ),
+            threads_table=None,
+            deliveries_table=None,
+            idempotency_table=None,
+            thread_summaries_table=None,
+        )
+
     def test_thread_cursor_pages_all_equal_timestamp_rows(self) -> None:
         seen: list[str] = []
         cursor = None
@@ -150,6 +165,73 @@ class DynamoPaginationTest(TestCase):
             )
         self.assertEqual(expected, seen)
         self.assertEqual(105, len(set(seen)))
+
+    def test_sent_cursor_returns_second_page(self) -> None:
+        repository = self._sent_repository()
+        first = repository.list_messages_by_sender_page(
+            "agent_sender", limit=7
+        )
+        second = repository.list_messages_by_sender_page(
+            "agent_sender", limit=7, cursor=first.next_cursor
+        )
+
+        self.assertEqual(
+            [f"message_{index:03d}" for index in range(104, 97, -1)],
+            [item.message_id for item in first.items],
+        )
+        self.assertEqual(
+            [f"message_{index:03d}" for index in range(97, 90, -1)],
+            [item.message_id for item in second.items],
+        )
+        self.assertIsNotNone(second.next_cursor)
+
+    def test_sent_cursor_uses_last_raw_item_when_timestamps_tie(self) -> None:
+        messages = [
+            Message(
+                message_id=f"message_{index:03d}",
+                thread_id="thread_tie",
+                sender_agent_id="agent_sender",
+                recipient_agent_ids=("agent_recipient",),
+                intent="message",
+                visibility="direct",
+                content_inline=str(index),
+                created_at=self.created_at,
+            )
+            for index in (1, 3, 2)
+        ]
+        repository = DynamoDbMessageHubRepository(
+            agents_table=None,
+            messages_table=QueryTable(
+                [message_to_item(message) for message in messages],
+                partition_key="sender_agent_id",
+                id_key="message_id",
+                sort_ties_by_id=False,
+            ),
+            threads_table=None,
+            deliveries_table=None,
+            idempotency_table=None,
+            thread_summaries_table=None,
+        )
+
+        first = repository.list_messages_by_sender_page("agent_sender", limit=2)
+        second = repository.list_messages_by_sender_page(
+            "agent_sender", limit=2, cursor=first.next_cursor
+        )
+
+        self.assertEqual(
+            ["message_001", "message_003"],
+            [item.message_id for item in first.items],
+        )
+        self.assertEqual(["message_002"], [item.message_id for item in second.items])
+
+    def test_sent_cursor_is_rejected_for_another_sender(self) -> None:
+        repository = self._sent_repository()
+        first = repository.list_messages_by_sender_page("agent_sender", limit=2)
+
+        with self.assertRaises(InvalidCursor):
+            repository.list_messages_by_sender_page(
+                "agent_other", limit=2, cursor=first.next_cursor
+            )
 
     def test_thread_cursor_uses_last_raw_item_when_timestamps_tie(self) -> None:
         messages = [

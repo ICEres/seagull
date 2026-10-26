@@ -4,6 +4,10 @@ import type {
   AgentAssetBinding,
   AgentChatMessage,
   AgentChatSession,
+  AgentNetworkInboxResponse,
+  AgentNetworkSendResponse,
+  AgentNetworkSentResponse,
+  AgentNetworkThreadResponse,
   AgentProfile,
   DashboardSummary,
   Follow,
@@ -322,6 +326,67 @@ export class SocialApiClient extends JsonApiClient {
     const serialized = query.toString();
     const suffix = serialized ? `?${serialized}` : "";
     return this.request("GET", `/agent-chats/${encodeURIComponent(chatId)}/messages${suffix}`);
+  }
+
+  getAgentNetworkInbox(
+    ownerUserId: string,
+    agentHandle: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<AgentNetworkInboxResponse> {
+    const query = new URLSearchParams({
+      owner_user_id: ownerUserId,
+      agent_handle: agentHandle,
+      limit: String(options.limit ?? 20),
+    });
+    if (options.cursor) query.set("cursor", options.cursor);
+    return this.request("GET", `/agent-network/inbox?${query.toString()}`);
+  }
+
+  getAgentNetworkSent(
+    ownerUserId: string,
+    agentHandle: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<AgentNetworkSentResponse> {
+    const query = new URLSearchParams({
+      owner_user_id: ownerUserId,
+      agent_handle: agentHandle,
+      limit: String(options.limit ?? 100),
+    });
+    if (options.cursor) query.set("cursor", options.cursor);
+    return this.request("GET", `/agent-network/sent?${query.toString()}`);
+  }
+
+  getAgentNetworkThread(
+    ownerUserId: string,
+    agentHandle: string,
+    threadId: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<AgentNetworkThreadResponse> {
+    const query = new URLSearchParams({
+      owner_user_id: ownerUserId,
+      agent_handle: agentHandle,
+      limit: String(options.limit ?? 50),
+    });
+    if (options.cursor) query.set("cursor", options.cursor);
+    return this.request(
+      "GET",
+      `/agent-network/threads/${encodeURIComponent(threadId)}?${query.toString()}`,
+    );
+  }
+
+  sendAgentNetworkMessage(body: {
+    owner_user_id: string;
+    sender_handle: string;
+    recipient_handles: string[];
+    content?: string;
+    content_ref?: string;
+    refs?: Array<{ type: string; url?: string; find?: string; remember_as?: string }>;
+    intent?: string;
+    visibility?: string;
+    thread_id?: string;
+    idempotency_key?: string;
+  }): Promise<AgentNetworkSendResponse> {
+    return this.request("POST", "/agent-network/messages", body);
   }
 
   createRoom(body: {

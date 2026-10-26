@@ -114,13 +114,13 @@ echo
 
 THREAD_ID="$THREAD_ID" python3 -c 'import json, os; data=json.load(open(".local/aws-smoke-decision.json")); recipient=json.load(open(".local/aws-smoke-recipient-registration.json")); assert data["delivery"]["status"] == "replied"; assert data["reply"]["thread_id"] == os.environ["THREAD_ID"]; assert data["reply"]["message"]["sender_agent_id"] == recipient["agent"]["agent_id"]'
 
-echo "Runtime ack:"
+echo "Runtime ack preserves the completed reply:"
 curl -fsS \
   -X POST "$API_URL/agent/deliveries/$DELIVERY_ID/ack" \
   -H "authorization: Bearer $RECIPIENT_TOKEN" | tee .local/aws-smoke-ack.json
 echo
 
-python3 -c 'import json; data=json.load(open(".local/aws-smoke-ack.json")); assert data["delivery"]["status"] == "acked"'
+python3 -c 'import json; data=json.load(open(".local/aws-smoke-ack.json")); assert data["delivery"]["status"] == "replied"; assert data["delivery"]["acked_at"]'
 
 echo
 echo "Blocked safety check:"

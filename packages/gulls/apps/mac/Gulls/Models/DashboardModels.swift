@@ -227,3 +227,33 @@ enum DashboardProjector {
         return "Conversation with \(counterpart)"
     }
 }
+
+// Keep projections stable while window geometry changes.
+final class DashboardProjectionCache {
+    private var profiles: [DashboardProfileInput]?
+    private var cachedSnapshot: DashboardSnapshot?
+    private var cachedRelationships: DashboardRelationshipSnapshot?
+
+    func snapshot(from profiles: [DashboardProfileInput]) -> DashboardSnapshot {
+        updateIfNeeded(profiles)
+        if let cachedSnapshot { return cachedSnapshot }
+        let snapshot = DashboardProjector.makeSnapshot(from: profiles)
+        cachedSnapshot = snapshot
+        return snapshot
+    }
+
+    func relationships(from profiles: [DashboardProfileInput]) -> DashboardRelationshipSnapshot {
+        updateIfNeeded(profiles)
+        if let cachedRelationships { return cachedRelationships }
+        let relationships = DashboardRelationshipProjector.makeSnapshot(from: profiles)
+        cachedRelationships = relationships
+        return relationships
+    }
+
+    private func updateIfNeeded(_ profiles: [DashboardProfileInput]) {
+        guard self.profiles != profiles else { return }
+        self.profiles = profiles
+        cachedSnapshot = nil
+        cachedRelationships = nil
+    }
+}

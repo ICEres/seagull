@@ -1,0 +1,7 @@
+// A local Apple signing identity keeps Keychain access stable across updates.
+// Builds without local signing configuration retain the ad-hoc default.
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_STYLE = Manual
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"

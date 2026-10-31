@@ -64,6 +64,7 @@ struct MainWindow: View {
     @State private var replyTarget: ReplyTarget?
     @State private var replyText = ""
     @State private var draftTarget: ReplyTarget?
+    @State private var replySurfaceHeight: CGFloat = 0
     @State private var isBusy = false
     @State private var sidebarExpanded = true
     @State private var contentColumns = ContentColumns.both
@@ -87,6 +88,7 @@ struct MainWindow: View {
     @State private var isAddingGull = false
     @State private var directoryError: String?
     @State private var statusIssue: String?
+    @State private var dashboardProjectionCache = DashboardProjectionCache()
 
     init(store: InboxStore, workspace: GullsWorkspace? = nil, account: CloudAccountStore? = nil,
          directory: GullDirectoryStore? = nil, conversations: GullConversationStore? = nil) {
@@ -147,7 +149,7 @@ struct MainWindow: View {
                         }
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(destination == .gulls ? "Gull list" : "Message list")
-                    detailContent
+                    detailContent(availableHeight: geometry.size.height)
                         .frame(width: detailWidth)
                         .frame(width: columns.showsDetail ? detailWidth : 0, alignment: .leading)
                         .clipped()
@@ -357,7 +359,7 @@ struct MainWindow: View {
     }
 
     @ViewBuilder
-    private var detailContent: some View {
+    private func detailContent(availableHeight: CGFloat) -> some View {
         if destination == .gulls {
             if let handle = selectedDirectoryHandle {
                 gullProfile(handle)
@@ -374,7 +376,7 @@ struct MainWindow: View {
             }
             .id("\(directoryScope ?? ""): \(conversation.id)")
         } else if let item = displayedItem {
-            detailWithReply(item)
+            detailWithReply(item, availableHeight: availableHeight)
                 .gullsScrollEdges()
         } else {
             ContentUnavailableView {
@@ -434,7 +436,7 @@ struct MainWindow: View {
     }
 
     @ViewBuilder
-    private func detailWithReply(_ item: InboxItem) -> some View {
+    private func detailWithReply(_ item: InboxItem, availableHeight: CGFloat) -> some View {
         let tasks = workspace?.codexTasks[store.config.profileID]
         let task = tasks?.latestTask(for: item.id)
         let displayName = senderDisplay(for: item)
@@ -531,16 +533,27 @@ struct MainWindow: View {
                     } catch { codexError = error.localizedDescription }
                 }
             } : nil,
+            bottomContentInset: replySurfaceHeight,
             compact: usesCompactLayout
         )
             .id(selectedGroup?.id ?? "\(store.config.profileID):\(item.id)")
             .transition(.opacity)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: item.id)
-        if #available(macOS 26.0, *), !reduceTransparency {
+            .overlay(alignment: .bottom) {
+                replySurface(availableHeight: availableHeight)
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.size.height
+                    } action: { height in
+                        if abs(replySurfaceHeight - height) > 0.5 {
+                            replySurfaceHeight = height
+                        }
+                    }
+            }
+        if #available(macOS 26.0, *) {
             detail
-                .gullsSafeAreaBar(edge: .bottom, spacing: 0) { replySurface }
+                .scrollEdgeEffectHidden(true, for: .bottom)
         } else {
-            detail.safeAreaInset(edge: .bottom, spacing: 0) { replySurface }
+            detail
         }
     }
 
@@ -896,10 +909,10 @@ struct MainWindow: View {
         }?.counterpartHandle.flatMap(SavedGull.canonicalHandle) ?? SavedGull.canonicalHandle(agentID)
     }
 
-    private func senderDisplay(for item: InboxItem) -> String {
+    private func senderDisplay(for item: InboxItem, savedGulls: [SavedGull]? = nil) -> String {
         let agentID = firstNonEmpty(item.message?.senderAgentId, item.delivery.senderAgentId)
         let handle = item.message?.senderHandle.flatMap(SavedGull.canonicalHandle)
-        if let saved = savedGulls.first(where: {
+        if let saved = (savedGulls ?? self.savedGulls).first(where: {
             (agentID != nil && $0.agentID == agentID) || (handle != nil && $0.handle == handle)
         }) {
             return saved.displayName
@@ -913,9 +926,9 @@ struct MainWindow: View {
         return item.senderDisplay
     }
 
-    private func resolvedSender(in item: InboxItem) -> InboxItem {
+    private func resolvedSender(in item: InboxItem, savedGulls: [SavedGull]) -> InboxItem {
         var resolved = item
-        let name = senderDisplay(for: item)
+        let name = senderDisplay(for: item, savedGulls: savedGulls)
         if name != item.senderDisplay { resolved.resolvedSenderDisplayName = name }
         return resolved
     }
@@ -1145,12 +1158,14 @@ struct MainWindow: View {
     }
 
     private var dashboardProfiles: [DashboardProfileInput] {
-        stores.filter { $0.config.isConfigured }.map {
+        // Resolve the directory once per projection, not once per message.
+        let saved = savedGulls
+        return stores.filter { $0.config.isConfigured }.map {
             DashboardProfileInput(
                 profileID: $0.config.profileID,
                 handle: $0.config.agentHandle,
                 displayName: firstNonEmpty($0.config.displayName, $0.agent?.displayName),
-                items: $0.isCurrent ? $0.mergedItems.map { resolvedSender(in: $0) } : []
+                items: $0.isCurrent ? $0.mergedItems.map { resolvedSender(in: $0, savedGulls: saved) } : []
             )
         }
     }
@@ -1160,11 +1175,11 @@ struct MainWindow: View {
     }
 
     private var allSnapshot: DashboardSnapshot {
-        DashboardProjector.makeSnapshot(from: dashboardProfiles)
+        dashboardProjectionCache.snapshot(from: dashboardProfiles)
     }
 
     private var allRelationships: DashboardRelationshipSnapshot {
-        DashboardRelationshipProjector.makeSnapshot(from: dashboardProfiles)
+        dashboardProjectionCache.relationships(from: dashboardProfiles)
     }
 
     private var relationshipSnapshot: DashboardRelationshipSnapshot {
@@ -1370,7 +1385,7 @@ struct MainWindow: View {
     }
 
     @ViewBuilder
-    private var replySurface: some View {
+    private func replySurface(availableHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
             if let target = draftTarget {
                 if let source = source(for: target) {
@@ -1378,9 +1393,8 @@ struct MainWindow: View {
                         draftTarget = nil
                     }
                     .id(target.id)
-                    .containerRelativeFrame(.vertical) { height, _ in
-                        min(380, height * 0.55)
-                    }
+                    // Size the floating review from the pane, not itself.
+                    .frame(height: min(380, availableHeight * 0.55))
                     .transition(.opacity)
                 } else {
                     HStack {
@@ -1396,7 +1410,7 @@ struct MainWindow: View {
                     .transition(.opacity)
             }
         }
-        .gullsGlass(cornerRadius: 24)
+        .gullsGlass(cornerRadius: 24, style: .clear)
         .overlay {
             RoundedRectangle(cornerRadius: 24)
                 .strokeBorder(
@@ -1434,8 +1448,12 @@ struct MainWindow: View {
             TextEditor(text: Binding(
                 get: { replyText },
                 set: { text in
-                    if replyTarget == nil { replyTarget = target }
-                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { discardActiveCodexDraft() }
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        discardActiveCodexDraft()
+                        replyTarget = nil
+                    } else if replyTarget == nil {
+                        replyTarget = target
+                    }
                     replyText = text
                 }
             ))
@@ -1445,16 +1463,6 @@ struct MainWindow: View {
                 .frame(height: 48)
                 .focused($replyFocused)
                 .disabled(isBusy)
-                .overlay(alignment: .topLeading) {
-                    if replyText.isEmpty {
-                        Text("Message \(target.senderDisplay)…")
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
                 .accessibilityLabel("Reply to \(target.senderDisplay)")
             if !available {
                 Text("This Gull’s connection changed. Copy your reply before clearing it.")
@@ -1475,22 +1483,6 @@ struct MainWindow: View {
                 .disabled(isBusy || !available)
                 .accessibilityLabel("Draft reply")
                 .help("Draft a reply using this Gull’s rules")
-                if replyTarget != nil {
-                    Button {
-                        discardActiveCodexDraft()
-                        replyText = ""
-                        replyTarget = nil
-                    } label: {
-                        Label(replyText.isEmpty ? "Cancel reply" : "Clear reply", systemImage: "xmark")
-                            .labelStyle(.iconOnly)
-                            .frame(width: 32, height: 32)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .disabled(isBusy)
-                    .help(replyText.isEmpty ? "Cancel reply" : "Clear reply")
-                }
                 Spacer(minLength: 0)
                 Button {
                     sendReply(to: target)
@@ -1500,12 +1492,14 @@ struct MainWindow: View {
                             ProgressView().controlSize(.small).tint(GullsStyle.canvas)
                         } else {
                             Image(systemName: "arrow.up")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: 14, weight: .semibold))
                         }
                     }
-                    .frame(width: 36, height: 36)
+                    .frame(width: 28, height: 28)
                     .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
                     .background(colorScheme == .dark ? Color.white : Color.black, in: Circle())
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: .command)

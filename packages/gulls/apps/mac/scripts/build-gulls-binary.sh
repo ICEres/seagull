@@ -24,6 +24,7 @@ GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "$BUILD_TMP/gulls-arm64
 GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$BUILD_TMP/gulls-amd64" ./cmd/gulls
 lipo -create -output "$DEST_DIR/gulls" "$BUILD_TMP/gulls-arm64" "$BUILD_TMP/gulls-amd64"
 
-# Ad-hoc sign the nested binary so the app's own signature stays valid.
-codesign --force --sign - "$DEST_DIR/gulls"
+# Use the app's resolved signing identity for the nested binary as well.
+SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}"
+codesign --force --sign "$SIGNING_IDENTITY" --identifier ai.gulls.mac.cli "$DEST_DIR/gulls"
 echo "Bundled gulls ($VERSION) into $DEST_DIR/gulls"

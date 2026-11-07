@@ -9,5 +9,6 @@
     "landing:dev": "pnpm --filter landing dev",
     "landing:build": "pnpm --filter landing build",
     "landing:test": "pnpm --filter landing test"
-  }
+  },
+  "license": "MIT"
 }

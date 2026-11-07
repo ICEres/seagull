@@ -9,7 +9,7 @@ every earlier row in `results.tsv`.
 
 ## The two criteria this encodes
 
-Set by maintainer:
+Set by the maintainer:
 
 1. **Must not overlap existing projects.** If a spec body, a shipping product,
    or a live repo already does the thing, the variant is dead. Not "does it

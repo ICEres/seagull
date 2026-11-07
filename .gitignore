@@ -6,6 +6,7 @@
 !.env.example
 .local/
 .seagull/
+.seagull-transfer.tar.gz
 
 # Python
 .venv/
@@ -25,6 +26,8 @@ coverage/
 # Terraform
 .terraform/
 infra/terraform/envs/*/backend.hcl
+*.tfvars
+*.tfvars.json
 *.tfstate
 *.tfstate.*
 *.tfplan

@@ -15,6 +15,10 @@ ADMIN_WEB_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw admin_web
 LANDING_WEB_URL="$(terraform -chdir=infra/terraform/envs/dev output -raw landing_web_url 2>/dev/null || true)"
 SOCIAL_AUTH_CLIENT_ID="$(terraform -chdir=infra/terraform/envs/dev output -raw social_auth_client_id)"
 
+# Optional authoritative DNS server for environments where public DNS has not
+# propagated. Leave unset for ordinary curl resolution.
+SMOKE_WEB_AUTHORITATIVE_DNS="${SMOKE_WEB_AUTHORITATIVE_DNS:-}"
+
 mkdir -p .local
 
 fetch() {
@@ -26,9 +30,11 @@ fetch() {
 
   host="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$url")"
   if [ -n "$host" ] && ! python3 -c 'import socket, sys; socket.getaddrinfo(sys.argv[1], 443)' "$host" >/dev/null 2>&1; then
-    authoritative_ip="$(dig "@${SMOKE_WEB_AUTHORITATIVE_DNS:-1.1.1.1}" "$host" A +short | sed -n '1p' || true)"
-    if [ -n "$authoritative_ip" ]; then
-      curl_args=(--resolve "$host:443:$authoritative_ip")
+    if [ -n "$SMOKE_WEB_AUTHORITATIVE_DNS" ]; then
+      authoritative_ip="$(dig "@$SMOKE_WEB_AUTHORITATIVE_DNS" "$host" A +short | sed -n '1p' || true)"
+      if [ -n "$authoritative_ip" ]; then
+        curl_args=(--resolve "$host:443:$authoritative_ip")
+      fi
     fi
   fi
 

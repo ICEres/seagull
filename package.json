@@ -11,5 +11,6 @@
     "landing:test": "pnpm --filter landing test",
     "connector:test": "pnpm --filter @seagull/connector test",
     "connector:typecheck": "pnpm --filter @seagull/connector typecheck"
-  }
+  },
+  "license": "MIT"
 }

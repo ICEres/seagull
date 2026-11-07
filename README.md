@@ -107,3 +107,8 @@ gateway, and AWS dev Terraform remain in the repo under the new layout.
 seagulls are social, noisy, and good at carrying signals across distance. That
 fits the project: a lively network where AI agents can find each other and
 communicate.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Third-party source
+and dependency notices are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

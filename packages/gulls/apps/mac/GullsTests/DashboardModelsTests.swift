@@ -135,6 +135,54 @@ final class DashboardModelsTests: XCTestCase {
         XCTAssertTrue(snapshot.allGroups.contains { $0.id == "local-a:thread:delivery:x" })
     }
 
+    func testProjectionCacheInvalidatesSameCountPayloadAndStatusChanges() throws {
+        let oldItem = try item("d1", status: "delivered", threadID: "thread-1", body: "Old request")
+        let newItem = try item("d1", status: "acked", threadID: "thread-1", body: "Updated request")
+        let cache = DashboardProjectionCache()
+
+        let initialProfile = profile("local-a", items: [oldItem])
+        _ = cache.relationships(from: [initialProfile])
+        let updatedProfile = profile("local-a", items: [newItem])
+        let updatedSnapshot = cache.snapshot(from: [updatedProfile])
+        let updatedRelationships = cache.relationships(from: [updatedProfile])
+
+        XCTAssertTrue(updatedSnapshot.needsAttention.isEmpty)
+        XCTAssertEqual(updatedSnapshot.handled.first?.title, "Updated request")
+        XCTAssertEqual(updatedRelationships.attentionCount, 0)
+        XCTAssertEqual(updatedRelationships.relationships.first?.groups.first?.latestItem.bodyText, "Updated request")
+    }
+
+    func testProjectionCacheRefreshesGullMetadataAndRemovesProfiles() throws {
+        let message = try item("d1", threadID: "thread-1")
+        let cache = DashboardProjectionCache()
+
+        _ = cache.snapshot(from: [profile("local-a", handle: "old-handle", items: [message])])
+        let renamed = profile("local-a", handle: "new-handle", items: [message])
+        let renamedRelationships = cache.relationships(from: [renamed])
+
+        XCTAssertEqual(renamedRelationships.gulls.first?.handle, "new-handle")
+        XCTAssertEqual(renamedRelationships.relationships.first?.ownedGullHandle, "new-handle")
+
+        let removedSnapshot = cache.snapshot(from: [])
+        let removedRelationships = cache.relationships(from: [])
+        XCTAssertTrue(removedSnapshot.allGroups.isEmpty)
+        XCTAssertTrue(removedRelationships.relationships.isEmpty)
+        XCTAssertTrue(removedRelationships.gulls.isEmpty)
+    }
+
+    func testProjectionCacheSupportsEitherProjectionAsFirstAccess() throws {
+        let message = try item("d1", status: "delivered", threadID: "thread-1")
+        let profile = self.profile("local-a", items: [message])
+        let cache = DashboardProjectionCache()
+
+        let relationships = cache.relationships(from: [profile])
+        let snapshot = cache.snapshot(from: [profile])
+
+        XCTAssertEqual(relationships.conversationCount, snapshot.allGroups.count)
+        XCTAssertEqual(relationships.deliveryCount, 1)
+        XCTAssertEqual(snapshot.attentionCount, 1)
+    }
+
     private static func snapshot(_ items: [InboxItem]) -> DashboardSnapshot {
         DashboardProjector.makeSnapshot(from: [
             DashboardProfileInput(profileID: "local-a", handle: "test2", displayName: "Test2", items: items)

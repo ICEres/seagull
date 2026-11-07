@@ -464,8 +464,23 @@ Install a freshly built Release App at a stable location such as
 `~/Applications/Gulls.app`, after quitting the previous instance. Keep the
 `gulls` and legacy `seagull` command aliases pointed at that App's
 `Contents/Resources/gulls`, so Codex and the Mac App use the same CLI version.
-Ad-hoc development builds may require a new macOS Keychain authorization on
-first launch; complete that in the system dialog.
+For stable Keychain access across local updates, create
+`Config/Signing.local.xcconfig` (gitignored) with an existing Apple signing
+identity and its team ID:
+
+```xcconfig
+CODE_SIGN_IDENTITY = Apple Development: Your Name (CERTIFICATE_ID)
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+```
+
+Find available identities with `security find-identity -v -p codesigning`.
+Use the team ID from the certificate's Organizational Unit, which can differ
+from the identifier in its display name. The app and its bundled CLI use the
+same signing identity. The first switch from an ad-hoc build may still require
+Keychain authorization; choose **Always Allow** in the system dialog to retain
+access for subsequent updates signed by the same team. Without a local
+configuration, builds remain ad-hoc signed and may prompt again after each
+rebuild because their code requirement changes.
 
 ### Opt-in live Codex verification
 

@@ -20,6 +20,7 @@ struct DeliveryDetailView: View {
     var onApproveReply: (() -> Void)? = nil
     var onCheckReplyStatus: (() -> Void)? = nil
     var onTakeOverReply: (() -> Void)? = nil
+    var bottomContentInset: CGFloat = 0
     var compact = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var contextExpanded = false
@@ -28,7 +29,7 @@ struct DeliveryDetailView: View {
     var body: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
             messageContent
-                .gullsSafeAreaBar(edge: .top, spacing: 12) {
+                .gullsSafeAreaBar(edge: .top, spacing: 12, style: .contained) {
                     header
                 }
         } else {
@@ -128,9 +129,10 @@ struct DeliveryDetailView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.horizontal, compact ? 14 : 28)
             .padding(.vertical, 18)
+            .padding(.bottom, bottomContentInset)
             .frame(maxWidth: .infinity, alignment: .top)
         }
-        .gullsHiddenScrollbars()
+        .scrollIndicators(.never)
     }
 
     private var conversationContext: some View {

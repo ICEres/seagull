@@ -289,8 +289,14 @@ struct GullsListRowButtonStyle: ButtonStyle {
     }
 }
 
+enum GullsGlassStyle {
+    case regular
+    case clear
+}
+
 private struct GullsGlassSurface: ViewModifier {
     let cornerRadius: CGFloat
+    let style: GullsGlassStyle
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @ViewBuilder
@@ -302,7 +308,7 @@ private struct GullsGlassSurface: ViewModifier {
             )
         } else if #available(macOS 26.0, *) {
             content.glassEffect(
-                .regular,
+                style == .clear ? .clear.tint(GullsStyle.canvas.opacity(0.6)) : .regular,
                 in: .rect(cornerRadius: cornerRadius)
             )
         } else {
@@ -314,25 +320,26 @@ private struct GullsGlassSurface: ViewModifier {
 enum GullsSafeAreaBarStyle {
     case standard
     case minimal
+    case contained
 
     var fadeLength: CGFloat {
         switch self {
         case .standard: return 52
-        case .minimal: return 16
+        case .minimal, .contained: return 16
         }
     }
 
     var topBlurRadius: CGFloat {
         switch self {
         case .standard: return 0.2
-        case .minimal: return 0.1
+        case .minimal, .contained: return 0.1
         }
     }
 
     var topMinimumOpacity: CGFloat {
         switch self {
         case .standard: return 0.16
-        case .minimal: return 0.24
+        case .minimal, .contained: return 0.24
         }
     }
 }
@@ -351,8 +358,8 @@ private struct GullsSafeAreaBar<Bar: View>: ViewModifier {
             // Separate native hosts let the blur sample scrolling content
             // without the tinted, hard-edged SDK 26 scroll edge on macOS 27.
             GullsHostedSafeAreaBar(content: content, bar: insetBar, edge: edge, spacing: spacing, style: style)
-        } else if style == .minimal {
-            // Use the scoped host on SDK 26 for the minimal treatment so the
+        } else if style != .standard {
+            // Use the scoped host on SDK 26 for the lighter treatments so the
             // native soft edge does not add a second, stronger blur.
             GullsHostedSafeAreaBar(
                 content: content.scrollEdgeEffectHidden(true, for: [.top, .bottom]),
@@ -400,7 +407,7 @@ private struct GullsBarContent<Content: View>: View {
                     // Keep the content readable near the scroll edge. The
                     // transition is intentionally soft and mostly opacity
                     // based; a strong mask makes the edge read as a panel.
-                    let transitionEnd = barHeight + (style == .minimal ? 0 : style.fadeLength)
+                    let transitionEnd = barHeight + (style == .standard ? style.fadeLength : 0)
                     let transitionLength = style.fadeLength + 20
                     let minimumOpacity = edge == .top ? style.topMinimumOpacity : 0.08
                     let fadeStart = min(max(transitionEnd - transitionLength, 0) / height, 1)
@@ -482,9 +489,15 @@ private final class GullsBarHost<Content: View, Bar: View>: NSView {
         let height = min(barHeight, bounds.height)
         let fade = style.fadeLength
         if edge == .top {
-            // Feather below the controls so the more visible part of the
-            // scrolling content cannot overlap labels or the search field.
-            blurView.frame = NSRect(x: 0, y: bounds.maxY - height - fade, width: bounds.width, height: min(fade * 2, height + fade))
+            if style == .contained {
+                // Start at the header's lower edge and fade upward. Content
+                // below that boundary stays fully sharp and opaque.
+                blurView.frame = NSRect(x: 0, y: bounds.maxY - height, width: bounds.width, height: min(fade + 20, height))
+            } else {
+                // Feather below the controls so the more visible part of the
+                // scrolling content cannot overlap labels or the search field.
+                blurView.frame = NSRect(x: 0, y: bounds.maxY - height - fade, width: bounds.width, height: min(fade * 2, height + fade))
+            }
             barController.view.frame = NSRect(x: 0, y: bounds.maxY - height, width: bounds.width, height: height)
         } else {
             blurView.frame = NSRect(x: 0, y: height, width: bounds.width, height: fade)
@@ -598,8 +611,8 @@ extension View {
         }
     }
 
-    func gullsGlass(cornerRadius: CGFloat = 16) -> some View {
-        modifier(GullsGlassSurface(cornerRadius: cornerRadius))
+    func gullsGlass(cornerRadius: CGFloat = 16, style: GullsGlassStyle = .regular) -> some View {
+        modifier(GullsGlassSurface(cornerRadius: cornerRadius, style: style))
     }
 
     @available(macOS 26.0, *)

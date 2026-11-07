@@ -42,4 +42,6 @@ bin/
 *.xcodeproj
 xcuserdata/
 DerivedData/
+packages/gulls/apps/mac/build/
+packages/gulls/apps/mac/Config/Signing.local.xcconfig
 packages/gulls/services/message-hub/router/cmd/lambda/lambda

@@ -158,6 +158,9 @@ jobs:
       - name: Build web
         run: make web-build
 
+      - name: Include web dependency licenses
+        run: python3 scripts/write-artifact-licenses.py node packages/seagulls/apps/web packages/seagulls/apps/web/dist/THIRD_PARTY_LICENSES.txt --extra tailwindcss
+
       - name: Upload web artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -171,6 +174,9 @@ jobs:
 
       - name: Build landing
         run: make landing-build
+
+      - name: Include landing dependency licenses
+        run: python3 scripts/write-artifact-licenses.py node packages/seagulls/apps/landing packages/seagulls/apps/landing/dist/THIRD_PARTY_LICENSES.txt
 
       - name: Upload landing artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -232,11 +238,16 @@ jobs:
       - name: Build router
         run: make message-router-build
 
+      - name: Include router dependency licenses
+        run: python3 scripts/write-artifact-licenses.py go packages/gulls/services/message-hub/router infra/terraform/envs/dev/.terraform/build/message-router/THIRD_PARTY_LICENSES.txt
+
       - name: Upload router artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: message-router-bootstrap
-          path: infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
+          path: |
+            infra/terraform/envs/dev/.terraform/build/message-router/bootstrap
+            infra/terraform/envs/dev/.terraform/build/message-router/THIRD_PARTY_LICENSES.txt
           if-no-files-found: error
           retention-days: 1
 

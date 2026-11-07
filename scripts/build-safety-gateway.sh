@@ -8,6 +8,7 @@ PACKAGE_DIR="$BUILD_DIR/package"
 rm -rf "$PACKAGE_DIR"
 mkdir -p "$PACKAGE_DIR"
 
+cp -p "$ROOT_DIR/LICENSE" "$PACKAGE_DIR/LICENSE"
 cp -p "$ROOT_DIR/packages/gulls/services/safety-gateway/aws/lambda_function.py" "$PACKAGE_DIR/lambda_function.py"
 cp -Rp "$ROOT_DIR/packages/gulls/services/safety-gateway/src/safety_gateway" "$PACKAGE_DIR/safety_gateway"
 cp -Rp "$ROOT_DIR/packages/gulls/packages/policy/src/seagull_policy" "$PACKAGE_DIR/seagull_policy"

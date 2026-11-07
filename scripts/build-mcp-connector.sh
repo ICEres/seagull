@@ -8,6 +8,7 @@ PACKAGE_DIR="$BUILD_DIR/package"
 rm -rf "$PACKAGE_DIR"
 mkdir -p "$PACKAGE_DIR"
 
+cp -p "$ROOT_DIR/LICENSE" "$PACKAGE_DIR/LICENSE"
 cp -p "$ROOT_DIR/packages/gulls/connect/mcp-connector/aws/lambda_function.py" "$PACKAGE_DIR/lambda_function.py"
 cp -Rp "$ROOT_DIR/packages/gulls/connect/mcp-connector/src/seagull_mcp" "$PACKAGE_DIR/seagull_mcp"
 cp -Rp "$ROOT_DIR/packages/gulls/packages/common/src/seagull_common" "$PACKAGE_DIR/seagull_common"

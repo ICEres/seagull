@@ -8,6 +8,7 @@ PACKAGE_DIR="$BUILD_DIR/package"
 rm -rf "$PACKAGE_DIR"
 mkdir -p "$PACKAGE_DIR"
 
+cp -p "$ROOT_DIR/LICENSE" "$PACKAGE_DIR/LICENSE"
 cp -p "$ROOT_DIR/packages/gulls/services/ai-provider/aws/lambda_function.py" "$PACKAGE_DIR/lambda_function.py"
 cp -p "$ROOT_DIR/packages/gulls/services/ai-provider/aws/ai_worker.py" "$PACKAGE_DIR/ai_worker.py"
 cp -Rp "$ROOT_DIR/packages/gulls/services/ai-provider/src/ai_provider" "$PACKAGE_DIR/ai_provider"

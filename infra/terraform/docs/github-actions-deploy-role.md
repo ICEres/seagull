@@ -2,7 +2,7 @@
 
 Status: Current.
 
-Last updated: 2026-07-27.
+Last updated: 2026-11-07.
 
 ## Contents
 
@@ -75,9 +75,14 @@ Use the repository owner/name that owns the deploy workflow.
 
 ## GitHub Repository Configuration
 
+Tests run on pushes to `main`. The `Deploy dev` job is skipped unless the
+repository variable `ENABLE_DEV_DEPLOY` is set to `true`; configure the role,
+backend, and secrets below before enabling it.
+
 `CI Deploy` reads these repository variables:
 
 ```text
+ENABLE_DEV_DEPLOY         # set to true to enable the deploy job
 AWS_ROLE_TO_ASSUME
 TF_BACKEND_BUCKET
 TF_BACKEND_DYNAMODB_TABLE

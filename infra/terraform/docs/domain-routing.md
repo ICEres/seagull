@@ -172,7 +172,7 @@ public fishing.gulls.ai
 -> AWS API Gateway custom domain
 ```
 
-The private network uses split DNS for `fishing.gulls.ai`, resolving it to the
+The private network uses split DNS for `fishing.gulls.ai`, resolving it to an
 internal Traefik host at `<private-ip>`. Traefik now has a narrow TCP
 passthrough route on its internal `websecure` entrypoint:
 

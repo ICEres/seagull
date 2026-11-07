@@ -73,7 +73,7 @@ one that exists**, ~100 times a night, and the score is confirmed holes.
 
 | autoresearch | this loop |
 | --- | --- |
-| `program.md` — human strategy | `docs/loop/program.md` — maintainer's standing instructions: what to attack, what is off-limits, what counts as a real hole |
+| `program.md` — human strategy | `docs/loop/program.md` — the maintainer's standing instructions: what to attack, what is off-limits, what counts as a real hole |
 | `train.py` — the one mutable file | The attack, plus its reproduction steps. The incumbent docs are never mutated |
 | 5 minutes wall clock | One attack per experiment, bounded. Cheap and comparable |
 | `val_bpb`, lower is better | **Confirmed holes, higher is better** — an attack that a second agent reproduces against the docs |
@@ -112,7 +112,7 @@ experiment.
 ## The loop
 
 ```text
-read docs/loop/program.md            <- maintainer's strategy, reread every iteration
+read docs/loop/program.md            <- the maintainer's strategy, reread every iteration
 read docs/loop/LOG.md                <- what has already been tried
 pick one target not already exhausted
 construct one attack, bounded
@@ -123,11 +123,11 @@ spawn an independent verifier, told to fail the reproduction
 repeat until the budget is spent
 ```
 
-Overnight, unattended. In the morning maintainer reads only the confirmed holes.
+Overnight, unattended. In the morning the maintainer reads only the confirmed holes.
 
 **Promotion is rate-limited, the loop is not.** The agent may find twenty holes a
 night. At most three become Open proposals in `docs/proposals/`, because the
-queue's limit is maintainer's decisions, not the agent's throughput. The rest sit
+queue's limit is maintainer decisions, not the agent's throughput. The rest sit
 in the log, already reproduced, ready to promote when a slot frees.
 
 ## Verification independence
@@ -201,7 +201,7 @@ reported as one line. autoresearch's experiments mostly fail too.
 ## Cadence
 
 Not weekly. Overnight, like autoresearch — kick it off, read the log in the
-morning. `Seagull nightly loop` runs it unattended; maintainer can also drive it
+morning. `Seagull nightly loop` runs it unattended; the maintainer can also drive it
 interactively for a specific target.
 
 The previous version of this process ran a weekly proposal cycle on a cron. A
@@ -210,7 +210,7 @@ signal. That trigger is deleted.
 
 ## Related
 
-- [Program](loop/program.md) — the strategy file maintainer owns
+- [Program](loop/program.md) — the strategy file maintained by the project owner
 - [Log](loop/LOG.md) — experiment memory
 - [Proposals](proposals/README.md) — where confirmed holes become decisions
 - [Doc Status](doc-status.md), [Migration Plan](../packages/gulls/docs/migration-plan.md)

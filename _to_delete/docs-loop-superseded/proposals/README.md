@@ -5,7 +5,7 @@ Status: Authoritative (process).
 Last updated: 2026-07-27.
 
 The decision queue. Confirmed holes from [The Agent Loop](../agent-loop.md)
-graduate into proposals here; maintainer decides them; accepted ones are applied in
+graduate into proposals here; the maintainer decides them; accepted ones are applied in
 a later human-initiated session.
 
 This file defines only the format and the lifecycle. The loop that feeds it is
@@ -21,7 +21,7 @@ confirmed hole (LOG.md)  ->  Open  ->  Accepted   ->  Applied
 ```
 
 **Maximum three Open at a time.** The loop can confirm twenty holes a night; the
-constraint is maintainer's decisions, not the agent's throughput. Confirmed holes
+constraint is maintainer decisions, not the agent's throughput. Confirmed holes
 with no free slot wait in `LOG.md` under *Confirmed but unpromoted* — already
 reproduced, promotable later without re-running the experiment.
 

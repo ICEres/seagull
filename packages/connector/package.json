@@ -2,6 +2,7 @@
   "name": "@seagull/connector",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Minimal zero-dependency connector for OpenAI GPT and Anthropic Claude. Spec: docs/minimal-connector.md",
   "exports": "./src/connector.ts",

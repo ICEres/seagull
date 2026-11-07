@@ -51,7 +51,7 @@ objectives always fail: at ~100 experiments a night the agent optimizes the
 judge, and you wake up to a beautifully written proposal that commits to
 nothing.
 
-What makes this loop scoreable is that maintainer set two criteria that are
+What makes this loop scoreable is that the maintainer set two criteria that are
 **externally checkable**: must not overlap an existing project, must fit a real
 human need. "Does this already exist" has a hard answer, and the answer is a
 URL. So overlap kills are fatal and evidence-bearing, need kills require a cited

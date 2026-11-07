@@ -4,7 +4,7 @@ Status: Authoritative (process).
 
 Last updated: 2026-07-27.
 
-**maintainer owns this file. Agents read it and never write it.**
+**The maintainer owns this file. Agents read it and never write it.**
 
 This is the control surface for the nightly loop described in
 [The Agent Loop](../agent-loop.md). To change what the loop does, edit this file

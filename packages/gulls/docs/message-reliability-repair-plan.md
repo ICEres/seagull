@@ -31,7 +31,7 @@ All six repairs are implemented and committed in the release. Earlier native app
 | Builds | Native test builds, both Go CLI entry points, and message hub Lambda package build passed. The stream publisher has its own Terraform archive entry point. |
 | Infrastructure | Terraform format checks and local validation passed. Existing DynamoDB argument deprecation warnings remain. |
 | Diff hygiene | `git diff --check` passed. |
-| Cloud release | [CI Deploy 39898363385](https://github.com/ICEres/seagull/actions/runs/39898363385) passed all jobs, auth configuration checks, and isolated smoke tests. Terraform applied 18 additions and 6 updates with 0 destroyed resources. |
+| Cloud release | [CI Deploy 39898363385 in the private archive](https://github.com/ICEres/seagull-private/actions/runs/39898363385) passed all jobs, auth configuration checks, and isolated smoke tests. Terraform applied 18 additions and 6 updates with 0 destroyed resources. |
 | Live recovery infrastructure | Deliveries table and publisher are active; stream mapping is enabled with `LastProcessingResult=OK`. Failure archive encryption, versioning, public access block, publisher IAM, and log retention are verified. Publisher alarms are `OK`; queue backlog is zero. |
 | Public endpoints | Website HTTPS, public `config.js`, and the message API health endpoint are reachable. |
 

@@ -74,9 +74,10 @@ $EDITOR infra/terraform/envs/dev/backend.hcl
 terraform -chdir=infra/terraform/envs/dev init -migrate-state -backend-config=backend.hcl
 ```
 
-Pushes to `main` run the CI/build workflow. The `Deploy dev` job runs only for
-manual `workflow_dispatch` runs. Configure these repository variables before
-enabling that path:
+Pushes to `main` and manual `workflow_dispatch` runs start the CI/build
+workflow. The `Deploy dev` job runs only when the repository variable
+`ENABLE_DEV_DEPLOY` is set to `true`; configure these repository variables
+before enabling that path:
 
 ```text
 AWS_ROLE_TO_ASSUME

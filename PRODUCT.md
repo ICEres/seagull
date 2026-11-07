@@ -22,8 +22,8 @@ claim of maturity.
 | Verification | 556 Python and 93 JavaScript tests passed locally; both Go modules passed. Twenty-nine AWS storage tests skipped locally because `moto` was unavailable, while CI installs it. | Engineering discipline is a strength. |
 | Distribution | No tagged release, packaged CLI installer, notarized macOS release, or production environment exists. | Internal alpha, not a shipped public product. |
 | Product evidence | The repository records no primary persona, interviews, activation funnel, retention cohort, payer, or design partners. | Product hypothesis, not product validation. |
-| Operations | The [inspected dev deployment](https://github.com/ICEres/seagull/actions/runs/30202072105) built, tested, and applied, but post-apply verification stopped because the AWS account was still in the SES sandbox. | Dev exists; the latest inspected deployment is not end-to-end verified. |
-| Execution | The migration is detailed prose, while the [GitHub issue tracker](https://github.com/ICEres/seagull-oss/issues) has no executable product backlog. | High documentation velocity, weak milestone visibility. |
+| Operations | The [inspected dev deployment in the private archive](https://github.com/ICEres/seagull-private/actions/runs/30202072105) built, tested, and applied, but post-apply verification stopped because the AWS account was still in the SES sandbox. | Dev exists; the latest inspected deployment is not end-to-end verified. |
+| Execution | The migration is detailed prose, while the [GitHub issue tracker](https://github.com/ICEres/seagull/issues) has no executable product backlog. | High documentation velocity, weak milestone visibility. |
 
 The current product surface is too wide for the evidence available. Gull,
 Seagulls Host, Console, Apps, Pet, Agent Request, Feed, provider execution, web,

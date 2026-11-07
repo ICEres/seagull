@@ -233,3 +233,8 @@ runtime and CLI. **Gull** is one voice, and the plural is written *Gull voices*
 rather than bare "Gulls", which would collide with the layer name.
 **Seagulls** is the platform. Full rules are in
 [Terminology](packages/gulls/docs/terminology.md).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Third-party source
+and dependency notices are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
